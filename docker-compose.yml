@@ -9,5 +9,9 @@ services:
       - ./data:/app/data
     restart: always
     environment:
-      - DATABASE_URL=sqlite://data/peanut.db
-      - RUST_LOG=info
+      DATABASE_URL: ${DATABASE_URL:-sqlite://data/peanut.db}
+      STORAGE_DIR: ${STORAGE_DIR:-data/storage}
+      BIND_ADDR: ${BIND_ADDR:-0.0.0.0:3000}
+      JWT_SECRET: ${JWT_SECRET:?set JWT_SECRET in your shell or .env file}
+      MAX_UPLOAD_BYTES: ${MAX_UPLOAD_BYTES:-5242880}
+      RUST_LOG: ${RUST_LOG:-info}

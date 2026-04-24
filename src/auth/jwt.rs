@@ -1,6 +1,6 @@
+use chrono::{DateTime, Utc};
 use jsonwebtoken::{decode, encode, DecodingKey, EncodingKey, Header, Validation};
 use serde::{Deserialize, Serialize};
-use chrono::{Utc, Duration};
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Claims {
@@ -9,19 +9,24 @@ pub struct Claims {
     pub is_admin: bool,
 }
 
-pub fn create_jwt(user_id: &str, is_admin: bool, secret: &str) -> String {
-    let expiration = Utc::now()
-        .checked_add_signed(Duration::minutes(15))
-        .expect("valid timestamp")
-        .timestamp();
-
+pub fn create_jwt(
+    user_id: &str,
+    is_admin: bool,
+    secret: &str,
+    expires_at: DateTime<Utc>,
+) -> String {
     let claims = Claims {
         sub: user_id.to_owned(),
-        exp: expiration,
+        exp: expires_at.timestamp(),
         is_admin,
     };
 
-    encode(&Header::default(), &claims, &EncodingKey::from_secret(secret.as_ref())).unwrap()
+    encode(
+        &Header::default(),
+        &claims,
+        &EncodingKey::from_secret(secret.as_ref()),
+    )
+    .unwrap()
 }
 
 pub fn verify_jwt(token: &str, secret: &str) -> Result<Claims, jsonwebtoken::errors::Error> {
@@ -36,11 +41,12 @@ pub fn verify_jwt(token: &str, secret: &str) -> Result<Claims, jsonwebtoken::err
 #[cfg(test)]
 mod tests {
     use super::*;
+    use chrono::Duration;
 
     #[test]
     fn test_jwt_flow() {
         let secret = "test_secret";
-        let token = create_jwt("user123", true, secret);
+        let token = create_jwt("user123", true, secret, Utc::now() + Duration::minutes(15));
         let claims = verify_jwt(&token, secret).unwrap();
         assert_eq!(claims.sub, "user123");
         assert!(claims.is_admin);

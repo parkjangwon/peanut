@@ -1,106 +1,157 @@
 'use client'
 
 import type { ReactNode } from 'react'
-import { useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
+
+type ApiError = {
+  error: string
+}
+
+type MessageResponse = {
+  message: string
+}
 
 type HealthResponse = {
   status: string
   message: string
 }
 
-type AdminUser = {
+type UserSummary = {
   id: string
   email: string
   is_active: boolean
   is_admin: boolean
+}
+
+type RegisterResponse = {
+  message: string
+  user: UserSummary
+}
+
+type LoginResponse = {
+  access_token: string
+  token_type: string
+  expires_at: string
+  user: UserSummary
+}
+
+type SessionResponse = {
+  user: UserSummary
+}
+
+type AdminUser = UserSummary & {
   created_at: string
+}
+
+type AdminUsersResponse = {
+  users: AdminUser[]
 }
 
 type StorageListResponse = {
   keys: string[]
 }
 
-const TOKEN_KEY = 'peanut.console.token'
-const RECENT_KEYS_KEY = 'peanut.console.recentKeys'
-
-function parseMeResponse(text: string) {
-  const match = text.match(/Hello, user\s+(.+)!\s+Admin:\s+(true|false)/)
-  return {
-    raw: text,
-    userId: match?.[1] ?? null,
-    isAdmin: match?.[2] === 'true',
-  }
+type PushSubscription = {
+  id: number
+  topic: string
+  created_at: string
 }
+
+type PushSubscriptionsResponse = {
+  subscriptions: PushSubscription[]
+}
+
+type PushQueueEntry = {
+  id: number
+  user_id: string
+  title: string
+  body: string
+  status: string
+  retry_count: number
+  last_error: string | null
+  created_at: string
+  processed_at: string | null
+}
+
+type PushQueueResponse = {
+  items: PushQueueEntry[]
+}
+
+const RECENT_KEYS_KEY = 'peanut.console.recentKeys'
 
 function authHeaders(token: string | null): Record<string, string> {
   return token ? { Authorization: `Bearer ${token}` } : {}
 }
 
+function readRecentKeys(): string[] {
+  if (typeof window === 'undefined') {
+    return []
+  }
+
+  const raw = window.localStorage.getItem(RECENT_KEYS_KEY)
+  if (!raw) {
+    return []
+  }
+
+  try {
+    const parsed = JSON.parse(raw) as string[]
+    return Array.isArray(parsed) ? parsed.filter((value) => typeof value === 'string') : []
+  } catch {
+    window.localStorage.removeItem(RECENT_KEYS_KEY)
+    return []
+  }
+}
+
+async function readJsonOrThrow<T>(response: Response): Promise<T> {
+  const text = await response.text()
+  if (!response.ok) {
+    try {
+      const error = JSON.parse(text) as ApiError
+      throw new Error(error.error)
+    } catch {
+      throw new Error(text || `request failed with ${response.status}`)
+    }
+  }
+  return JSON.parse(text) as T
+}
+
 export default function ConsoleClient() {
+  const [token, setToken] = useState<string | null>(null)
   const [health, setHealth] = useState<HealthResponse | null>(null)
   const [healthError, setHealthError] = useState<string | null>(null)
   const [email, setEmail] = useState('admin@example.com')
   const [password, setPassword] = useState('secret123')
-  const [token, setToken] = useState<string | null>(null)
-  const [authMessage, setAuthMessage] = useState('첫 사용자는 자동으로 admin + active 됩니다.')
-  const [meText, setMeText] = useState<string | null>(null)
+  const [authStatus, setAuthStatus] = useState('첫 사용자는 자동으로 active admin으로 생성돼.')
+  const [session, setSession] = useState<SessionResponse | null>(null)
   const [sessionError, setSessionError] = useState<string | null>(null)
   const [storageKey, setStorageKey] = useState('notes/welcome.txt')
   const [storageBody, setStorageBody] = useState('hello from Peanut console')
   const [storageStatus, setStorageStatus] = useState('스토리지 작업 대기 중')
   const [storageKeys, setStorageKeys] = useState<string[]>([])
-  const [recentKeys, setRecentKeys] = useState<string[]>([])
+  const [recentKeys, setRecentKeys] = useState<string[]>(() => readRecentKeys())
   const [adminUsers, setAdminUsers] = useState<AdminUser[]>([])
   const [adminStatus, setAdminStatus] = useState('admin 데이터 대기 중')
+  const [pushTopic, setPushTopic] = useState('alerts_main')
+  const [pushTitle, setPushTitle] = useState('Peanut notification')
+  const [pushBody, setPushBody] = useState('Single-binary backend is alive.')
+  const [pushStatus, setPushStatus] = useState('push 작업 대기 중')
+  const [subscriptions, setSubscriptions] = useState<PushSubscription[]>([])
+  const [queueItems, setQueueItems] = useState<PushQueueEntry[]>([])
   const [busyAction, setBusyAction] = useState<string | null>(null)
 
-  const me = useMemo(() => (meText ? parseMeResponse(meText) : null), [meText])
-
   useEffect(() => {
-    if (typeof window === 'undefined') return
-
-    const savedToken = window.localStorage.getItem(TOKEN_KEY)
-    if (savedToken) {
-      setToken(savedToken)
+    if (typeof window !== 'undefined') {
+      window.localStorage.setItem(RECENT_KEYS_KEY, JSON.stringify(recentKeys))
     }
-
-    const savedRecentKeys = window.localStorage.getItem(RECENT_KEYS_KEY)
-    if (savedRecentKeys) {
-      try {
-        const parsed = JSON.parse(savedRecentKeys) as string[]
-        setRecentKeys(parsed)
-        if (parsed[0]) {
-          setStorageKey(parsed[0])
-        }
-      } catch {
-        window.localStorage.removeItem(RECENT_KEYS_KEY)
-      }
-    }
-
-    void loadHealth()
-  }, [])
-
-  useEffect(() => {
-    if (typeof window === 'undefined') return
-
-    if (token) {
-      window.localStorage.setItem(TOKEN_KEY, token)
-      void refreshSession(token)
-      void refreshStorageList(token)
-    } else {
-      window.localStorage.removeItem(TOKEN_KEY)
-      setMeText(null)
-      setAdminUsers([])
-      setStorageKeys([])
-    }
-  }, [token])
-
-  useEffect(() => {
-    if (typeof window === 'undefined') return
-    window.localStorage.setItem(RECENT_KEYS_KEY, JSON.stringify(recentKeys))
   }, [recentKeys])
 
-  async function loadHealth() {
+  const rememberKey = useCallback((key: string) => {
+    const normalized = key.trim()
+    if (!normalized) return
+    setRecentKeys((previous) => [normalized, ...previous.filter((item) => item !== normalized)].slice(0, 8))
+  }, [])
+
+  const loadHealth = useCallback(async () => {
     try {
       setHealthError(null)
       const language = typeof navigator === 'undefined' ? 'en-US' : navigator.language
@@ -109,15 +160,94 @@ export default function ConsoleClient() {
           'accept-language': language,
         },
       })
-      if (!response.ok) {
-        throw new Error(`health request failed with ${response.status}`)
-      }
-      const data = (await response.json()) as HealthResponse
+      const data = await readJsonOrThrow<HealthResponse>(response)
       setHealth(data)
     } catch (error) {
       setHealthError(error instanceof Error ? error.message : 'health request failed')
     }
-  }
+  }, [])
+
+  const refreshAdminUsers = useCallback(async (currentToken: string) => {
+    const response = await fetch('/api/admin/users', {
+      headers: authHeaders(currentToken),
+    })
+    const data = await readJsonOrThrow<AdminUsersResponse>(response)
+    setAdminUsers(data.users)
+    setAdminStatus(`admin user view ready · pending ${data.users.filter((user) => !user.is_active).length}명`)
+  }, [])
+
+  const refreshStorageList = useCallback(async (currentToken: string) => {
+    const response = await fetch('/api/storage', {
+      headers: authHeaders(currentToken),
+    })
+    const data = await readJsonOrThrow<StorageListResponse>(response)
+    setStorageKeys(data.keys)
+  }, [])
+
+  const refreshPushData = useCallback(async (currentToken: string) => {
+    const [subscriptionsResponse, queueResponse] = await Promise.all([
+      fetch('/api/push/subscriptions', {
+        headers: authHeaders(currentToken),
+      }),
+      fetch('/api/push/queue', {
+        headers: authHeaders(currentToken),
+      }),
+    ])
+
+    const subscriptionData = await readJsonOrThrow<PushSubscriptionsResponse>(subscriptionsResponse)
+    const queueData = await readJsonOrThrow<PushQueueResponse>(queueResponse)
+    setSubscriptions(subscriptionData.subscriptions)
+    setQueueItems(queueData.items)
+    setPushStatus(`subscription ${subscriptionData.subscriptions.length}개 · queue ${queueData.items.length}건`)
+  }, [])
+
+  const refreshSession = useCallback(
+    async (currentToken: string) => {
+      const response = await fetch('/api/me', {
+        headers: authHeaders(currentToken),
+      })
+      const data = await readJsonOrThrow<SessionResponse>(response)
+      setSession(data)
+      setSessionError(null)
+
+      await Promise.all([
+        refreshStorageList(currentToken),
+        refreshPushData(currentToken),
+        data.user.is_admin
+          ? refreshAdminUsers(currentToken)
+          : Promise.resolve().then(() => {
+              setAdminUsers([])
+              setAdminStatus('현재 사용자는 admin이 아니야.')
+            }),
+      ])
+    },
+    [refreshAdminUsers, refreshPushData, refreshStorageList],
+  )
+
+  useEffect(() => {
+    const timeoutId = window.setTimeout(() => {
+      void loadHealth()
+    }, 0)
+
+    return () => window.clearTimeout(timeoutId)
+  }, [loadHealth])
+
+  useEffect(() => {
+    if (!token) {
+      return
+    }
+
+    const timeoutId = window.setTimeout(() => {
+      void refreshSession(token).catch((error) => {
+        setSessionError(error instanceof Error ? error.message : 'session refresh failed')
+      })
+    }, 0)
+
+    return () => window.clearTimeout(timeoutId)
+  }, [refreshSession, token])
+
+  const pendingUsers = useMemo(() => adminUsers.filter((user) => !user.is_active), [adminUsers])
+  const activeUsers = useMemo(() => adminUsers.filter((user) => user.is_active), [adminUsers])
 
   async function register() {
     setBusyAction('register')
@@ -129,10 +259,10 @@ export default function ConsoleClient() {
         },
         body: JSON.stringify({ email, password }),
       })
-      const message = await response.text()
-      setAuthMessage(`${response.status} ${message}`)
+      const data = await readJsonOrThrow<RegisterResponse>(response)
+      setAuthStatus(data.message)
     } catch (error) {
-      setAuthMessage(error instanceof Error ? error.message : 'register failed')
+      setAuthStatus(error instanceof Error ? error.message : 'register failed')
     } finally {
       setBusyAction(null)
     }
@@ -148,67 +278,30 @@ export default function ConsoleClient() {
         },
         body: JSON.stringify({ email, password }),
       })
-      const message = await response.text()
-      if (!response.ok) {
-        throw new Error(`${response.status} ${message}`)
-      }
-      setToken(message)
-      setAuthMessage('로그인 성공. 토큰이 브라우저 localStorage에 저장되었습니다.')
-      rememberKey(storageKey)
+      const data = await readJsonOrThrow<LoginResponse>(response)
+      setToken(data.access_token)
+      setSession({ user: data.user })
+      setAuthStatus(`로그인 성공 · expires ${new Date(data.expires_at).toLocaleString()}`)
+      setSessionError(null)
     } catch (error) {
-      setAuthMessage(error instanceof Error ? error.message : 'login failed')
+      setAuthStatus(error instanceof Error ? error.message : 'login failed')
     } finally {
       setBusyAction(null)
     }
   }
 
-  async function logout() {
+  function logout() {
     setToken(null)
-    setAuthMessage('세션을 초기화했습니다.')
+    setSession(null)
     setSessionError(null)
+    setAdminUsers([])
     setAdminStatus('admin 데이터 대기 중')
+    setStorageKeys([])
     setStorageStatus('스토리지 작업 대기 중')
-  }
-
-  async function refreshSession(currentToken: string) {
-    try {
-      setSessionError(null)
-      const response = await fetch('/api/me', {
-        headers: authHeaders(currentToken),
-      })
-      const text = await response.text()
-      if (!response.ok) {
-        throw new Error(`${response.status} ${text}`)
-      }
-      setMeText(text)
-      const parsed = parseMeResponse(text)
-      if (parsed.isAdmin) {
-        await refreshAdminUsers(currentToken)
-      } else {
-        setAdminUsers([])
-        setAdminStatus('현재 사용자는 admin이 아닙니다.')
-      }
-    } catch (error) {
-      setSessionError(error instanceof Error ? error.message : 'session refresh failed')
-    }
-  }
-
-  async function refreshAdminUsers(currentToken: string) {
-    try {
-      const response = await fetch('/api/admin/users', {
-        headers: authHeaders(currentToken),
-      })
-      const body = await response.text()
-      if (!response.ok) {
-        throw new Error(`${response.status} ${body}`)
-      }
-      const users = JSON.parse(body) as AdminUser[]
-      setAdminUsers(users)
-      const pendingCount = users.filter((user) => !user.is_active).length
-      setAdminStatus(`admin user view ready · pending ${pendingCount}명`)
-    } catch (error) {
-      setAdminStatus(error instanceof Error ? error.message : 'admin fetch failed')
-    }
+    setSubscriptions([])
+    setQueueItems([])
+    setPushStatus('push 작업 대기 중')
+    setAuthStatus('세션을 메모리에서 제거했어.')
   }
 
   async function activateUser(userId: string) {
@@ -219,42 +312,14 @@ export default function ConsoleClient() {
         method: 'PUT',
         headers: authHeaders(token),
       })
-      if (!response.ok) {
-        const text = await response.text()
-        throw new Error(`${response.status} ${text}`)
-      }
-      setAdminStatus(`user ${userId} 활성화 완료`)
+      const data = await readJsonOrThrow<MessageResponse>(response)
+      setAdminStatus(data.message)
       await refreshAdminUsers(token)
     } catch (error) {
       setAdminStatus(error instanceof Error ? error.message : 'activation failed')
     } finally {
       setBusyAction(null)
     }
-  }
-
-  async function refreshStorageList(currentToken: string) {
-    try {
-      const response = await fetch('/api/storage', {
-        headers: authHeaders(currentToken),
-      })
-      const body = await response.text()
-      if (!response.ok) {
-        throw new Error(`${response.status} ${body}`)
-      }
-      const data = JSON.parse(body) as StorageListResponse
-      setStorageKeys(data.keys)
-      if (data.keys[0] && !recentKeys.includes(data.keys[0])) {
-        setRecentKeys((previous) => [data.keys[0], ...previous].slice(0, 8))
-      }
-    } catch (error) {
-      setStorageStatus(error instanceof Error ? error.message : 'storage list failed')
-    }
-  }
-
-  function rememberKey(key: string) {
-    const normalized = key.trim()
-    if (!normalized) return
-    setRecentKeys((previous) => [normalized, ...previous.filter((item) => item !== normalized)].slice(0, 8))
   }
 
   async function saveObject() {
@@ -269,12 +334,9 @@ export default function ConsoleClient() {
         headers: authHeaders(token),
         body: storageBody,
       })
-      if (!response.ok) {
-        const text = await response.text()
-        throw new Error(`${response.status} ${text}`)
-      }
+      const data = await readJsonOrThrow<MessageResponse>(response)
       rememberKey(storageKey)
-      setStorageStatus(`${storageKey} 저장 완료 (${response.status})`)
+      setStorageStatus(data.message)
       await refreshStorageList(token)
     } catch (error) {
       setStorageStatus(error instanceof Error ? error.message : 'save failed')
@@ -295,7 +357,12 @@ export default function ConsoleClient() {
       })
       const text = await response.text()
       if (!response.ok) {
-        throw new Error(`${response.status} ${text}`)
+        try {
+          const error = JSON.parse(text) as ApiError
+          throw new Error(error.error)
+        } catch {
+          throw new Error(text || 'failed to load object')
+        }
       }
       setStorageKey(key)
       setStorageBody(text)
@@ -319,11 +386,8 @@ export default function ConsoleClient() {
         method: 'DELETE',
         headers: authHeaders(token),
       })
-      if (!response.ok) {
-        const text = await response.text()
-        throw new Error(`${response.status} ${text}`)
-      }
-      setStorageStatus(`${key} 삭제 완료`)
+      const data = await readJsonOrThrow<MessageResponse>(response)
+      setStorageStatus(data.message)
       setStorageBody('')
       await refreshStorageList(token)
     } catch (error) {
@@ -333,19 +397,84 @@ export default function ConsoleClient() {
     }
   }
 
-  const pendingUsers = adminUsers.filter((user) => !user.is_active)
-  const activeUsers = adminUsers.filter((user) => user.is_active)
+  async function subscribeTopic() {
+    if (!token) {
+      setPushStatus('먼저 로그인해줘.')
+      return
+    }
+    setBusyAction('subscribeTopic')
+    try {
+      const response = await fetch('/api/push/subscriptions', {
+        method: 'POST',
+        headers: {
+          ...authHeaders(token),
+          'content-type': 'application/json',
+        },
+        body: JSON.stringify({ topic: pushTopic }),
+      })
+      const data = await readJsonOrThrow<MessageResponse>(response)
+      setPushStatus(data.message)
+      await refreshPushData(token)
+    } catch (error) {
+      setPushStatus(error instanceof Error ? error.message : 'subscription failed')
+    } finally {
+      setBusyAction(null)
+    }
+  }
+
+  async function deleteSubscription(subscriptionId: number) {
+    if (!token) return
+    setBusyAction(`deleteSubscription:${subscriptionId}`)
+    try {
+      const response = await fetch(`/api/push/subscriptions/${subscriptionId}`, {
+        method: 'DELETE',
+        headers: authHeaders(token),
+      })
+      const data = await readJsonOrThrow<MessageResponse>(response)
+      setPushStatus(data.message)
+      await refreshPushData(token)
+    } catch (error) {
+      setPushStatus(error instanceof Error ? error.message : 'delete subscription failed')
+    } finally {
+      setBusyAction(null)
+    }
+  }
+
+  async function enqueuePush() {
+    if (!token) {
+      setPushStatus('먼저 로그인해줘.')
+      return
+    }
+    setBusyAction('enqueuePush')
+    try {
+      const response = await fetch('/api/push/messages', {
+        method: 'POST',
+        headers: {
+          ...authHeaders(token),
+          'content-type': 'application/json',
+        },
+        body: JSON.stringify({ title: pushTitle, body: pushBody }),
+      })
+      const data = await readJsonOrThrow<MessageResponse>(response)
+      setPushStatus(data.message)
+      await refreshPushData(token)
+    } catch (error) {
+      setPushStatus(error instanceof Error ? error.message : 'enqueue failed')
+    } finally {
+      setBusyAction(null)
+    }
+  }
 
   return (
     <div className="min-h-screen bg-neutral-950 text-neutral-100">
       <div className="mx-auto flex w-full max-w-7xl flex-col gap-6 px-6 py-8 md:px-8 lg:px-10">
-        <header className="flex flex-col gap-3 rounded-3xl border border-neutral-800 bg-neutral-900/70 p-6 shadow-2xl shadow-black/20">
-          <div className="flex flex-col gap-2 md:flex-row md:items-end md:justify-between">
+        <header className="rounded-3xl border border-neutral-800 bg-neutral-900/70 p-6 shadow-2xl shadow-black/20">
+          <div className="flex flex-col gap-4 md:flex-row md:items-end md:justify-between">
             <div>
               <p className="text-xs uppercase tracking-[0.35em] text-amber-300/80">single-binary backend platform</p>
               <h1 className="mt-2 text-3xl font-semibold tracking-tight md:text-4xl">🥜 Peanut Console</h1>
               <p className="mt-3 max-w-3xl text-sm leading-6 text-neutral-400 md:text-base">
-                실제 `/api/health`, `/api/login`, `/api/me`, `/api/admin/users`, `/api/storage`에 연결된 운영 콘솔 MVP.
+                health/auth/admin/storage/push를 같은 바이너리에서 운영하는 self-host 콘솔.
               </p>
             </div>
             <button
@@ -369,43 +498,41 @@ export default function ConsoleClient() {
             title="Session"
             value={token ? 'authenticated' : 'anonymous'}
             accent={token ? 'text-sky-400' : 'text-neutral-300'}
-            detail={sessionError ?? me?.raw ?? '로그인 전'}
+            detail={sessionError ?? session?.user.email ?? '로그인 전'}
           />
           <StatusCard
             title="Role"
-            value={me?.isAdmin ? 'admin' : token ? 'member' : 'guest'}
-            accent={me?.isAdmin ? 'text-amber-300' : 'text-violet-300'}
-            detail={me?.userId ?? '세션 없음'}
+            value={session?.user.is_admin ? 'admin' : token ? 'member' : 'guest'}
+            accent={session?.user.is_admin ? 'text-amber-300' : 'text-violet-300'}
+            detail={session?.user.id ?? '세션 없음'}
           />
           <StatusCard
-            title="Storage keys"
-            value={String(storageKeys.length)}
+            title="Push queue"
+            value={String(queueItems.length)}
             accent="text-cyan-300"
-            detail={storageKeys[0] ?? '아직 저장된 키 없음'}
+            detail={queueItems[0]?.status ?? '큐 비어 있음'}
           />
         </section>
 
         <main className="grid gap-6 xl:grid-cols-[1.05fr_1.2fr]">
           <section className="grid gap-6">
-            <Panel title="Auth" subtitle="register / login / me flow">
+            <Panel title="Auth" subtitle="register / login / session flow">
               <div className="grid gap-4">
-                <label className="grid gap-2 text-sm text-neutral-300">
-                  Email
+                <Field label="Email">
                   <input
-                    className="rounded-2xl border border-neutral-800 bg-neutral-950 px-4 py-3 text-sm text-neutral-100 outline-none transition focus:border-sky-500"
+                    className={inputClassName}
                     onChange={(event) => setEmail(event.target.value)}
                     value={email}
                   />
-                </label>
-                <label className="grid gap-2 text-sm text-neutral-300">
-                  Password
+                </Field>
+                <Field label="Password">
                   <input
-                    className="rounded-2xl border border-neutral-800 bg-neutral-950 px-4 py-3 text-sm text-neutral-100 outline-none transition focus:border-sky-500"
+                    className={inputClassName}
                     onChange={(event) => setPassword(event.target.value)}
                     type="password"
                     value={password}
                   />
-                </label>
+                </Field>
                 <div className="flex flex-wrap gap-3">
                   <ActionButton busy={busyAction === 'register'} onClick={() => void register()}>
                     Register
@@ -413,12 +540,12 @@ export default function ConsoleClient() {
                   <ActionButton busy={busyAction === 'login'} onClick={() => void login()} primary>
                     Login
                   </ActionButton>
-                  <ActionButton onClick={() => void logout()}>Logout</ActionButton>
+                  <ActionButton onClick={logout}>Logout</ActionButton>
                 </div>
-                <InfoBox label="Auth status" value={authMessage} />
+                <InfoBox label="Auth status" value={authStatus} />
                 <InfoBox
-                  label="JWT token"
-                  value={token ? `${token.slice(0, 24)}…` : '토큰 없음'}
+                  label="Session token"
+                  value={token ? `${token.slice(0, 24)}… (메모리 전용)` : '토큰 없음'}
                 />
               </div>
             </Panel>
@@ -472,24 +599,22 @@ export default function ConsoleClient() {
           </section>
 
           <section className="grid gap-6">
-            <Panel title="Storage" subtitle="save / load / delete objects through the protected API">
+            <Panel title="Storage" subtitle="user-scoped object operations">
               <div className="grid gap-4">
-                <label className="grid gap-2 text-sm text-neutral-300">
-                  Object key
+                <Field label="Object key">
                   <input
-                    className="rounded-2xl border border-neutral-800 bg-neutral-950 px-4 py-3 text-sm text-neutral-100 outline-none transition focus:border-cyan-500"
+                    className={inputClassName}
                     onChange={(event) => setStorageKey(event.target.value)}
                     value={storageKey}
                   />
-                </label>
-                <label className="grid gap-2 text-sm text-neutral-300">
-                  Content
+                </Field>
+                <Field label="Content">
                   <textarea
-                    className="min-h-[240px] rounded-3xl border border-neutral-800 bg-neutral-950 px-4 py-3 text-sm text-neutral-100 outline-none transition focus:border-cyan-500"
+                    className="min-h-[220px] rounded-3xl border border-neutral-800 bg-neutral-950 px-4 py-3 text-sm text-neutral-100 outline-none transition focus:border-cyan-500"
                     onChange={(event) => setStorageBody(event.target.value)}
                     value={storageBody}
                   />
-                </label>
+                </Field>
                 <div className="flex flex-wrap gap-3">
                   <ActionButton busy={busyAction === 'saveObject'} onClick={() => void saveObject()} primary>
                     Save object
@@ -510,12 +635,12 @@ export default function ConsoleClient() {
               <Panel title="Stored keys" subtitle="server-side list API">
                 <div className="grid gap-3">
                   {storageKeys.length === 0 ? (
-                    <EmptyState text="로그인 후 저장된 키 목록을 볼 수 있어." />
+                    <EmptyState text="로그인한 유저 기준으로 저장된 키만 보여줘." />
                   ) : (
                     storageKeys.map((key) => (
                       <button
                         key={key}
-                        className="rounded-2xl border border-neutral-800 bg-neutral-950 px-4 py-3 text-left text-sm text-neutral-200 transition hover:border-cyan-500 hover:bg-neutral-900"
+                        className={listButtonClassName}
                         onClick={() => void loadObject(key)}
                         type="button"
                       >
@@ -526,7 +651,7 @@ export default function ConsoleClient() {
                 </div>
               </Panel>
 
-              <Panel title="Recent keys" subtitle="browser localStorage shortcuts">
+              <Panel title="Recent keys" subtitle="non-sensitive browser shortcuts">
                 <div className="grid gap-3">
                   {recentKeys.length === 0 ? (
                     <EmptyState text="아직 최근에 다룬 키가 없어." />
@@ -534,7 +659,7 @@ export default function ConsoleClient() {
                     recentKeys.map((key) => (
                       <button
                         key={key}
-                        className="rounded-2xl border border-neutral-800 bg-neutral-950 px-4 py-3 text-left text-sm text-neutral-200 transition hover:border-sky-500 hover:bg-neutral-900"
+                        className={listButtonClassName}
                         onClick={() => {
                           setStorageKey(key)
                           void loadObject(key)
@@ -548,12 +673,106 @@ export default function ConsoleClient() {
                 </div>
               </Panel>
             </div>
+
+            <Panel title="Push (ntfy MVP)" subtitle="subscription + queue">
+              <div className="grid gap-4">
+                <Field label="Topic">
+                  <input
+                    className={inputClassName}
+                    onChange={(event) => setPushTopic(event.target.value)}
+                    value={pushTopic}
+                  />
+                </Field>
+                <div className="flex flex-wrap gap-3">
+                  <ActionButton busy={busyAction === 'subscribeTopic'} onClick={() => void subscribeTopic()} primary>
+                    Subscribe topic
+                  </ActionButton>
+                  <ActionButton onClick={() => token && void refreshPushData(token)}>Refresh push</ActionButton>
+                </div>
+                <Field label="Push title">
+                  <input
+                    className={inputClassName}
+                    onChange={(event) => setPushTitle(event.target.value)}
+                    value={pushTitle}
+                  />
+                </Field>
+                <Field label="Push body">
+                  <textarea
+                    className="min-h-[120px] rounded-3xl border border-neutral-800 bg-neutral-950 px-4 py-3 text-sm text-neutral-100 outline-none transition focus:border-fuchsia-500"
+                    onChange={(event) => setPushBody(event.target.value)}
+                    value={pushBody}
+                  />
+                </Field>
+                <ActionButton busy={busyAction === 'enqueuePush'} onClick={() => void enqueuePush()}>
+                  Enqueue push
+                </ActionButton>
+                <InfoBox label="Push status" value={pushStatus} />
+
+                <div className="grid gap-3 md:grid-cols-2">
+                  <div className="grid gap-3">
+                    <h3 className="text-sm font-medium text-neutral-200">Subscriptions</h3>
+                    {subscriptions.length === 0 ? (
+                      <EmptyState text="먼저 topic을 구독해야 ntfy 메시지를 받을 수 있어." />
+                    ) : (
+                      subscriptions.map((subscription) => (
+                        <div
+                          key={subscription.id}
+                          className="flex items-center justify-between gap-3 rounded-2xl border border-neutral-800 bg-neutral-950/80 p-4"
+                        >
+                          <div>
+                            <p className="font-medium text-neutral-100">{subscription.topic}</p>
+                            <p className="text-xs text-neutral-500">{subscription.created_at}</p>
+                          </div>
+                          <ActionButton
+                            busy={busyAction === `deleteSubscription:${subscription.id}`}
+                            onClick={() => void deleteSubscription(subscription.id)}
+                          >
+                            Delete
+                          </ActionButton>
+                        </div>
+                      ))
+                    )}
+                  </div>
+
+                  <div className="grid gap-3">
+                    <h3 className="text-sm font-medium text-neutral-200">Queue</h3>
+                    {queueItems.length === 0 ? (
+                      <EmptyState text="아직 큐에 들어간 메시지가 없어." />
+                    ) : (
+                      queueItems.map((item) => (
+                        <div key={item.id} className="rounded-2xl border border-neutral-800 bg-neutral-950/80 p-4">
+                          <div className="flex items-center justify-between gap-3">
+                            <p className="font-medium text-neutral-100">{item.title}</p>
+                            <span className="text-xs uppercase tracking-[0.2em] text-fuchsia-300">
+                              {item.status}
+                            </span>
+                          </div>
+                          <p className="mt-2 text-sm text-neutral-300">{item.body}</p>
+                          <p className="mt-3 text-xs text-neutral-500">
+                            retries: {item.retry_count} · created: {item.created_at}
+                          </p>
+                          {item.last_error ? (
+                            <p className="mt-2 text-xs text-rose-300">last error: {item.last_error}</p>
+                          ) : null}
+                        </div>
+                      ))
+                    )}
+                  </div>
+                </div>
+              </div>
+            </Panel>
           </section>
         </main>
       </div>
     </div>
   )
 }
+
+const inputClassName =
+  'rounded-2xl border border-neutral-800 bg-neutral-950 px-4 py-3 text-sm text-neutral-100 outline-none transition focus:border-sky-500'
+
+const listButtonClassName =
+  'rounded-2xl border border-neutral-800 bg-neutral-950 px-4 py-3 text-left text-sm text-neutral-200 transition hover:border-cyan-500 hover:bg-neutral-900'
 
 type StatusCardProps = {
   title: string
@@ -630,6 +849,19 @@ function InfoBox({ label, value }: InfoBoxProps) {
   )
 }
 
+function Field({ label, children }: { label: string; children: ReactNode }) {
+  return (
+    <label className="grid gap-2 text-sm text-neutral-300">
+      {label}
+      {children}
+    </label>
+  )
+}
+
 function EmptyState({ text }: { text: string }) {
-  return <div className="rounded-2xl border border-dashed border-neutral-800 px-4 py-6 text-sm text-neutral-500">{text}</div>
+  return (
+    <div className="rounded-2xl border border-dashed border-neutral-800 px-4 py-6 text-sm text-neutral-500">
+      {text}
+    </div>
+  )
 }

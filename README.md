@@ -1,221 +1,88 @@
 # Peanut
 
-Peanut is an early-stage single-binary backend platform prototype built with Rust and a small embedded Next.js console.
-The project combines:
+Peanut is a small self-host backend runtime that ships as a single Rust binary with an embedded web console.
 
-- an Axum HTTP API
-- SQLite persistence through SQLx
-- Argon2 password hashing and JWT-based authentication
-- localized health responses (English/Korean)
-- a background push worker intended for ntfy/Web Push delivery
-- a static admin console exported from Next.js and embedded into the Rust binary
+It is intentionally narrow:
+- SQLite for persistence
+- local filesystem object storage
+- JWT-based auth with admin approval flow
+- an embedded static Next.js console
+- a simple ntfy-based push queue MVP
 
-Important: the repository is currently a prototype in progress. The code expresses the intended architecture clearly, but the current `master` branch does not build successfully yet.
+The goal is not to become a giant backend platform. The goal is to give a solo developer or small team a backend core that is easy to understand, easy to deploy, and easy to operate.
 
-## What Peanut is trying to do
+## Product philosophy
 
-Peanut appears to target a very simple self-hostable backend runtime with an opinionated shape:
+Peanut is built around a few constraints:
 
-1. run as a single service on port `3000`
-2. persist users and tokens in SQLite
-3. store uploaded objects on the local filesystem
-4. expose authenticated API routes for account and storage operations
-5. serve a built-in web console from the same binary
-6. process push notifications in the background
+1. Single-binary deployment
+   - the Rust server serves both the API and the embedded admin console
+2. Low operational complexity
+   - SQLite + local storage instead of mandatory external services
+3. Honest feature scope
+   - ship a complete small feature rather than a large half-implemented platform
+4. Self-host first
+   - one machine, one folder, one service is a valid production shape
 
-In short: Peanut is aiming for “small backend platform, minimal moving parts, single binary deployment”.
+## Current feature set
 
-## Current repository status
-
-The repository already contains meaningful backend and frontend code, but several integration points are unfinished.
-
-### What already exists
-
-Backend:
-- health endpoint with i18n support
-- register/login flow
-- password hashing with Argon2
-- JWT creation and verification
-- SQLite initialization + migration runner
-- background push worker for queue polling
-- embedded static file server for console assets
-
-Frontend:
-- minimal dark dashboard UI in Next.js App Router
-- static export configuration (`next.config.mjs`)
-- basic dashboard cards for system/storage/push queue
-
-Infra:
-- multi-stage Dockerfile
-- `docker-compose.yml`
-- `scripts/build.sh` for frontend + backend build flow
-
-### What is incomplete or inconsistent
-
-The codebase does not currently compile because the implementation is ahead of the checked-in modules/assets.
-
-Confirmed build issues from `cargo test`:
-
-1. missing `storage` module
-   - `src/main.rs` declares `mod storage;`
-   - no `src/storage.rs` or `src/storage/mod.rs` exists
-
-2. missing `api::storage` handlers
-   - `src/main.rs` routes `/storage/*key`
-   - `src/api/mod.rs` only exports `health` and `auth`
-
-3. embedded console output directory is missing before Rust build
-   - `src/console.rs` embeds `peanut-console/out/`
-   - that folder is not present until the Next.js export step runs
-
-4. router state types are inconsistent
-   - auth handlers currently extract `State<SqlitePool>`
-   - the app is initialized with a custom `AppState`
-   - this causes an Axum state mismatch at compile time
-
-5. database schema is incomplete for push features
-   - migrations create `users` and `refresh_tokens`
-   - push worker expects `push_queue` and `push_subscriptions`
-   - those tables are not defined yet
-
-6. environment handling is only partially wired
-   - `docker-compose.yml` sets `DATABASE_URL`
-   - `src/main.rs` currently hardcodes `sqlite://peanut.db`
-   - `dotenvy` is listed as a dependency but not actually used in startup
-
-Because of those gaps, the repository should currently be treated as a solid architectural prototype rather than a runnable release.
-
-## Architecture overview
-
-### 1. HTTP server and routing
-
-The server is started from `src/main.rs`.
-
-Public routes:
-- `GET /api/health`
+### Auth and admin
 - `POST /api/register`
+  - first user becomes active admin automatically
+  - later users are created inactive and require admin approval
 - `POST /api/login`
-
-Protected routes (JWT middleware):
+  - returns a typed JSON login response with bearer token and expiry
 - `GET /api/me`
-- intended storage routes under `/api/storage/*key`
+  - returns the authenticated user as JSON
+- `GET /api/admin/users`
+  - admin-only user list
+- `PUT /api/admin/users/:user_id/activate`
+  - admin-only activation flow
 
-Fallback:
-- all other paths are handled by the embedded console asset server in `src/console.rs`
+### Storage
+- user-scoped object storage
+- authenticated users can:
+  - list their own keys
+  - upload objects
+  - fetch objects
+  - delete objects
+- storage keys are automatically isolated per authenticated user
 
-### 2. Authentication model
+### Push (current release MVP)
+Peanut currently ships an honest ntfy-based push MVP.
 
-Authentication is implemented in three layers:
+- `GET /api/push/subscriptions`
+- `POST /api/push/subscriptions`
+- `DELETE /api/push/subscriptions/:subscription_id`
+- `POST /api/push/messages`
+- `GET /api/push/queue`
 
-- `src/auth/hash.rs`
-  - hashes passwords with Argon2
-  - verifies password hashes
+What this means:
+- users subscribe to ntfy topics
+- push messages are queued in SQLite
+- a background worker delivers messages to ntfy topics
+- queue status, retries, and last error are visible through the API and console
 
-- `src/auth/jwt.rs`
-  - creates 15-minute JWT access tokens
-  - embeds `sub`, `exp`, and `is_admin`
+What this does not mean yet:
+- full Web Push / VAPID production support is not part of the current release
+- `src/push/webpush.rs` remains a placeholder for future work
 
-- `src/middleware/auth.rs`
-  - reads `Authorization: Bearer <token>`
-  - validates using a hardcoded secret (`temp_secret`)
-  - injects claims into request extensions
+### Console
+The embedded console supports:
+- health monitoring
+- register/login/session inspection
+- admin approval workflow
+- user-scoped storage management
+- ntfy push subscription management
+- push queue inspection
 
-Notable behavior:
-- the first registered user becomes admin and active automatically
-- later users are created inactive and appear to require approval
-- JWT secret management is not production-ready yet because the secret is hardcoded
+The console is statically exported from Next.js and embedded into the Rust binary during build.
 
-### 3. Database layer
-
-`src/db.rs` initializes SQLite with:
-- WAL journal mode
-- `synchronous = NORMAL`
-- foreign keys enabled
-- SQLx migrations from `./migrations`
-
-Current migration contents:
-- `users`
-- `refresh_tokens`
-
-This gives Peanut a simple local-first persistence model with low operational overhead.
-
-### 4. Push delivery design
-
-Push-related code lives in `src/push/`.
-
-Files:
-- `worker.rs` — polls pending jobs from the database every 5 seconds
-- `ntfy.rs` — sends notifications to `https://ntfy.sh/<topic>`
-- `webpush.rs` — placeholder for real Web Push support
-
-Observed intent:
-- queue notifications in the DB
-- fetch per-user subscriptions
-- deliver through ntfy now, Web Push later
-- mark jobs as `sent` or `failed`
-
-Current limitation:
-- queue/subscription tables are not yet migrated
-- `worker.rs` treats `endpoint` as the ntfy topic, which is practical for prototyping but not a full Web Push model yet
-
-### 5. Embedded console
-
-The console lives in `peanut-console/` and is a small Next.js app.
-
-Current UI characteristics:
-- dark, minimalist dashboard
-- static summary cards
-- no live API integration yet
-- exported static assets are intended to be bundled into the Rust binary via `rust-embed`
-
-This is a good fit for Peanut’s single-binary idea: build the frontend once, then serve it directly from the backend binary.
-
-## Repository layout
-
-```text
-.
-├── Cargo.toml                  # Rust app and dependencies
-├── Dockerfile                  # Multi-stage frontend/backend image build
-├── docker-compose.yml          # Local container run config
-├── migrations/                 # SQLite schema migrations
-├── scripts/build.sh            # Build frontend export + Rust release binary
-├── src/
-│   ├── main.rs                 # App bootstrap and route wiring
-│   ├── db.rs                   # SQLite init + migrations
-│   ├── console.rs              # Embedded static asset server
-│   ├── i18n.rs                 # Translation helper
-│   ├── api/
-│   │   ├── auth.rs             # register/login handlers
-│   │   ├── health.rs           # localized health endpoint
-│   │   └── mod.rs
-│   ├── auth/
-│   │   ├── hash.rs             # Argon2 helpers
-│   │   ├── jwt.rs              # JWT helpers
-│   │   └── mod.rs
-│   ├── middleware/
-│   │   ├── auth.rs             # bearer token middleware
-│   │   └── mod.rs
-│   └── push/
-│       ├── worker.rs           # notification queue processor
-│       ├── ntfy.rs             # ntfy sender
-│       ├── webpush.rs          # placeholder web push sender
-│       └── mod.rs
-├── locales/
-│   ├── en.json
-│   └── ko.json
-└── peanut-console/
-    ├── src/app/page.tsx        # minimalist dashboard page
-    ├── src/app/layout.tsx      # app layout
-    ├── src/app/globals.css     # base styling
-    └── next.config.mjs         # static export config
-```
-
-## API summary
+## API contract summary
 
 ### `GET /api/health`
-Returns a localized JSON health payload.
+Returns localized JSON:
 
-Example:
 ```json
 {
   "status": "ok",
@@ -223,112 +90,211 @@ Example:
 }
 ```
 
-Localization source:
-- `Accept-Language: en-*` -> English
-- `Accept-Language: ko-*` -> Korean
-
 ### `POST /api/register`
-Registers a new user.
+Request:
 
-Request body:
 ```json
 {
-  "email": "user@example.com",
-  "password": "secret"
+  "email": "admin@example.com",
+  "password": "secret123"
 }
 ```
 
-Behavior:
-- first user becomes admin and active
-- later users are inactive by default
+Response:
 
-### `POST /api/login`
-Logs in an active user and returns a JWT token as plain text.
-
-Request body:
 ```json
 {
-  "email": "user@example.com",
-  "password": "secret"
+  "message": "First user registered as active admin.",
+  "user": {
+    "id": "uuid",
+    "email": "admin@example.com",
+    "is_active": true,
+    "is_admin": true
+  }
+}
+```
+
+Validation rules:
+- email is required and must look like a valid address
+- password must be at least 8 characters
+
+### `POST /api/login`
+Response:
+
+```json
+{
+  "access_token": "jwt",
+  "token_type": "Bearer",
+  "expires_at": "2026-04-25T00:00:00Z",
+  "user": {
+    "id": "uuid",
+    "email": "admin@example.com",
+    "is_active": true,
+    "is_admin": true
+  }
 }
 ```
 
 ### `GET /api/me`
-Protected endpoint that reads JWT claims and returns a plain string response.
+Response:
 
-## Build and run
+```json
+{
+  "user": {
+    "id": "uuid",
+    "email": "admin@example.com",
+    "is_active": true,
+    "is_admin": true
+  }
+}
+```
 
-## Prerequisites
+### `GET /api/storage`
+Response:
 
+```json
+{
+  "keys": ["notes/welcome.txt"]
+}
+```
+
+### `POST /api/push/subscriptions`
+Request:
+
+```json
+{
+  "topic": "alerts_main"
+}
+```
+
+## Repository layout
+
+```text
+.
+├── Cargo.toml
+├── Cargo.lock
+├── Dockerfile
+├── docker-compose.yml
+├── build.rs
+├── migrations/
+├── src/
+│   ├── main.rs
+│   ├── db.rs
+│   ├── console.rs
+│   ├── i18n.rs
+│   ├── api/
+│   │   ├── admin.rs
+│   │   ├── auth.rs
+│   │   ├── common.rs
+│   │   ├── health.rs
+│   │   ├── push.rs
+│   │   ├── storage.rs
+│   │   └── mod.rs
+│   ├── auth/
+│   ├── middleware/
+│   ├── push/
+│   └── storage/
+├── locales/
+└── peanut-console/
+```
+
+## Configuration
+
+Peanut reads configuration from environment variables.
+
+Required:
+- `JWT_SECRET`
+
+Optional:
+- `DATABASE_URL` (default: `sqlite://peanut.db`)
+- `STORAGE_DIR` (default: `data/storage`)
+- `BIND_ADDR` (default: `127.0.0.1:3000`)
+- `MAX_UPLOAD_BYTES` (default: `5242880`)
+- `RUST_LOG` (default: `info`)
+
+See `.env.example` for a starter config.
+
+## Local development
+
+### Prerequisites
 - Rust toolchain
-- Node.js / npm
-- SQLite development libraries if building locally on Linux
+- Node.js + npm
 
-### Intended build flow
+### Run tests
+
+```bash
+cargo test
+```
+
+### Build the console only
+
+```bash
+cd peanut-console
+npm install
+npm run lint
+npm run build
+```
+
+### Build the full project
 
 ```bash
 ./scripts/build.sh
 ```
 
-This script is designed to:
-1. install frontend dependencies
-2. export the Next.js console
-3. build the Rust release binary
-
-### Docker flow
+### Run the binary
 
 ```bash
+export JWT_SECRET='replace-this'
+./target/release/peanut
+```
+
+Then open:
+- `http://127.0.0.1:3000`
+
+## Docker
+
+```bash
+cp .env.example .env
+# edit JWT_SECRET in .env
+
 docker compose up --build
 ```
 
-### Current reality
+## Release checklist
 
-At the moment, the build does not complete successfully on the repository head because of the missing storage implementation and state/schema mismatches listed above.
+Before shipping a change, verify:
 
-## Strengths of the current design
+```bash
+cargo test
+cd peanut-console && npm run lint && npm run build && cd ..
+./scripts/build.sh
+```
 
-Even in prototype form, the repository has a few strong ideas:
+Manual smoke test:
+1. open the console
+2. register first admin
+3. login
+4. activate a second user
+5. upload/read/delete a storage object
+6. subscribe an ntfy topic and enqueue a push message
 
-- good technology fit for a small self-hosted service
-- Rust + SQLite keeps operations simple
-- frontend embedding supports single-binary deployment
-- auth and i18n are already separated into clean modules
-- push delivery is designed as an async worker, which is the right shape for notifications
-- Dockerfile already reflects the final intended distribution model
+## Backups and operations
 
-## Recommended next steps
+For a simple single-node deployment, back up:
+- the SQLite database file
+- the storage directory
 
-If development continues, the most important fixes are:
+In the default docker-compose layout that means backing up `./data/`.
 
-1. implement `src/storage/` and `src/api/storage.rs`
-2. unify Axum state handling around `AppState`
-3. load config from environment variables (`DATABASE_URL`, JWT secret, storage path, bind address)
-4. add migrations for `push_queue` and `push_subscriptions`
-5. make frontend export part of a deterministic build pipeline
-6. replace hardcoded `temp_secret` with a real secret source
-7. return structured JSON for auth endpoints instead of plain strings
-8. connect the console to real backend metrics and storage/push data
+## Current non-goals
 
-## Codebase notes
-
-Approximate hand-written code footprint in the current repository (excluding dependency folders):
-- Rust: ~517 lines across 16 files
-- TS/TSX: ~73 lines across 3 files
-- CSS: 14 lines
-- SQL: 16 lines
-
-The generated `package-lock.json` is much larger and not representative of application complexity.
-
-## Development note for contributors
-
-If you want this repository to become a working MVP quickly, the shortest path is:
-- finish storage
-- fix state typing
-- add missing push migrations
-- build/export console assets during release builds
-
-Once those are complete, Peanut can become a coherent single-node backend starter instead of just an architectural prototype.
+Peanut is intentionally not trying to be:
+- a large multi-tenant backend cloud
+- a plugin/orchestration framework
+- a Supabase/Firebase replacement
+- a full Web Push platform yet
 
 ## License
 
-No license file is currently present in this repository. Add one before public reuse or distribution.
+No license file has been chosen yet.
+If you plan to distribute Peanut publicly, add an explicit license before release.

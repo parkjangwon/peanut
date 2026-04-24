@@ -7,14 +7,23 @@ mod middleware;
 mod push;
 mod storage;
 
+#[cfg(test)]
+mod test_support;
+
 rust_i18n::i18n!("locales", fallback = "en");
 
 use axum::{
+    extract::DefaultBodyLimit,
     routing::{delete, get, post, put},
-    Extension, Router,
+    Router,
 };
 use std::{env, net::SocketAddr, sync::Arc};
 use tracing_subscriber;
+
+const DEFAULT_DATABASE_URL: &str = "sqlite://peanut.db";
+const DEFAULT_STORAGE_DIR: &str = "data/storage";
+const DEFAULT_BIND_ADDR: &str = "127.0.0.1:3000";
+const DEFAULT_MAX_UPLOAD_BYTES: usize = 5 * 1024 * 1024;
 
 #[derive(Clone)]
 pub struct AppState {
@@ -28,11 +37,14 @@ async fn main() {
     tracing_subscriber::fmt::init();
     dotenvy::dotenv().ok();
 
-    let database_url =
-        env::var("DATABASE_URL").unwrap_or_else(|_| "sqlite://peanut.db".to_string());
-    let storage_dir = env::var("STORAGE_DIR").unwrap_or_else(|_| "data/storage".to_string());
-    let bind_addr = env::var("BIND_ADDR").unwrap_or_else(|_| "127.0.0.1:3000".to_string());
-    let jwt_secret = env::var("JWT_SECRET").unwrap_or_else(|_| "temp_secret".to_string());
+    let database_url = env::var("DATABASE_URL").unwrap_or_else(|_| DEFAULT_DATABASE_URL.to_string());
+    let storage_dir = env::var("STORAGE_DIR").unwrap_or_else(|_| DEFAULT_STORAGE_DIR.to_string());
+    let bind_addr = env::var("BIND_ADDR").unwrap_or_else(|_| DEFAULT_BIND_ADDR.to_string());
+    let jwt_secret = env::var("JWT_SECRET").expect("JWT_SECRET must be set before starting Peanut");
+    let max_upload_bytes = env::var("MAX_UPLOAD_BYTES")
+        .ok()
+        .and_then(|value| value.parse::<usize>().ok())
+        .unwrap_or(DEFAULT_MAX_UPLOAD_BYTES);
 
     tokio::fs::create_dir_all(&storage_dir).await.unwrap();
 
@@ -53,14 +65,29 @@ async fn main() {
         crate::push::worker::start_push_worker(pool_clone).await;
     });
 
-    let protected_routes = Router::new()
-        .route("/me", get(me))
-        .route("/admin/users", get(api::admin::list_users))
-        .route("/admin/users/:user_id/activate", put(api::admin::activate_user))
+    let storage_routes = Router::new()
         .route("/storage", get(api::storage::list_objects))
         .route("/storage/*key", get(api::storage::get_object))
         .route("/storage/*key", put(api::storage::put_object))
         .route("/storage/*key", delete(api::storage::delete_object))
+        .layer(DefaultBodyLimit::max(max_upload_bytes));
+
+    let push_routes = Router::new()
+        .route("/push/subscriptions", get(api::push::list_subscriptions))
+        .route("/push/subscriptions", post(api::push::create_subscription))
+        .route(
+            "/push/subscriptions/:subscription_id",
+            delete(api::push::delete_subscription),
+        )
+        .route("/push/messages", post(api::push::enqueue_message))
+        .route("/push/queue", get(api::push::list_queue));
+
+    let protected_routes = Router::new()
+        .route("/me", get(api::auth::me))
+        .route("/admin/users", get(api::admin::list_users))
+        .route("/admin/users/:user_id/activate", put(api::admin::activate_user))
+        .merge(storage_routes)
+        .merge(push_routes)
         .layer(axum::middleware::from_fn_with_state(
             state.clone(),
             crate::middleware::auth::auth_middleware,
@@ -79,8 +106,4 @@ async fn main() {
 
     let listener = tokio::net::TcpListener::bind(addr).await.unwrap();
     axum::serve(listener, app).await.unwrap();
-}
-
-async fn me(Extension(claims): Extension<crate::auth::jwt::Claims>) -> String {
-    format!("Hello, user {}! Admin: {}", claims.sub, claims.is_admin)
 }
