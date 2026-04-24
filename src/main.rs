@@ -1,6 +1,7 @@
 mod db;
 mod i18n;
 mod api;
+mod auth;
 
 rust_i18n::i18n!("locales", fallback = "en");
 
