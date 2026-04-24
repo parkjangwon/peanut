@@ -1,3 +1,4 @@
+mod db;
 use tracing_subscriber;
 
 #[tokio::main]
