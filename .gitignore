@@ -1,0 +1,8 @@
+/target
+/data/*.db
+/data/*.db-shm
+/data/*.db-wal
+/data/storage/
+peanut.db
+peanut.db-shm
+peanut.db-wal

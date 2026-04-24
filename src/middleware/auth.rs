@@ -1,12 +1,10 @@
-use axum::{
-    extract::Request,
-    http::StatusCode,
-    middleware::Next,
-    response::Response,
-};
 use crate::auth::jwt::verify_jwt;
+use axum::{
+    extract::Request, extract::State, http::StatusCode, middleware::Next, response::Response,
+};
 
 pub async fn auth_middleware(
+    State(state): State<crate::AppState>,
     mut req: Request,
     next: Next,
 ) -> Result<Response, StatusCode> {
@@ -19,8 +17,8 @@ pub async fn auth_middleware(
         .and_then(|h| h.strip_prefix("Bearer "))
         .ok_or(StatusCode::UNAUTHORIZED)?;
 
-    let claims = verify_jwt(token, "temp_secret")
-        .map_err(|_| StatusCode::UNAUTHORIZED)?;
+    let claims =
+        verify_jwt(token, state.jwt_secret.as_str()).map_err(|_| StatusCode::UNAUTHORIZED)?;
 
     req.extensions_mut().insert(claims);
 

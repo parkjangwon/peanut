@@ -1,4 +1,7 @@
-use sqlx::{sqlite::{SqliteConnectOptions, SqlitePoolOptions}, SqlitePool};
+use sqlx::{
+    sqlite::{SqliteConnectOptions, SqlitePoolOptions},
+    SqlitePool,
+};
 use std::str::FromStr;
 
 pub async fn init_db(database_url: &str) -> Result<SqlitePool, sqlx::Error> {
@@ -27,5 +30,26 @@ mod tests {
         let pool = init_db("sqlite::memory:").await.unwrap();
         let row: (i64,) = sqlx::query_as("SELECT 1").fetch_one(&pool).await.unwrap();
         assert_eq!(row.0, 1);
+    }
+
+    #[tokio::test]
+    async fn test_db_init_creates_push_tables() {
+        let pool = init_db("sqlite::memory:").await.unwrap();
+
+        let queue_exists: (i64,) = sqlx::query_as(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'push_queue'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(queue_exists.0, 1);
+
+        let subscriptions_exists: (i64,) = sqlx::query_as(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'push_subscriptions'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(subscriptions_exists.0, 1);
     }
 }
