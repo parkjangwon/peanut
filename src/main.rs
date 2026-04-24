@@ -5,7 +5,7 @@ mod auth;
 
 rust_i18n::i18n!("locales", fallback = "en");
 
-use axum::{routing::get, Router};
+use axum::{routing::{get, post}, Router};
 use std::net::SocketAddr;
 use tracing_subscriber;
 
@@ -14,11 +14,14 @@ async fn main() {
     tracing_subscriber::fmt::init();
     
     // Init DB
-    let _pool = db::init_db("sqlite://peanut.db").await.expect("Failed to initialize DB");
+    let pool = db::init_db("sqlite://peanut.db").await.expect("Failed to initialize DB");
 
     // Init App
     let app = Router::new()
-        .route("/api/health", get(api::health::health_check));
+        .route("/api/health", get(api::health::health_check))
+        .route("/api/register", post(api::auth::register))
+        .route("/api/login", post(api::auth::login))
+        .with_state(pool);
 
     let addr = SocketAddr::from(([127, 0, 0, 1], 3000));
     tracing::info!("Listening on {}", addr);
