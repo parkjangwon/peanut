@@ -13,12 +13,7 @@ pub async fn init_db(database_url: &str) -> Result<SqlitePool, sqlx::Error> {
         .connect_with(connection_options)
         .await?;
 
-    // Create a dummy table with a JSON column to verify JSONB-like support
-    sqlx::query(
-        "CREATE TABLE IF NOT EXISTS test_json (id INTEGER PRIMARY KEY, data JSON NOT NULL);"
-    )
-    .execute(&pool)
-    .await?;
+    sqlx::migrate!("./migrations").run(&pool).await?;
 
     Ok(pool)
 }
