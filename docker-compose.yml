@@ -1,0 +1,13 @@
+services:
+  peanut:
+    build: .
+    image: peanut:latest
+    container_name: peanut
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./data:/app/data
+    restart: always
+    environment:
+      - DATABASE_URL=sqlite://data/peanut.db
+      - RUST_LOG=info
