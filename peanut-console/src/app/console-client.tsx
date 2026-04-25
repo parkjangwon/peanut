@@ -132,7 +132,86 @@ type VapidPublicKeyResponse = {
   public_key: string
 }
 
+type ManagedFunctionSummary = {
+  id: string
+  name: string
+  display_name: string
+  endpoint_slug: string
+  runtime: string
+  timeout_ms: number
+  enabled: boolean
+  updated_at: string
+}
+
+type ManagedFunctionsResponse = {
+  functions: ManagedFunctionSummary[]
+}
+
+type ManagedFunctionDetail = {
+  id: string
+  name: string
+  display_name: string
+  endpoint_slug: string
+  runtime: string
+  source_code: string
+  timeout_ms: number
+  enabled: boolean
+  created_by: string
+  updated_by: string
+  created_at: string
+  updated_at: string
+}
+
+type ManagedFunctionResponse = {
+  function: ManagedFunctionDetail
+}
+
+type ManagedFunctionInvocation = {
+  id: string
+  function_id: string
+  status: string
+  request_json: string | null
+  response_json: string | null
+  error: string | null
+  duration_ms: number | null
+  created_at: string
+  finished_at: string | null
+}
+
+type ManagedFunctionInvocationsResponse = {
+  invocations: ManagedFunctionInvocation[]
+}
+
+type InvokeManagedFunctionResponse = {
+  invocation_id: string
+  status: string
+  response: unknown
+  duration_ms: number
+}
+
 const RECENT_KEYS_KEY = 'peanut.console.recentKeys'
+const DEFAULT_FUNCTION_SOURCE = [
+  'export async function handler(ctx: {',
+  '  request: { input: { name?: string } }',
+  '  auth: { user_id: string; is_admin: boolean }',
+  '  function: { name: string; runtime: string }',
+  '}) {',
+  '  return {',
+  "    greeting: `hello ${ctx.request.input.name ?? 'world'}`,",
+  '    user_id: ctx.auth.user_id,',
+  '    function_name: ctx.function.name,',
+  '  }',
+  '}',
+].join('\n')
+
+const CONSOLE_SECTIONS = [
+  { id: 'auth', label: 'Auth' },
+  { id: 'database', label: 'Database' },
+  { id: 'storage', label: 'Storage' },
+  { id: 'push-notification', label: 'Push Notification' },
+  { id: 'function', label: 'Function' },
+  { id: 'setting', label: 'Setting' },
+] as const
 
 function authHeaders(token: string | null): Record<string, string> {
   return token ? { Authorization: `Bearer ${token}` } : {}
@@ -192,6 +271,21 @@ export default function ConsoleClient() {
   const [pushStatus, setPushStatus] = useState('push 작업 대기 중')
   const [subscriptions, setSubscriptions] = useState<PushSubscription[]>([])
   const [queueItems, setQueueItems] = useState<PushQueueEntry[]>([])
+  const [functionsStatus, setFunctionsStatus] = useState('function 작업 대기 중')
+  const [functions, setFunctions] = useState<ManagedFunctionSummary[]>([])
+  const [selectedFunctionName, setSelectedFunctionName] = useState('')
+  const [selectedFunctionDetail, setSelectedFunctionDetail] = useState<ManagedFunctionDetail | null>(null)
+  const [functionInvocations, setFunctionInvocations] = useState<ManagedFunctionInvocation[]>([])
+  const [functionName, setFunctionName] = useState('hello_fn')
+  const [functionDisplayName, setFunctionDisplayName] = useState('Hello function')
+  const [functionEndpointSlug, setFunctionEndpointSlug] = useState('hello-fn')
+  const [functionRuntime, setFunctionRuntime] = useState<'javascript' | 'typescript'>('typescript')
+  const [functionSourceCode, setFunctionSourceCode] = useState(DEFAULT_FUNCTION_SOURCE)
+  const [functionTimeoutMs, setFunctionTimeoutMs] = useState('3000')
+  const [functionEnabled, setFunctionEnabled] = useState(true)
+  const [functionInvokeInputJson, setFunctionInvokeInputJson] = useState(`{
+  "name": "jangwon"
+}`)
   const [dataStatus, setDataStatus] = useState('data 작업 대기 중')
   const [dataTables, setDataTables] = useState<DataTableSummary[]>([])
   const [selectedTable, setSelectedTable] = useState('')
@@ -375,6 +469,52 @@ export default function ConsoleClient() {
     [refreshDataRows, selectedTable],
   )
 
+  const refreshFunctions = useCallback(
+    async (currentToken: string, preferredFunction?: string) => {
+      const response = await fetch('/api/functions', {
+        headers: authHeaders(currentToken),
+      })
+      const data = await readJsonOrThrow<ManagedFunctionsResponse>(response)
+      setFunctions(data.functions)
+
+      const requestedName = preferredFunction?.trim() || selectedFunctionName.trim()
+      const availableNames = new Set(data.functions.map((item) => item.name))
+      const nextName = requestedName && availableNames.has(requestedName) ? requestedName : data.functions[0]?.name || ''
+
+      if (!nextName) {
+        setSelectedFunctionName('')
+        setSelectedFunctionDetail(null)
+        setFunctionInvocations([])
+        setFunctionsStatus('등록된 function이 없어. admin으로 먼저 만들어줘.')
+        return
+      }
+
+      const [detailResponse, invocationsResponse] = await Promise.all([
+        fetch(`/api/functions/${encodeURIComponent(nextName)}`, {
+          headers: authHeaders(currentToken),
+        }),
+        fetch(`/api/functions/${encodeURIComponent(nextName)}/invocations`, {
+          headers: authHeaders(currentToken),
+        }),
+      ])
+
+      const detailData = await readJsonOrThrow<ManagedFunctionResponse>(detailResponse)
+      const invocationsData = await readJsonOrThrow<ManagedFunctionInvocationsResponse>(invocationsResponse)
+      setSelectedFunctionName(nextName)
+      setSelectedFunctionDetail(detailData.function)
+      setFunctionInvocations(invocationsData.invocations)
+      setFunctionName(detailData.function.name)
+      setFunctionDisplayName(detailData.function.display_name)
+      setFunctionEndpointSlug(detailData.function.endpoint_slug)
+      setFunctionRuntime(detailData.function.runtime as 'javascript' | 'typescript')
+      setFunctionSourceCode(detailData.function.source_code)
+      setFunctionTimeoutMs(String(detailData.function.timeout_ms))
+      setFunctionEnabled(detailData.function.enabled)
+      setFunctionsStatus(`function ${detailData.function.name} · endpoint /api/functions/endpoints/${detailData.function.endpoint_slug}`)
+    },
+    [selectedFunctionName],
+  )
+
   const refreshSession = useCallback(
     async (currentToken: string) => {
       const response = await fetch('/api/me', {
@@ -390,14 +530,19 @@ export default function ConsoleClient() {
         refreshVapidPublicKey(currentToken),
         refreshDataTables(currentToken),
         data.user.is_admin
-          ? refreshAdminUsers(currentToken)
+          ? Promise.all([refreshAdminUsers(currentToken), refreshFunctions(currentToken)]).then(() => undefined)
           : Promise.resolve().then(() => {
               setAdminUsers([])
               setAdminStatus('현재 사용자는 admin이 아니야.')
+              setFunctions([])
+              setSelectedFunctionName('')
+              setSelectedFunctionDetail(null)
+              setFunctionInvocations([])
+              setFunctionsStatus('현재 사용자는 function 관리 권한이 없어.')
             }),
       ])
     },
-    [refreshAdminUsers, refreshDataTables, refreshPushData, refreshStorageList, refreshVapidPublicKey],
+    [refreshAdminUsers, refreshDataTables, refreshFunctions, refreshPushData, refreshStorageList, refreshVapidPublicKey],
   )
 
   useEffect(() => {
@@ -872,6 +1017,135 @@ export default function ConsoleClient() {
     }
   }
 
+  async function createManagedFunction() {
+    if (!token) {
+      setFunctionsStatus('먼저 로그인해줘.')
+      return
+    }
+
+    setBusyAction('createManagedFunction')
+    try {
+      const response = await fetch('/api/functions', {
+        method: 'POST',
+        headers: {
+          ...authHeaders(token),
+          'content-type': 'application/json',
+        },
+        body: JSON.stringify({
+          name: functionName,
+          display_name: functionDisplayName,
+          endpoint_slug: functionEndpointSlug,
+          runtime: functionRuntime,
+          source_code: functionSourceCode,
+          timeout_ms: Number(functionTimeoutMs),
+          enabled: functionEnabled,
+        }),
+      })
+      const data = await readJsonOrThrow<ManagedFunctionResponse>(response)
+      setFunctionsStatus(`created ${data.function.name}`)
+      await refreshFunctions(token, data.function.name)
+    } catch (error) {
+      setFunctionsStatus(error instanceof Error ? error.message : 'function create failed')
+    } finally {
+      setBusyAction(null)
+    }
+  }
+
+  async function updateManagedFunction() {
+    if (!token) {
+      setFunctionsStatus('먼저 로그인해줘.')
+      return
+    }
+    if (!selectedFunctionName.trim()) {
+      setFunctionsStatus('먼저 수정할 function을 선택해줘.')
+      return
+    }
+
+    setBusyAction('updateManagedFunction')
+    try {
+      const response = await fetch(`/api/functions/${encodeURIComponent(selectedFunctionName)}`, {
+        method: 'PATCH',
+        headers: {
+          ...authHeaders(token),
+          'content-type': 'application/json',
+        },
+        body: JSON.stringify({
+          display_name: functionDisplayName,
+          endpoint_slug: functionEndpointSlug,
+          runtime: functionRuntime,
+          source_code: functionSourceCode,
+          timeout_ms: Number(functionTimeoutMs),
+          enabled: functionEnabled,
+        }),
+      })
+      const data = await readJsonOrThrow<ManagedFunctionResponse>(response)
+      setFunctionsStatus(`updated ${data.function.name}`)
+      await refreshFunctions(token, data.function.name)
+    } catch (error) {
+      setFunctionsStatus(error instanceof Error ? error.message : 'function update failed')
+    } finally {
+      setBusyAction(null)
+    }
+  }
+
+  async function deleteManagedFunction() {
+    if (!token) {
+      setFunctionsStatus('먼저 로그인해줘.')
+      return
+    }
+    if (!selectedFunctionName.trim()) {
+      setFunctionsStatus('먼저 삭제할 function을 선택해줘.')
+      return
+    }
+
+    setBusyAction('deleteManagedFunction')
+    try {
+      const response = await fetch(`/api/functions/${encodeURIComponent(selectedFunctionName)}`, {
+        method: 'DELETE',
+        headers: authHeaders(token),
+      })
+      const data = await readJsonOrThrow<MessageResponse>(response)
+      setFunctionsStatus(data.message)
+      await refreshFunctions(token, '')
+    } catch (error) {
+      setFunctionsStatus(error instanceof Error ? error.message : 'function delete failed')
+    } finally {
+      setBusyAction(null)
+    }
+  }
+
+  async function invokeManagedFunction() {
+    if (!token) {
+      setFunctionsStatus('먼저 로그인해줘.')
+      return
+    }
+    const endpoint = functionEndpointSlug.trim() || selectedFunctionDetail?.endpoint_slug || ''
+    if (!endpoint) {
+      setFunctionsStatus('먼저 호출할 endpoint를 준비해줘.')
+      return
+    }
+
+    setBusyAction('invokeManagedFunction')
+    try {
+      const input = JSON.parse(functionInvokeInputJson) as Record<string, unknown>
+      const response = await fetch(`/api/functions/endpoints/${encodeURIComponent(endpoint)}`, {
+        method: 'POST',
+        headers: {
+          ...authHeaders(token),
+          'content-type': 'application/json',
+        },
+        body: JSON.stringify({ input }),
+      })
+      const data = await readJsonOrThrow<InvokeManagedFunctionResponse>(response)
+      setFunctionsStatus(`invoke ${data.status} · ${data.invocation_id.slice(0, 8)} · ${data.duration_ms}ms`)
+      if (selectedFunctionName.trim()) await refreshFunctions(token, selectedFunctionName)
+    } catch (error) {
+      setFunctionsStatus(error instanceof Error ? error.message : 'function invoke failed')
+    } finally {
+      setBusyAction(null)
+    }
+  }
+
   async function registerBrowserWebPush() {
     if (!token) {
       setPushStatus('먼저 로그인해줘.')
@@ -1003,8 +1277,28 @@ export default function ConsoleClient() {
           />
         </section>
 
-        <main className="grid gap-6 xl:grid-cols-[1.05fr_1.2fr]">
-          <section className="grid gap-6">
+        <div className="grid gap-6 xl:grid-cols-[220px_minmax(0,1fr)]">
+          <aside className="xl:sticky xl:top-6 xl:self-start">
+            <nav className="rounded-3xl border border-neutral-800 bg-neutral-900/70 p-4 shadow-xl shadow-black/10">
+              <div className="mb-3 px-2">
+                <p className="text-xs uppercase tracking-[0.28em] text-neutral-500">Console menu</p>
+              </div>
+              <div className="grid gap-2">
+                {CONSOLE_SECTIONS.map((section) => (
+                  <a
+                    key={section.id}
+                    className="rounded-2xl border border-neutral-800 bg-neutral-950/80 px-4 py-3 text-sm text-neutral-200 transition hover:border-cyan-500 hover:bg-neutral-900"
+                    href={`#${section.id}`}
+                  >
+                    {section.label}
+                  </a>
+                ))}
+              </div>
+            </nav>
+          </aside>
+
+          <main className="grid gap-6 xl:grid-cols-[1.05fr_1.2fr]">
+          <section id="auth" className="grid gap-6 scroll-mt-6">
             <Panel title="Auth" subtitle="register / login / session flow">
               <div className="grid gap-4">
                 <Field label="Email">
@@ -1088,6 +1382,7 @@ export default function ConsoleClient() {
           </section>
 
           <section className="grid gap-6">
+            <div id="storage" className="scroll-mt-6">
             <Panel title="Storage" subtitle="user-scoped object operations">
               <div className="grid gap-4">
                 <Field label="Object key">
@@ -1162,8 +1457,10 @@ export default function ConsoleClient() {
                 </div>
               </Panel>
             </div>
+            </div>
 
-            <Panel title="Data API" subtitle="logical tables + owner-private rows">
+            <div id="database" className="scroll-mt-6">
+            <Panel title="Database" subtitle="logical tables + owner-private rows">
               <div className="grid gap-4">
                 <div className="flex flex-wrap gap-3">
                   <ActionButton
@@ -1393,8 +1690,10 @@ export default function ConsoleClient() {
                 ) : null}
               </div>
             </Panel>
+            </div>
 
-            <Panel title="Push" subtitle="ntfy + web push subscriptions">
+            <div id="push-notification" className="scroll-mt-6">
+            <Panel title="Push Notification" subtitle="ntfy + web push subscriptions">
               <div className="grid gap-4">
                 <Field label="VAPID public key (browser subscribe)">
                   <input
@@ -1570,8 +1869,119 @@ export default function ConsoleClient() {
                 </div>
               </div>
             </Panel>
+            </div>
+
+            <div id="function" className="scroll-mt-6">
+              <Panel title="Function" subtitle="Peanut Functions · sandboxed JS/TS endpoints">
+                <div className="grid gap-4">
+                  <div className="flex flex-wrap gap-3">
+                    <ActionButton busy={busyAction === 'createManagedFunction'} onClick={() => void createManagedFunction()} primary>
+                      Create function
+                    </ActionButton>
+                    <ActionButton busy={busyAction === 'updateManagedFunction'} onClick={() => void updateManagedFunction()}>
+                      Update function
+                    </ActionButton>
+                    <ActionButton busy={busyAction === 'deleteManagedFunction'} onClick={() => void deleteManagedFunction()}>
+                      Delete function
+                    </ActionButton>
+                    <ActionButton busy={busyAction === 'invokeManagedFunction'} onClick={() => void invokeManagedFunction()}>
+                      Invoke function
+                    </ActionButton>
+                    <ActionButton onClick={() => token && void refreshFunctions(token, selectedFunctionName)}>
+                      Refresh function
+                    </ActionButton>
+                  </div>
+                  <div className="grid gap-3 md:grid-cols-2">
+                    <Field label="Function name">
+                      <input className={inputClassName} onChange={(event) => setFunctionName(event.target.value)} value={functionName} />
+                    </Field>
+                    <Field label="Display name">
+                      <input className={inputClassName} onChange={(event) => setFunctionDisplayName(event.target.value)} value={functionDisplayName} />
+                    </Field>
+                    <Field label="Endpoint slug">
+                      <input className={inputClassName} onChange={(event) => setFunctionEndpointSlug(event.target.value)} value={functionEndpointSlug} />
+                    </Field>
+                    <Field label="Runtime / timeout">
+                      <div className="grid gap-2 sm:grid-cols-[1fr_120px]">
+                        <select className={inputClassName} onChange={(event) => setFunctionRuntime(event.target.value as 'javascript' | 'typescript')} value={functionRuntime}>
+                          <option value="typescript">typescript</option>
+                          <option value="javascript">javascript</option>
+                        </select>
+                        <input className={inputClassName} onChange={(event) => setFunctionTimeoutMs(event.target.value)} value={functionTimeoutMs} />
+                      </div>
+                    </Field>
+                  </div>
+                  <label className="inline-flex items-center gap-3 text-sm text-neutral-300">
+                    <input checked={functionEnabled} onChange={(event) => setFunctionEnabled(event.target.checked)} type="checkbox" />
+                    function enabled
+                  </label>
+                  <Field label="Function source">
+                    <textarea className="min-h-[260px] rounded-3xl border border-neutral-800 bg-neutral-950 px-4 py-3 text-sm text-neutral-100 outline-none transition focus:border-sky-500" onChange={(event) => setFunctionSourceCode(event.target.value)} value={functionSourceCode} />
+                  </Field>
+                  <Field label="Invoke input JSON">
+                    <textarea className="min-h-[120px] rounded-3xl border border-neutral-800 bg-neutral-950 px-4 py-3 text-sm text-neutral-100 outline-none transition focus:border-fuchsia-500" onChange={(event) => setFunctionInvokeInputJson(event.target.value)} value={functionInvokeInputJson} />
+                  </Field>
+                  <InfoBox label="Function status" value={functionsStatus} />
+                  <InfoBox label="External invoke endpoint" value={functionEndpointSlug.trim() ? `/api/functions/endpoints/${functionEndpointSlug.trim()}` : 'endpoint 없음'} />
+
+                  <div className="grid gap-3 md:grid-cols-2">
+                    <div className="grid gap-3">
+                      <h3 className="text-sm font-medium text-neutral-200">Registered functions</h3>
+                      {functions.length === 0 ? (
+                        <EmptyState text="아직 등록된 function이 없어." />
+                      ) : (
+                        functions.map((item) => (
+                          <button key={item.id} className={listButtonClassName} onClick={() => token && void refreshFunctions(token, item.name)} type="button">
+                            <div className="flex items-center justify-between gap-3">
+                              <span>{item.display_name}</span>
+                              <span className={item.enabled ? badgeClassNameSuccess : badgeClassNameDanger}>
+                                {item.enabled ? 'enabled' : 'disabled'}
+                              </span>
+                            </div>
+                            <p className="mt-1 text-xs text-neutral-500">{item.name} · {item.runtime} · /api/functions/endpoints/{item.endpoint_slug}</p>
+                          </button>
+                        ))
+                      )}
+                    </div>
+
+                    <div className="grid gap-3">
+                      <h3 className="text-sm font-medium text-neutral-200">Recent invocations</h3>
+                      {functionInvocations.length === 0 ? (
+                        <EmptyState text="이 function의 invocation 기록이 아직 없어." />
+                      ) : (
+                        functionInvocations.map((item) => (
+                          <div key={item.id} className="rounded-2xl border border-neutral-800 bg-neutral-950/80 p-4">
+                            <div className="flex items-center justify-between gap-3">
+                              <p className="font-medium text-neutral-100">{item.id}</p>
+                              <span className={item.status === 'succeeded' ? badgeClassNameSuccess : badgeClassNameDanger}>
+                                {item.status}
+                              </span>
+                            </div>
+                            <p className="mt-2 text-xs text-neutral-500">created: {item.created_at}{item.finished_at ? ` · finished: ${item.finished_at}` : ''}</p>
+                            {item.response_json ? <p className="mt-2 whitespace-pre-wrap break-all text-xs text-neutral-300">response: {item.response_json}</p> : null}
+                            {item.error ? <p className="mt-2 whitespace-pre-wrap break-all text-xs text-rose-200">error: {item.error}</p> : null}
+                          </div>
+                        ))
+                      )}
+                    </div>
+                  </div>
+                </div>
+              </Panel>
+            </div>
+
+            <div id="setting" className="scroll-mt-6">
+              <Panel title="Setting" subtitle="console defaults and operational notes">
+                <div className="grid gap-4 md:grid-cols-2">
+                  <InfoBox label="Session token" value={token ? `${token.slice(0, 24)}… (메모리 전용)` : '토큰 없음'} />
+                  <InfoBox label="Web Push VAPID" value={vapidPublicKey ? 'configured' : 'not configured'} />
+                  <InfoBox label="Selected function endpoint" value={selectedFunctionDetail ? `/api/functions/endpoints/${selectedFunctionDetail.endpoint_slug}` : 'function 없음'} />
+                  <InfoBox label="Health refresh" value="상단 health 새로고침 버튼으로 상태를 즉시 다시 읽을 수 있어." />
+                </div>
+              </Panel>
+            </div>
           </section>
         </main>
+        </div>
       </div>
     </div>
   )

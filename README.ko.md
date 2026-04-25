@@ -98,6 +98,24 @@ Peanut은 현재 실용적인 hybrid push 레이어를 제공한다.
 - 내장 콘솔에 polished service-worker 등록 흐름까지 들어간 상태는 아니다
 - Web Push 전송에는 VAPID 런타임 환경변수 설정이 필요하다
 
+### Peanut Functions (JS/TS sandbox MVP)
+Peanut은 이제 작은 백엔드 확장용 함수 런타임을 함께 제공한다.
+
+현재 가능한 것:
+- admin이 SQLite에 function 메타데이터와 소스 저장
+- JavaScript / TypeScript 함수 코드를 콘솔/API에서 관리
+- function별 endpoint slug와 timeout 설정
+- `POST /api/functions/endpoints/:endpoint_slug`로 인증된 호출
+- temp working directory + timeout 제한을 둔 별도 Node subprocess 실행
+- invocation 로그를 SQLite에 저장
+
+현재 제약:
+- 함수는 `default` 또는 named `handler`를 export해야 한다
+- 입력/출력은 JSON만 지원한다
+- arbitrary package 설치는 지원하지 않는다
+- 런타임 탈출 위험이 있는 일부 패턴은 소스 단계에서 차단한다
+- 완전한 Lambda clone이 아니라, 좁게 제한된 확장 레이어다
+
 ### Console
 내장 콘솔에서 가능한 것:
 - health 확인

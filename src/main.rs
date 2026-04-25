@@ -2,6 +2,7 @@ mod api;
 mod auth;
 mod console;
 mod db;
+mod functions;
 mod i18n;
 mod middleware;
 mod push;
@@ -83,6 +84,15 @@ async fn main() {
         .route("/push/messages", post(api::push::enqueue_message))
         .route("/push/queue", get(api::push::list_queue));
 
+    let function_routes = Router::new()
+        .route("/functions", get(api::functions::list_functions))
+        .route("/functions", post(api::functions::create_function))
+        .route("/functions/:name", get(api::functions::get_function))
+        .route("/functions/:name", patch(api::functions::update_function))
+        .route("/functions/:name", delete(api::functions::delete_function))
+        .route("/functions/:name/invocations", get(api::functions::list_function_invocations))
+        .route("/functions/endpoints/:endpoint_slug", post(api::functions::invoke_function));
+
     let data_routes = Router::new()
         .route("/data/tables", get(api::data::list_tables))
         .route("/data/tables", post(api::data::create_table))
@@ -101,6 +111,7 @@ async fn main() {
         .route("/admin/users/:user_id/activate", put(api::admin::activate_user))
         .merge(storage_routes)
         .merge(push_routes)
+        .merge(function_routes)
         .merge(data_routes)
         .layer(axum::middleware::from_fn_with_state(
             state.clone(),
