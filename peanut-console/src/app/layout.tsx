@@ -1,9 +1,9 @@
 import type { Metadata } from 'next'
-import { Geist, Geist_Mono } from 'next/font/google'
+import { Geist_Mono, Manrope } from 'next/font/google'
 import './globals.css'
 
-const geistSans = Geist({
-  variable: '--font-geist-sans',
+const manrope = Manrope({
+  variable: '--font-manrope',
   subsets: ['latin'],
 })
 
@@ -14,7 +14,7 @@ const geistMono = Geist_Mono({
 
 export const metadata: Metadata = {
   title: 'Peanut Console',
-  description: 'Single-binary backend platform console for health, auth, admin, and storage workflows.',
+  description: 'Premium admin console for Peanut — auth, storage, data API, and push operations in one self-hosted workspace.',
 }
 
 export default function RootLayout({
@@ -25,9 +25,9 @@ export default function RootLayout({
   return (
     <html
       lang="en"
-      className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}
+      className={`${manrope.variable} ${geistMono.variable} h-full antialiased`}
     >
-      <body className="min-h-full bg-neutral-950 text-neutral-100">{children}</body>
+      <body className="min-h-full overflow-x-hidden bg-[#f6f8fb] text-slate-900">{children}</body>
     </html>
   )
 }
