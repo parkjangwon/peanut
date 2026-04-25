@@ -88,6 +88,13 @@ Peanut은 현재 실용적인 hybrid push 레이어를 제공한다.
 - `POST /api/push/messages`
 - `GET /api/push/queue`
 
+런타임 설정:
+- `NTFY_BASE_URL`
+  - 기본값은 `https://ntfy.sh`
+  - `https://push.example.com` 같은 self-host ntfy 서버로 바꿔서 사용할 수 있다
+- `NTFY_AUTH_TOKEN`
+  - 인증이 필요한 ntfy 서버용 optional bearer token
+
 의미하는 것:
 - 유저는 `{ "topic": "alerts_main" }` 형태로 ntfy topic을 구독할 수 있다
 - 브라우저는 `{ "endpoint": "...", "keys": { "p256dh": "...", "auth": "..." } }` 형태로 Web Push subscription을 등록할 수 있다

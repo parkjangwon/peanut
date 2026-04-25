@@ -88,6 +88,13 @@ Endpoints:
 - `POST /api/push/messages`
 - `GET /api/push/queue`
 
+Runtime settings:
+- `NTFY_BASE_URL`
+  - defaults to `https://ntfy.sh`
+  - can point at a self-hosted ntfy server such as `https://push.example.com`
+- `NTFY_AUTH_TOKEN`
+  - optional bearer token for authenticated ntfy servers
+
 What this means:
 - users can subscribe an ntfy topic with `{ "topic": "alerts_main" }`
 - browsers can register a Web Push subscription with `{ "endpoint": "...", "keys": { "p256dh": "...", "auth": "..." } }`
