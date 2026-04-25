@@ -70,6 +70,13 @@ pub struct CreateTableRequest {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UpdateTableRequest {
+    pub display_name: Option<String>,
+    pub schema: Option<DataTableSchema>,
+    pub access_policy: Option<AccessPolicy>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CreateRowRequest {
     pub data: Value,
 }
@@ -103,6 +110,9 @@ pub struct ListRowsParams {
     pub order: Option<String>,
     pub title_contains: Option<String>,
     pub done: Option<bool>,
+    pub filter_field: Option<String>,
+    pub filter_op: Option<String>,
+    pub filter_value: Option<String>,
 }
 
 #[derive(Debug, Clone, FromRow)]
@@ -225,6 +235,102 @@ pub async fn get_table(
         Err(LoadTableError::NotFound) => json_error(StatusCode::NOT_FOUND, "data table not found"),
         Err(LoadTableError::Invalid(message)) => json_error(StatusCode::INTERNAL_SERVER_ERROR, message),
         Err(LoadTableError::QueryFailed) => json_error(StatusCode::INTERNAL_SERVER_ERROR, "failed to load data table"),
+    }
+}
+
+pub async fn update_table(
+    State(state): State<crate::AppState>,
+    Extension(claims): Extension<Claims>,
+    Path(table): Path<String>,
+    Json(payload): Json<UpdateTableRequest>,
+) -> Response {
+    if !claims.is_admin {
+        return json_error(StatusCode::FORBIDDEN, "admin access required");
+    }
+
+    let existing = match load_table(&state.pool, &table).await {
+        Ok(table) => table,
+        Err(LoadTableError::NotFound) => return json_error(StatusCode::NOT_FOUND, "data table not found"),
+        Err(LoadTableError::Invalid(message)) => return json_error(StatusCode::INTERNAL_SERVER_ERROR, message),
+        Err(LoadTableError::QueryFailed) => return json_error(StatusCode::INTERNAL_SERVER_ERROR, "failed to load data table"),
+    };
+
+    let display_name = payload
+        .display_name
+        .unwrap_or(existing.display_name.clone())
+        .trim()
+        .to_string();
+    if display_name.is_empty() {
+        return json_error(StatusCode::BAD_REQUEST, "display_name is required");
+    }
+
+    let schema = payload.schema.unwrap_or(existing.schema.clone());
+    if let Err(message) = validate_schema(&schema) {
+        return json_error(StatusCode::BAD_REQUEST, message);
+    }
+
+    let access_policy = payload.access_policy.unwrap_or(existing.access_policy.clone());
+    if let Err(message) = validate_access_policy(&access_policy) {
+        return json_error(StatusCode::BAD_REQUEST, message);
+    }
+
+    if let Err(message) = validate_rows_against_schema(&state.pool, &existing.id, &schema).await {
+        return json_error(StatusCode::BAD_REQUEST, message);
+    }
+
+    let schema_json = match serde_json::to_string(&schema) {
+        Ok(value) => value,
+        Err(_) => return json_error(StatusCode::INTERNAL_SERVER_ERROR, "failed to encode schema"),
+    };
+    let access_policy_json = match serde_json::to_string(&access_policy) {
+        Ok(value) => value,
+        Err(_) => return json_error(StatusCode::INTERNAL_SERVER_ERROR, "failed to encode access policy"),
+    };
+
+    match sqlx::query(
+        "UPDATE data_tables SET display_name = ?, schema_json = ?, access_policy_json = ? WHERE id = ?",
+    )
+    .bind(&display_name)
+    .bind(schema_json)
+    .bind(access_policy_json)
+    .bind(&existing.id)
+    .execute(&state.pool)
+    .await
+    {
+        Ok(_) => match load_table(&state.pool, &existing.name).await {
+            Ok(table) => (StatusCode::OK, Json(DataTableResponse { table: table.into() })).into_response(),
+            Err(LoadTableError::NotFound) => json_error(StatusCode::INTERNAL_SERVER_ERROR, "updated table could not be reloaded"),
+            Err(LoadTableError::Invalid(message)) => json_error(StatusCode::INTERNAL_SERVER_ERROR, message),
+            Err(LoadTableError::QueryFailed) => json_error(StatusCode::INTERNAL_SERVER_ERROR, "failed to reload updated data table"),
+        },
+        Err(_) => json_error(StatusCode::INTERNAL_SERVER_ERROR, "failed to update data table"),
+    }
+}
+
+pub async fn delete_table(
+    State(state): State<crate::AppState>,
+    Extension(claims): Extension<Claims>,
+    Path(table): Path<String>,
+) -> Response {
+    if !claims.is_admin {
+        return json_error(StatusCode::FORBIDDEN, "admin access required");
+    }
+
+    let existing = match load_table(&state.pool, &table).await {
+        Ok(table) => table,
+        Err(LoadTableError::NotFound) => return json_error(StatusCode::NOT_FOUND, "data table not found"),
+        Err(LoadTableError::Invalid(message)) => return json_error(StatusCode::INTERNAL_SERVER_ERROR, message),
+        Err(LoadTableError::QueryFailed) => return json_error(StatusCode::INTERNAL_SERVER_ERROR, "failed to load data table"),
+    };
+
+    match sqlx::query("DELETE FROM data_tables WHERE id = ?")
+        .bind(&existing.id)
+        .execute(&state.pool)
+        .await
+    {
+        Ok(result) if result.rows_affected() == 0 => json_error(StatusCode::NOT_FOUND, "data table not found"),
+        Ok(_) => json_message(StatusCode::OK, format!("deleted data table {}", existing.name)),
+        Err(_) => json_error(StatusCode::INTERNAL_SERVER_ERROR, "failed to delete data table"),
     }
 }
 
@@ -554,6 +660,26 @@ fn validate_list_rows_params(schema: &DataTableSchema, params: &ListRowsParams) 
         return Err("title_contains filter requires a declared title field".to_string());
     }
 
+    match (&params.filter_field, &params.filter_op, &params.filter_value) {
+        (None, None, None) => {}
+        (Some(field), Some(op), Some(_)) => {
+            let Some(spec) = schema.fields.get(field) else {
+                return Err("filter_field must be a declared field".to_string());
+            };
+            let valid = match spec.field_type.as_str() {
+                "string" => matches!(op.as_str(), "eq" | "ne" | "contains"),
+                "integer" | "number" | "datetime" => matches!(op.as_str(), "eq" | "ne" | "gt" | "gte" | "lt" | "lte"),
+                "boolean" => matches!(op.as_str(), "eq" | "ne"),
+                "json" => matches!(op.as_str(), "eq" | "ne"),
+                _ => false,
+            };
+            if !valid {
+                return Err("filter_op is not supported for the selected field".to_string());
+            }
+        }
+        _ => return Err("filter_field, filter_op, and filter_value must be provided together".to_string()),
+    }
+
     Ok(())
 }
 
@@ -572,6 +698,10 @@ fn apply_row_filters(rows: Vec<DataRowResponse>, params: &ListRowsParams) -> Vec
             Some(done) => row.data.get("done").and_then(Value::as_bool) == Some(done),
             None => true,
         })
+        .filter(|row| match (&params.filter_field, &params.filter_op, &params.filter_value) {
+            (Some(field), Some(op), Some(value)) => row_matches_generic_filter(row, field, op, value),
+            _ => true,
+        })
         .collect()
 }
 
@@ -579,6 +709,65 @@ fn sort_rows(rows: &mut [DataRowResponse], order_by: &str, descending: bool) {
     rows.sort_by(|left, right| compare_rows(left, right, order_by));
     if descending {
         rows.reverse();
+    }
+}
+
+fn row_matches_generic_filter(row: &DataRowResponse, field: &str, op: &str, value: &str) -> bool {
+    let Some(current) = row.data.get(field) else {
+        return false;
+    };
+
+    match current {
+        Value::String(text) => match op {
+            "eq" => text == value,
+            "ne" => text != value,
+            "contains" => text.contains(value),
+            _ => false,
+        },
+        Value::Bool(boolean) => match parse_bool_filter(value) {
+            Some(parsed) => match op {
+                "eq" => *boolean == parsed,
+                "ne" => *boolean != parsed,
+                _ => false,
+            },
+            None => false,
+        },
+        Value::Number(number) => match parse_number_filter(value) {
+            Some(parsed) => match number.as_f64() {
+                Some(current_number) => compare_numbers(current_number, parsed, op),
+                None => false,
+            },
+            None => false,
+        },
+        _ => match op {
+            "eq" => current.to_string() == value,
+            "ne" => current.to_string() != value,
+            _ => false,
+        },
+    }
+}
+
+fn parse_bool_filter(value: &str) -> Option<bool> {
+    match value {
+        "true" => Some(true),
+        "false" => Some(false),
+        _ => None,
+    }
+}
+
+fn parse_number_filter(value: &str) -> Option<f64> {
+    value.parse::<f64>().ok()
+}
+
+fn compare_numbers(current: f64, expected: f64, op: &str) -> bool {
+    match op {
+        "eq" => current == expected,
+        "ne" => current != expected,
+        "gt" => current > expected,
+        "gte" => current >= expected,
+        "lt" => current < expected,
+        "lte" => current <= expected,
+        _ => false,
     }
 }
 
@@ -605,6 +794,28 @@ fn compare_json_values(left: Option<&Value>, right: Option<&Value>) -> std::cmp:
         (Some(_), None) => Ordering::Greater,
         (None, None) => Ordering::Equal,
     }
+}
+
+async fn validate_rows_against_schema(
+    pool: &sqlx::SqlitePool,
+    table_id: &str,
+    schema: &DataTableSchema,
+) -> Result<(), String> {
+    let rows = sqlx::query_as::<_, DataRowRecord>(
+        "SELECT id, owner_user_id, data_json, created_at, updated_at FROM data_rows WHERE table_id = ?",
+    )
+    .bind(table_id)
+    .fetch_all(pool)
+    .await
+    .map_err(|_| "failed to validate existing rows against schema".to_string())?;
+
+    for row in rows {
+        let value = parse_json(&row.data_json)?;
+        normalize_row_data(schema, value, false)
+            .map_err(|message| format!("row {} is incompatible with the updated schema: {}", row.id, message))?;
+    }
+
+    Ok(())
 }
 
 fn normalize_row_data(schema: &DataTableSchema, data: Value, allow_partial: bool) -> Result<Value, String> {
@@ -971,6 +1182,85 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_admin_can_update_and_delete_table() {
+        let (state, _dir) = test_support::make_test_state().await;
+        let admin = register_user(state.clone(), "admin@example.com").await;
+
+        let create_response = create_table(
+            State(state.clone()),
+            Extension(claims(&admin.user.id, true)),
+            Json(todo_table_request()),
+        )
+        .await;
+        assert_eq!(create_response.status(), StatusCode::CREATED);
+
+        let update_response = update_table(
+            State(state.clone()),
+            Extension(claims(&admin.user.id, true)),
+            axum::extract::Path("todos".to_string()),
+            Json(UpdateTableRequest {
+                display_name: Some("My Todos".to_string()),
+                schema: Some(DataTableSchema {
+                    fields: BTreeMap::from([
+                        (
+                            "done".to_string(),
+                            DataFieldSpec {
+                                field_type: "boolean".to_string(),
+                                required: false,
+                                max_length: None,
+                                default: Some(Value::Bool(false)),
+                            },
+                        ),
+                        (
+                            "priority".to_string(),
+                            DataFieldSpec {
+                                field_type: "integer".to_string(),
+                                required: false,
+                                max_length: None,
+                                default: Some(json!(1)),
+                            },
+                        ),
+                        (
+                            "title".to_string(),
+                            DataFieldSpec {
+                                field_type: "string".to_string(),
+                                required: true,
+                                max_length: Some(200),
+                                default: None,
+                            },
+                        ),
+                    ]),
+                }),
+                access_policy: Some(AccessPolicy {
+                    mode: POLICY_AUTHENTICATED_SHARED_RW.to_string(),
+                }),
+            }),
+        )
+        .await;
+        assert_eq!(update_response.status(), StatusCode::OK);
+        let updated: DataTableResponse = test_support::response_json(update_response).await;
+        assert_eq!(updated.table.display_name, "My Todos");
+        assert_eq!(updated.table.access_policy.mode, POLICY_AUTHENTICATED_SHARED_RW);
+        assert!(updated.table.schema.fields.contains_key("priority"));
+
+        let delete_response = delete_table(
+            State(state.clone()),
+            Extension(claims(&admin.user.id, true)),
+            axum::extract::Path("todos".to_string()),
+        )
+        .await;
+        assert_eq!(delete_response.status(), StatusCode::OK);
+
+        let missing_response = get_table(
+            State(state),
+            Extension(claims(&admin.user.id, true)),
+            axum::extract::Path("todos".to_string()),
+        )
+        .await;
+        assert_eq!(missing_response.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
     async fn test_owner_private_rows_are_isolated_per_user() {
         let (state, _dir) = test_support::make_test_state().await;
         let admin = register_user(state.clone(), "admin@example.com").await;
@@ -1082,8 +1372,11 @@ mod tests {
                 limit: Some(1),
                 order_by: Some("title".to_string()),
                 order: Some("asc".to_string()),
-                title_contains: Some("buy".to_string()),
-                done: Some(false),
+                title_contains: None,
+                done: None,
+                filter_field: Some("title".to_string()),
+                filter_op: Some("contains".to_string()),
+                filter_value: Some("buy".to_string()),
             }),
         )
         .await;
@@ -1102,6 +1395,9 @@ mod tests {
                 order: Some("desc".to_string()),
                 title_contains: None,
                 done: None,
+                filter_field: None,
+                filter_op: None,
+                filter_value: None,
             }),
         )
         .await;

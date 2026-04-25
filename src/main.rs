@@ -87,6 +87,8 @@ async fn main() {
         .route("/data/tables", get(api::data::list_tables))
         .route("/data/tables", post(api::data::create_table))
         .route("/data/tables/:table", get(api::data::get_table))
+        .route("/data/tables/:table", patch(api::data::update_table))
+        .route("/data/tables/:table", delete(api::data::delete_table))
         .route("/data/tables/:table/rows", get(api::data::list_rows))
         .route("/data/tables/:table/rows", post(api::data::create_row))
         .route("/data/tables/:table/rows/:row_id", get(api::data::get_row))

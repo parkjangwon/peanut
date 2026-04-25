@@ -206,6 +206,9 @@ export default function ConsoleClient() {
   const [dataPolicyMode, setDataPolicyMode] = useState('owner_private')
   const [dataTitleFilter, setDataTitleFilter] = useState('')
   const [dataDoneFilter, setDataDoneFilter] = useState<'all' | 'true' | 'false'>('all')
+  const [dataFilterField, setDataFilterField] = useState('')
+  const [dataFilterOp, setDataFilterOp] = useState('contains')
+  const [dataFilterValue, setDataFilterValue] = useState('')
   const [dataOrderBy, setDataOrderBy] = useState('created_at')
   const [dataOrder, setDataOrder] = useState<'asc' | 'desc'>('desc')
   const [dataLimit, setDataLimit] = useState('10')
@@ -308,6 +311,11 @@ export default function ConsoleClient() {
     const trimmedTitle = dataTitleFilter.trim()
     if (trimmedTitle) query.set('title_contains', trimmedTitle)
     if (dataDoneFilter !== 'all') query.set('done', String(dataDoneFilter === 'true'))
+    if (dataFilterField.trim() && dataFilterValue.trim()) {
+      query.set('filter_field', dataFilterField.trim())
+      query.set('filter_op', dataFilterOp)
+      query.set('filter_value', dataFilterValue.trim())
+    }
     if (dataOrderBy) query.set('order_by', dataOrderBy)
     if (dataOrder) query.set('order', dataOrder)
     if (dataLimit.trim()) query.set('limit', dataLimit.trim())
@@ -325,9 +333,12 @@ export default function ConsoleClient() {
     const tableData = await readJsonOrThrow<DataTableResponse>(tableResponse)
     const rowsData = await readJsonOrThrow<DataRowsResponse>(rowsResponse)
     setSelectedTableDetail(tableData.table)
+    setDataDisplayName(tableData.table.display_name)
+    setDataPolicyMode(tableData.table.access_policy.mode)
+    setDataSchemaJson(JSON.stringify(tableData.table.schema, null, 2))
     setDataRows(rowsData.rows)
     setDataStatus(`table ${tableData.table.name} · rows ${rowsData.rows.length}건`)
-  }, [dataDoneFilter, dataLimit, dataOrder, dataOrderBy, dataTitleFilter])
+  }, [dataDoneFilter, dataFilterField, dataFilterOp, dataFilterValue, dataLimit, dataOrder, dataOrderBy, dataTitleFilter])
 
   const refreshDataTables = useCallback(
     async (currentToken: string, preferredTable?: string) => {
@@ -664,6 +675,76 @@ export default function ConsoleClient() {
       await refreshDataTables(token, data.table.name)
     } catch (error) {
       setDataStatus(error instanceof Error ? error.message : 'table create failed')
+    } finally {
+      setBusyAction(null)
+    }
+  }
+
+  async function updateSelectedTable() {
+    if (!token) {
+      setDataStatus('먼저 로그인해줘.')
+      return
+    }
+    const tableName = selectedTable.trim()
+    if (!tableName) {
+      setDataStatus('먼저 수정할 table을 선택해줘.')
+      return
+    }
+
+    setBusyAction('updateDataTable')
+    try {
+      const parsedSchema = JSON.parse(dataSchemaJson) as { fields: Record<string, unknown> }
+      const response = await fetch(`/api/data/tables/${encodeURIComponent(tableName)}`, {
+        method: 'PATCH',
+        headers: {
+          ...authHeaders(token),
+          'content-type': 'application/json',
+        },
+        body: JSON.stringify({
+          display_name: dataDisplayName,
+          schema: parsedSchema,
+          access_policy: { mode: dataPolicyMode },
+        }),
+      })
+      const data = await readJsonOrThrow<DataTableResponse>(response)
+      setDataStatus(`table ${data.table.name} 수정 완료`)
+      setSelectedTableDetail(data.table)
+      setDataSchemaJson(JSON.stringify(data.table.schema, null, 2))
+      setDataDisplayName(data.table.display_name)
+      setDataPolicyMode(data.table.access_policy.mode)
+      await refreshDataTables(token, data.table.name)
+    } catch (error) {
+      setDataStatus(error instanceof Error ? error.message : 'table update failed')
+    } finally {
+      setBusyAction(null)
+    }
+  }
+
+  async function deleteSelectedTable() {
+    if (!token) {
+      setDataStatus('먼저 로그인해줘.')
+      return
+    }
+    const tableName = selectedTable.trim()
+    if (!tableName) {
+      setDataStatus('먼저 삭제할 table을 선택해줘.')
+      return
+    }
+
+    setBusyAction('deleteDataTable')
+    try {
+      const response = await fetch(`/api/data/tables/${encodeURIComponent(tableName)}`, {
+        method: 'DELETE',
+        headers: authHeaders(token),
+      })
+      const data = await readJsonOrThrow<MessageResponse>(response)
+      setDataStatus(data.message)
+      setSelectedTable('')
+      setSelectedTableDetail(null)
+      setDataRows([])
+      await refreshDataTables(token, '')
+    } catch (error) {
+      setDataStatus(error instanceof Error ? error.message : 'table delete failed')
     } finally {
       setBusyAction(null)
     }
@@ -1066,6 +1147,12 @@ export default function ConsoleClient() {
                   >
                     Create table
                   </ActionButton>
+                  <ActionButton busy={busyAction === 'updateDataTable'} onClick={() => void updateSelectedTable()}>
+                    Update table
+                  </ActionButton>
+                  <ActionButton busy={busyAction === 'deleteDataTable'} onClick={() => void deleteSelectedTable()}>
+                    Delete table
+                  </ActionButton>
                   <ActionButton busy={busyAction === 'refreshData'} onClick={() => void refreshSelectedTable()}>
                     Refresh data
                   </ActionButton>
@@ -1131,6 +1218,35 @@ export default function ConsoleClient() {
                       <option value="true">true</option>
                     </select>
                   </Field>
+                  <Field label="Generic field">
+                    <input
+                      className={inputClassName}
+                      onChange={(event) => setDataFilterField(event.target.value)}
+                      value={dataFilterField}
+                    />
+                  </Field>
+                  <Field label="Generic op / value">
+                    <div className="grid gap-2 sm:grid-cols-[120px_1fr]">
+                      <select
+                        className={inputClassName}
+                        onChange={(event) => setDataFilterOp(event.target.value)}
+                        value={dataFilterOp}
+                      >
+                        <option value="contains">contains</option>
+                        <option value="eq">eq</option>
+                        <option value="ne">ne</option>
+                        <option value="gt">gt</option>
+                        <option value="gte">gte</option>
+                        <option value="lt">lt</option>
+                        <option value="lte">lte</option>
+                      </select>
+                      <input
+                        className={inputClassName}
+                        onChange={(event) => setDataFilterValue(event.target.value)}
+                        value={dataFilterValue}
+                      />
+                    </div>
+                  </Field>
                   <Field label="Order by">
                     <select
                       className={inputClassName}
@@ -1174,6 +1290,8 @@ export default function ConsoleClient() {
                           className={listButtonClassName}
                           onClick={() => {
                             setSelectedTable(table.name)
+                            setDataDisplayName(table.display_name)
+                            setDataPolicyMode(table.policy_mode)
                             if (token) void refreshDataTables(token, table.name)
                           }}
                           type="button"
@@ -1244,7 +1362,7 @@ export default function ConsoleClient() {
                 {selectedTableDetail ? (
                   <InfoBox
                     label="Selected table schema"
-                    value={JSON.stringify(selectedTableDetail.schema.fields, null, 2)}
+                    value={JSON.stringify(selectedTableDetail.schema, null, 2)}
                   />
                 ) : null}
               </div>
@@ -1266,6 +1384,9 @@ export default function ConsoleClient() {
                     primary
                   >
                     Register browser Web Push
+                  </ActionButton>
+                  <ActionButton onClick={() => token && void refreshVapidPublicKey(token)}>
+                    Refresh VAPID key
                   </ActionButton>
                 </div>
                 <Field label="Topic">
