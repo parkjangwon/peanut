@@ -240,7 +240,14 @@ impl UserWithPassword {
 
 #[cfg(test)]
 mod tests {
-    use axum::{extract::State, http::StatusCode, Extension, Json};
+    use axum::{
+        body::Body,
+        extract::State,
+        http::{Request, StatusCode},
+        routing::get,
+        Extension, Json, Router,
+    };
+    use tower::ServiceExt;
 
     use super::*;
     use crate::{auth::jwt::verify_jwt, test_support};
@@ -333,6 +340,69 @@ mod tests {
 
         assert_eq!(login_response.status(), StatusCode::FORBIDDEN);
         let body: crate::api::common::ApiError = test_support::response_json(login_response).await;
+        assert_eq!(body.error, "user is not active");
+    }
+
+    #[tokio::test]
+    async fn test_me_rejects_token_for_deactivated_user() {
+        let (state, _dir) = test_support::make_test_state().await;
+
+        let register_response = register(
+            State(state.clone()),
+            Json(RegisterRequest {
+                email: "admin@example.com".to_string(),
+                password: "secret123".to_string(),
+            }),
+        )
+        .await;
+        let register_body: RegisterResponse = test_support::response_json(register_response).await;
+
+        let login_response = login(
+            State(state.clone()),
+            Json(LoginRequest {
+                email: "admin@example.com".to_string(),
+                password: "secret123".to_string(),
+            }),
+        )
+        .await;
+        let login_body: LoginResponse = test_support::response_json(login_response).await;
+
+        let deactivate_response = crate::api::admin::deactivate_user(
+            State(state.clone()),
+            Extension(crate::auth::jwt::Claims {
+                sub: register_body.user.id.clone(),
+                exp: 9999999999,
+                is_admin: true,
+            }),
+            axum::extract::Path(register_body.user.id.clone()),
+        )
+        .await;
+        assert_eq!(deactivate_response.status(), StatusCode::OK);
+
+        let app = Router::new()
+            .route("/api/me", get(me))
+            .layer(axum::middleware::from_fn_with_state(
+                state.clone(),
+                crate::middleware::auth::auth_middleware,
+            ))
+            .with_state(state);
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/me")
+                    .header(
+                        "Authorization",
+                        format!("Bearer {}", login_body.access_token),
+                    )
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+        let body: crate::api::common::ApiError = test_support::response_json(response).await;
         assert_eq!(body.error, "user is not active");
     }
 

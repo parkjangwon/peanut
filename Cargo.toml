@@ -31,3 +31,4 @@ rust-i18n = "3.0"
 
 [dev-dependencies]
 tempfile = "3.10"
+tower = { version = "0.5", features = ["util"] }

@@ -38,7 +38,8 @@ async fn main() {
     tracing_subscriber::fmt::init();
     dotenvy::dotenv().ok();
 
-    let database_url = env::var("DATABASE_URL").unwrap_or_else(|_| DEFAULT_DATABASE_URL.to_string());
+    let database_url =
+        env::var("DATABASE_URL").unwrap_or_else(|_| DEFAULT_DATABASE_URL.to_string());
     let storage_dir = env::var("STORAGE_DIR").unwrap_or_else(|_| DEFAULT_STORAGE_DIR.to_string());
     let bind_addr = env::var("BIND_ADDR").unwrap_or_else(|_| DEFAULT_BIND_ADDR.to_string());
     let jwt_secret = env::var("JWT_SECRET").expect("JWT_SECRET must be set before starting Peanut");
@@ -80,7 +81,10 @@ async fn main() {
             "/push/subscriptions/:subscription_id",
             delete(api::push::delete_subscription),
         )
-        .route("/push/vapid-public-key", get(api::push::get_vapid_public_key))
+        .route(
+            "/push/vapid-public-key",
+            get(api::push::get_vapid_public_key),
+        )
         .route("/push/messages", post(api::push::enqueue_message))
         .route("/push/queue", get(api::push::list_queue));
 
@@ -90,9 +94,18 @@ async fn main() {
         .route("/functions/:name", get(api::functions::get_function))
         .route("/functions/:name", patch(api::functions::update_function))
         .route("/functions/:name", delete(api::functions::delete_function))
-        .route("/functions/:name/invocations", get(api::functions::list_function_invocations))
-        .route("/functions/:name/invocations/:invocation_id", get(api::functions::get_function_invocation))
-        .route("/functions/:name/invocations/:invocation_id/retry", post(api::functions::retry_function_invocation));
+        .route(
+            "/functions/:name/invocations",
+            get(api::functions::list_function_invocations),
+        )
+        .route(
+            "/functions/:name/invocations/:invocation_id",
+            get(api::functions::get_function_invocation),
+        )
+        .route(
+            "/functions/:name/invocations/:invocation_id/retry",
+            post(api::functions::retry_function_invocation),
+        );
 
     let data_routes = Router::new()
         .route("/data/tables", get(api::data::list_tables))
@@ -103,13 +116,26 @@ async fn main() {
         .route("/data/tables/:table/rows", get(api::data::list_rows))
         .route("/data/tables/:table/rows", post(api::data::create_row))
         .route("/data/tables/:table/rows/:row_id", get(api::data::get_row))
-        .route("/data/tables/:table/rows/:row_id", patch(api::data::update_row))
-        .route("/data/tables/:table/rows/:row_id", delete(api::data::delete_row));
+        .route(
+            "/data/tables/:table/rows/:row_id",
+            patch(api::data::update_row),
+        )
+        .route(
+            "/data/tables/:table/rows/:row_id",
+            delete(api::data::delete_row),
+        );
 
     let protected_routes = Router::new()
         .route("/me", get(api::auth::me))
         .route("/admin/users", get(api::admin::list_users))
-        .route("/admin/users/:user_id/activate", put(api::admin::activate_user))
+        .route(
+            "/admin/users/:user_id/activate",
+            put(api::admin::activate_user),
+        )
+        .route(
+            "/admin/users/:user_id/deactivate",
+            put(api::admin::deactivate_user),
+        )
         .merge(storage_routes)
         .merge(push_routes)
         .merge(function_routes)
@@ -123,7 +149,10 @@ async fn main() {
         .route("/api/health", get(api::health::health_check))
         .route("/api/register", post(api::auth::register))
         .route("/api/login", post(api::auth::login))
-        .route("/api/functions/endpoints/:endpoint_slug", post(api::functions::invoke_function))
+        .route(
+            "/api/functions/endpoints/:endpoint_slug",
+            post(api::functions::invoke_function),
+        )
         .nest("/api", protected_routes)
         .fallback(crate::console::static_handler)
         .with_state(state);

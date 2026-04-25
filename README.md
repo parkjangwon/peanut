@@ -34,10 +34,13 @@ Peanut is built around a few constraints:
   - returns a typed JSON login response with bearer token and expiry
 - `GET /api/me`
   - returns the authenticated user as JSON
+  - protected routes now re-check the current user record on every request, so deactivated users lose access immediately even if they still hold an unexpired token
 - `GET /api/admin/users`
   - admin-only user list
 - `PUT /api/admin/users/:user_id/activate`
   - admin-only activation flow
+- `PUT /api/admin/users/:user_id/deactivate`
+  - admin-only suspension flow that immediately blocks protected API access for that user
 
 ### Storage
 - user-scoped object storage

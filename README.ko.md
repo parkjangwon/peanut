@@ -34,10 +34,13 @@ Peanut은 아래 원칙을 지향한다.
   - bearer token과 만료 시각을 포함한 JSON 응답 반환
 - `GET /api/me`
   - 현재 인증된 유저 정보 JSON 반환
+  - 보호된 API는 요청마다 현재 유저 레코드를 다시 확인하므로, 비활성화된 유저는 만료되지 않은 토큰이 있어도 즉시 접근이 차단된다
 - `GET /api/admin/users`
   - admin 전용 유저 목록
 - `PUT /api/admin/users/:user_id/activate`
   - admin 전용 승인 처리
+- `PUT /api/admin/users/:user_id/deactivate`
+  - admin 전용 비활성화 처리이며 해당 유저의 보호 API 접근을 즉시 차단한다
 
 ### Storage
 - 유저 단위로 격리된 object storage

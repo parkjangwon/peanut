@@ -52,16 +52,41 @@ pub async fn activate_user(
         return json_error(StatusCode::FORBIDDEN, "admin access required");
     }
 
-    match sqlx::query("UPDATE users SET is_active = 1 WHERE id = ?")
-        .bind(&user_id)
-        .execute(&state.pool)
+    set_user_active(&state.pool, &user_id, true, "activate").await
+}
+
+pub async fn deactivate_user(
+    State(state): State<crate::AppState>,
+    Extension(claims): Extension<Claims>,
+    Path(user_id): Path<String>,
+) -> Response {
+    if !claims.is_admin {
+        return json_error(StatusCode::FORBIDDEN, "admin access required");
+    }
+
+    set_user_active(&state.pool, &user_id, false, "deactivate").await
+}
+
+async fn set_user_active(
+    pool: &sqlx::SqlitePool,
+    user_id: &str,
+    is_active: bool,
+    action: &str,
+) -> Response {
+    match sqlx::query("UPDATE users SET is_active = ? WHERE id = ?")
+        .bind(is_active)
+        .bind(user_id)
+        .execute(pool)
         .await
     {
         Ok(result) if result.rows_affected() == 0 => {
             json_error(StatusCode::NOT_FOUND, "user not found")
         }
-        Ok(_) => json_message(StatusCode::OK, format!("activated user {}", user_id)),
-        Err(_) => json_error(StatusCode::INTERNAL_SERVER_ERROR, "failed to activate user"),
+        Ok(_) => json_message(StatusCode::OK, format!("{}d user {}", action, user_id)),
+        Err(_) => json_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("failed to {} user", action),
+        ),
     }
 }
 
@@ -89,7 +114,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_admin_can_list_and_activate_users() {
+    async fn test_admin_can_list_activate_and_deactivate_users() {
         let (state, _dir) = test_support::make_test_state().await;
 
         let admin_register = auth::register(
@@ -110,7 +135,8 @@ mod tests {
             }),
         )
         .await;
-        let member_body: auth::RegisterResponse = test_support::response_json(member_register).await;
+        let member_body: auth::RegisterResponse =
+            test_support::response_json(member_register).await;
         assert!(!member_body.user.is_active);
 
         let list_response = list_users(
@@ -130,14 +156,23 @@ mod tests {
         .await;
         assert_eq!(activate_response.status(), StatusCode::OK);
 
-        let list_response = list_users(State(state), Extension(admin_claims(&admin_body.user.id))).await;
+        let deactivate_response = deactivate_user(
+            State(state.clone()),
+            Extension(admin_claims(&admin_body.user.id)),
+            axum::extract::Path(member_body.user.id.clone()),
+        )
+        .await;
+        assert_eq!(deactivate_response.status(), StatusCode::OK);
+
+        let list_response =
+            list_users(State(state), Extension(admin_claims(&admin_body.user.id))).await;
         let list_body: AdminUsersResponse = test_support::response_json(list_response).await;
-        let activated_member = list_body
+        let deactivated_member = list_body
             .users
             .into_iter()
             .find(|user| user.email == "member@example.com")
             .unwrap();
-        assert!(activated_member.is_active);
+        assert!(!deactivated_member.is_active);
     }
 
     #[tokio::test]

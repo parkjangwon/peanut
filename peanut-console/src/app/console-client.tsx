@@ -1440,7 +1440,6 @@ export default function ConsoleClient() {
                 </div>
               </div>
             </div>
-            </div>
 
             <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:hidden">
               <StatusTile label="Live user" value={session?.user.email ?? 'anonymous'} detail={session?.user.id ?? '세션 없음'} />
@@ -2070,24 +2069,26 @@ const inputClassName =
   'w-full rounded-[14px] border border-slate-200 bg-white px-3.5 py-2.5 text-sm text-slate-900 outline-none transition duration-200 placeholder:text-slate-400 focus:border-emerald-400/30 focus:bg-white focus:ring-2 focus:ring-emerald-400/12'
 
 const textareaClassName =
-  'min-h-[220px] w-full rounded-[16px] border border-slate-200 bg-white px-3.5 py-3 font-mono text-sm leading-6 text-slate-200 outline-none transition duration-200 placeholder:text-slate-400 focus:border-emerald-400/30 focus:ring-2 focus:ring-emerald-400/12'
+  'min-h-[220px] w-full rounded-[16px] border border-slate-200 bg-white px-3.5 py-3 font-mono text-sm leading-6 text-slate-700 outline-none transition duration-200 placeholder:text-slate-400 focus:border-emerald-400/30 focus:ring-2 focus:ring-emerald-400/12'
 
 const smallTextareaClassName =
-  'min-h-[132px] w-full rounded-[16px] border border-slate-200 bg-white px-3.5 py-3 font-mono text-sm leading-6 text-slate-200 outline-none transition duration-200 placeholder:text-slate-400 focus:border-cyan-400/30 focus:ring-2 focus:ring-cyan-400/12'
+  'min-h-[132px] w-full rounded-[16px] border border-slate-200 bg-white px-3.5 py-3 font-mono text-sm leading-6 text-slate-700 outline-none transition duration-200 placeholder:text-slate-400 focus:border-cyan-400/30 focus:ring-2 focus:ring-cyan-400/12'
 
+const listButtonClassName =
+  'cursor-pointer rounded-[14px] border border-slate-200 bg-white px-3.5 py-3 text-left text-sm text-slate-700 transition duration-200 hover:border-slate-300 hover:bg-slate-50'
 
 function toneClasses(tone: 'default' | 'success' | 'warning' | 'danger' | 'info') {
   switch (tone) {
     case 'success':
-      return 'border-emerald-400/18 bg-emerald-50 text-emerald-100'
+      return 'border-emerald-200 bg-emerald-50 text-emerald-700'
     case 'warning':
-      return 'border-amber-200 bg-amber-400/8 text-amber-100'
+      return 'border-amber-200 bg-amber-50 text-amber-700'
     case 'danger':
-      return 'border-rose-200 bg-rose-50 text-rose-100'
+      return 'border-rose-200 bg-rose-50 text-rose-700'
     case 'info':
-      return 'border-cyan-200 bg-cyan-50 text-cyan-100'
+      return 'border-cyan-200 bg-cyan-50 text-cyan-700'
     default:
-      return 'border-slate-200 bg-slate-50 text-slate-100'
+      return 'border-slate-200 bg-slate-50 text-slate-700'
   }
 }
 
@@ -2300,8 +2301,8 @@ function FailureCard({ title, detail, meta }: { title: string; detail: string; m
   return (
     <div className="rounded-[16px] border border-rose-200 bg-rose-50 p-4">
       <p className="font-medium text-slate-900">{title}</p>
-      <p className="mt-2 text-xs text-rose-100/70">{meta}</p>
-      <p className="mt-3 whitespace-pre-wrap break-words text-xs leading-6 text-rose-50">{detail}</p>
+      <p className="mt-2 text-xs text-rose-600">{meta}</p>
+      <p className="mt-3 whitespace-pre-wrap break-words text-xs leading-6 text-rose-700">{detail}</p>
     </div>
   )
 }
