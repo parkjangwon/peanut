@@ -1,5 +1,5 @@
 use axum::{
-    extract::{Json, State},
+    extract::{Json, Path, State},
     http::StatusCode,
     response::{IntoResponse, Response},
     Extension,
@@ -85,6 +85,20 @@ pub struct SessionResponse {
 pub struct ForgotPasswordResponse {
     pub message: String,
     pub reset_token: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
+pub struct AuthSessionSummary {
+    pub session_id: String,
+    pub created_at: String,
+    pub last_seen_at: String,
+    pub expires_at: String,
+    pub is_active: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SessionsResponse {
+    pub sessions: Vec<AuthSessionSummary>,
 }
 
 pub async fn register(
@@ -360,6 +374,47 @@ pub async fn me(
     }
 }
 
+pub async fn list_sessions(
+    State(state): State<crate::AppState>,
+    Extension(claims): Extension<crate::auth::jwt::Claims>,
+) -> Response {
+    match load_sessions_for_user(&state.pool, &claims.sub).await {
+        Ok(sessions) => (StatusCode::OK, Json(SessionsResponse { sessions })).into_response(),
+        Err(_) => json_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "failed to load auth sessions",
+        ),
+    }
+}
+
+pub async fn revoke_session(
+    State(state): State<crate::AppState>,
+    Extension(claims): Extension<crate::auth::jwt::Claims>,
+    Path(session_id): Path<String>,
+) -> Response {
+    match revoke_session_for_user(&state.pool, &claims.sub, &session_id).await {
+        Ok(0) => json_error(StatusCode::NOT_FOUND, "auth session not found"),
+        Ok(_) => json_message(StatusCode::OK, "auth session revoked"),
+        Err(_) => json_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "failed to revoke auth session",
+        ),
+    }
+}
+
+pub async fn revoke_all_sessions(
+    State(state): State<crate::AppState>,
+    Extension(claims): Extension<crate::auth::jwt::Claims>,
+) -> Response {
+    match revoke_all_refresh_tokens_for_user(&state.pool, &claims.sub).await {
+        Ok(_) => json_message(StatusCode::OK, "all auth sessions revoked"),
+        Err(_) => json_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "failed to revoke auth sessions",
+        ),
+    }
+}
+
 pub fn validate_credentials(email: &str, password: &str) -> Result<(), String> {
     validate_email(email)?;
     validate_password(password)?;
@@ -500,6 +555,44 @@ async fn revoke_all_refresh_tokens_for_user(
     .execute(pool)
     .await?;
     Ok(())
+}
+
+async fn revoke_session_for_user(
+    pool: &sqlx::SqlitePool,
+    user_id: &str,
+    session_id: &str,
+) -> Result<u64, sqlx::Error> {
+    let result = sqlx::query(
+        "UPDATE refresh_tokens SET revoked_at = CURRENT_TIMESTAMP WHERE user_id = ? AND session_id = ? AND revoked_at IS NULL",
+    )
+    .bind(user_id)
+    .bind(session_id)
+    .execute(pool)
+    .await?;
+    Ok(result.rows_affected())
+}
+
+async fn load_sessions_for_user(
+    pool: &sqlx::SqlitePool,
+    user_id: &str,
+) -> Result<Vec<AuthSessionSummary>, sqlx::Error> {
+    sqlx::query_as::<_, AuthSessionSummary>(
+        r#"
+        SELECT
+            session_id,
+            MIN(created_at) AS created_at,
+            MAX(created_at) AS last_seen_at,
+            MAX(expires_at) AS expires_at,
+            MAX(CASE WHEN revoked_at IS NULL AND expires_at > CURRENT_TIMESTAMP THEN 1 ELSE 0 END) AS is_active
+        FROM refresh_tokens
+        WHERE user_id = ?
+        GROUP BY session_id
+        ORDER BY MAX(created_at) DESC
+        "#,
+    )
+    .bind(user_id)
+    .fetch_all(pool)
+    .await
 }
 
 async fn issue_password_reset_token(
@@ -912,6 +1005,115 @@ mod tests {
         )
         .await;
         assert_eq!(login_response.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn test_list_and_revoke_sessions() {
+        let (state, _dir) = test_support::make_test_state().await;
+
+        let register_response = register(
+            State(state.clone()),
+            Json(RegisterRequest {
+                email: "admin@example.com".to_string(),
+                password: "secret123".to_string(),
+            }),
+        )
+        .await;
+        let register_body: RegisterResponse = test_support::response_json(register_response).await;
+
+        let first_login = login(
+            State(state.clone()),
+            Json(LoginRequest {
+                email: "admin@example.com".to_string(),
+                password: "secret123".to_string(),
+            }),
+        )
+        .await;
+        let first_login: LoginResponse = test_support::response_json(first_login).await;
+
+        let second_login = login(
+            State(state.clone()),
+            Json(LoginRequest {
+                email: "admin@example.com".to_string(),
+                password: "secret123".to_string(),
+            }),
+        )
+        .await;
+        let second_login: LoginResponse = test_support::response_json(second_login).await;
+
+        let claims = crate::auth::jwt::Claims {
+            sub: register_body.user.id.clone(),
+            exp: 9999999999,
+            is_admin: true,
+        };
+
+        let sessions_response =
+            list_sessions(State(state.clone()), Extension(claims.clone())).await;
+        assert_eq!(sessions_response.status(), StatusCode::OK);
+        let sessions_body: SessionsResponse = test_support::response_json(sessions_response).await;
+        assert_eq!(sessions_body.sessions.len(), 2);
+        assert!(sessions_body
+            .sessions
+            .iter()
+            .all(|session| session.is_active));
+
+        let revoke_response = revoke_session(
+            State(state.clone()),
+            Extension(claims.clone()),
+            axum::extract::Path(first_login.refresh_token.clone()),
+        )
+        .await;
+        assert_eq!(revoke_response.status(), StatusCode::OK);
+
+        let sessions_response =
+            list_sessions(State(state.clone()), Extension(claims.clone())).await;
+        let sessions_body: SessionsResponse = test_support::response_json(sessions_response).await;
+        assert_eq!(sessions_body.sessions.len(), 2);
+        assert_eq!(
+            sessions_body
+                .sessions
+                .iter()
+                .filter(|session| session.is_active)
+                .count(),
+            1
+        );
+
+        let revoked_refresh = refresh_session(
+            State(state.clone()),
+            Json(RefreshTokenRequest {
+                refresh_token: first_login.refresh_token,
+            }),
+        )
+        .await;
+        assert_eq!(revoked_refresh.status(), StatusCode::UNAUTHORIZED);
+
+        let active_refresh = refresh_session(
+            State(state.clone()),
+            Json(RefreshTokenRequest {
+                refresh_token: second_login.refresh_token,
+            }),
+        )
+        .await;
+        assert_eq!(active_refresh.status(), StatusCode::OK);
+
+        let revoke_all_response =
+            revoke_all_sessions(State(state.clone()), Extension(claims)).await;
+        assert_eq!(revoke_all_response.status(), StatusCode::OK);
+
+        let sessions_response = list_sessions(
+            State(state.clone()),
+            Extension(crate::auth::jwt::Claims {
+                sub: register_body.user.id,
+                exp: 9999999999,
+                is_admin: true,
+            }),
+        )
+        .await;
+        let sessions_body: SessionsResponse = test_support::response_json(sessions_response).await;
+        assert!(sessions_body
+            .sessions
+            .iter()
+            .all(|session| !session.is_active));
     }
 
     #[tokio::test]

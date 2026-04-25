@@ -128,6 +128,15 @@ async fn main() {
     let protected_routes = Router::new()
         .route("/me", get(api::auth::me))
         .route("/auth/change-password", post(api::auth::change_password))
+        .route("/auth/sessions", get(api::auth::list_sessions))
+        .route(
+            "/auth/sessions/revoke-all",
+            post(api::auth::revoke_all_sessions),
+        )
+        .route(
+            "/auth/sessions/:session_id",
+            delete(api::auth::revoke_session),
+        )
         .route("/admin/users", get(api::admin::list_users))
         .route(
             "/admin/users/:user_id/activate",

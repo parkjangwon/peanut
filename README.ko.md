@@ -45,6 +45,12 @@ Peanut은 아래 원칙을 지향한다.
 - `POST /api/auth/reset-password`
   - 1회용 reset token으로 새 비밀번호를 설정한다
   - 성공 시 해당 유저의 기존 refresh session을 모두 revoke한다
+- `GET /api/auth/sessions`
+  - 현재 사용자의 tracked auth session 목록을 반환한다
+- `DELETE /api/auth/sessions/:session_id`
+  - 특정 auth session 하나를 revoke한다
+- `POST /api/auth/sessions/revoke-all`
+  - 현재 사용자의 auth session 전체를 revoke한다
 - `GET /api/me`
   - 현재 인증된 유저 정보 JSON 반환
   - 보호된 API는 요청마다 현재 유저 레코드를 다시 확인하므로, 비활성화된 유저는 만료되지 않은 토큰이 있어도 즉시 접근이 차단된다
@@ -59,6 +65,7 @@ Peanut은 아래 원칙을 지향한다.
 - Peanut이 이제 signup, login, session refresh, logout, password change, password reset을 제공하는 auth backend로 동작할 수 있다
 - access token은 짧게 유지하고 refresh token으로 장기 세션을 이어갈 수 있다
 - refresh session은 서버에서 추적되며 logout, password change, password reset, admin deactivate 시 revoke된다
+- 앱은 auth session 목록 조회, 단일 세션 revoke, 전체 세션 revoke까지 Peanut API로 처리할 수 있다
 
 ### Storage
 - 유저 단위로 격리된 object storage

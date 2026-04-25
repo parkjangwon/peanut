@@ -45,6 +45,12 @@ Peanut is built around a few constraints:
 - `POST /api/auth/reset-password`
   - one-time reset token flow for setting a new password
   - revokes existing refresh sessions for that user after success
+- `GET /api/auth/sessions`
+  - returns the current user's tracked auth sessions
+- `DELETE /api/auth/sessions/:session_id`
+  - revokes a single tracked auth session
+- `POST /api/auth/sessions/revoke-all`
+  - revokes all tracked auth sessions for the current user
 - `GET /api/me`
   - returns the authenticated user as JSON
   - protected routes now re-check the current user record on every request, so deactivated users lose access immediately even if they still hold an unexpired token
