@@ -3,6 +3,8 @@
 import type { ReactNode } from 'react'
 import { useCallback, useEffect, useMemo, useState } from 'react'
 
+import { buildPushSummary, recentFailedItems, summarizeSubscriptionKinds } from './push-console-utils.mjs'
+
 type ApiError = {
   error: string
 }
@@ -284,7 +286,12 @@ export default function ConsoleClient() {
     const queueData = await readJsonOrThrow<PushQueueResponse>(queueResponse)
     setSubscriptions(subscriptionData.subscriptions)
     setQueueItems(queueData.items)
-    setPushStatus(`subscription ${subscriptionData.subscriptions.length}개 · queue ${queueData.items.length}건`)
+
+    const queueSummary = buildPushSummary(queueData.items)
+    const subscriptionSummary = summarizeSubscriptionKinds(subscriptionData.subscriptions)
+    setPushStatus(
+      `subscription ${subscriptionSummary.total}개 · ntfy ${subscriptionSummary.ntfy} · web push ${subscriptionSummary.webPush} · pending ${queueSummary.pending} · failed ${queueSummary.failed}`,
+    )
   }, [])
 
   const refreshVapidPublicKey = useCallback(async (currentToken: string) => {
@@ -417,6 +424,20 @@ export default function ConsoleClient() {
 
   const pendingUsers = useMemo(() => adminUsers.filter((user) => !user.is_active), [adminUsers])
   const activeUsers = useMemo(() => adminUsers.filter((user) => user.is_active), [adminUsers])
+  const pushQueueSummary = useMemo<{
+    total: number
+    pending: number
+    sent: number
+    failed: number
+    other: number
+  }>(() => buildPushSummary(queueItems), [queueItems])
+  const pushSubscriptionSummary = useMemo<{
+    total: number
+    ntfy: number
+    webPush: number
+    other: number
+  }>(() => summarizeSubscriptionKinds(subscriptions), [subscriptions])
+  const failedQueueItems = useMemo<PushQueueEntry[]>(() => recentFailedItems(queueItems, 3) as PushQueueEntry[], [queueItems])
 
   async function register() {
     setBusyAction('register')
@@ -1458,6 +1479,32 @@ export default function ConsoleClient() {
                 </ActionButton>
                 <InfoBox label="Push status" value={pushStatus} />
 
+                <div className="grid gap-3 md:grid-cols-4">
+                  <MiniMetric label="Subscriptions" value={String(pushSubscriptionSummary.total)} detail={`ntfy ${pushSubscriptionSummary.ntfy} · web ${pushSubscriptionSummary.webPush}`} />
+                  <MiniMetric label="Queue" value={String(pushQueueSummary.total)} detail={`pending ${pushQueueSummary.pending} · sent ${pushQueueSummary.sent}`} />
+                  <MiniMetric label="Failures" value={String(pushQueueSummary.failed)} detail={pushQueueSummary.failed > 0 ? '확인 필요' : '정상'} tone={pushQueueSummary.failed > 0 ? 'danger' : 'default'} />
+                  <MiniMetric label="Last refresh view" value={failedQueueItems[0]?.created_at ?? '-'} detail={failedQueueItems[0]?.last_error ?? '최근 실패 없음'} tone={failedQueueItems.length > 0 ? 'danger' : 'default'} />
+                </div>
+
+                {failedQueueItems.length > 0 ? (
+                  <div className="grid gap-3 rounded-3xl border border-rose-500/20 bg-rose-500/5 p-4">
+                    <div>
+                      <h3 className="text-sm font-medium text-rose-200">Recent failed deliveries</h3>
+                      <p className="mt-1 text-xs text-rose-100/70">최근 실패한 queue 항목 3개를 보여줘.</p>
+                    </div>
+                    {failedQueueItems.map((item) => (
+                      <div key={`failed-${item.id}`} className="rounded-2xl border border-rose-500/20 bg-black/20 p-3">
+                        <div className="flex items-center justify-between gap-3">
+                          <p className="font-medium text-rose-50">{item.title}</p>
+                          <span className="text-xs uppercase tracking-[0.2em] text-rose-300">{item.status}</span>
+                        </div>
+                        <p className="mt-2 text-xs text-rose-100/80">created: {item.created_at}</p>
+                        <p className="mt-2 whitespace-pre-wrap break-words text-xs text-rose-200">{item.last_error ?? 'unknown error'}</p>
+                      </div>
+                    ))}
+                  </div>
+                ) : null}
+
                 <div className="grid gap-3 md:grid-cols-2">
                   <div className="grid gap-3">
                     <h3 className="text-sm font-medium text-neutral-200">Subscriptions</h3>
@@ -1469,9 +1516,17 @@ export default function ConsoleClient() {
                           key={subscription.id}
                           className="flex items-center justify-between gap-3 rounded-2xl border border-neutral-800 bg-neutral-950/80 p-4"
                         >
-                          <div>
-                            <p className="font-medium text-neutral-100">{subscription.topic ?? subscription.endpoint ?? 'unknown subscription'}</p>
-                            <p className="text-xs text-neutral-500">{subscription.kind} · {subscription.created_at}</p>
+                          <div className="min-w-0">
+                            <div className="flex flex-wrap items-center gap-2">
+                              <p className="font-medium text-neutral-100">{subscription.topic ?? subscription.endpoint ?? 'unknown subscription'}</p>
+                              <span className={subscription.kind === 'web_push' ? badgeClassNameDanger : badgeClassNameInfo}>
+                                {subscription.kind}
+                              </span>
+                            </div>
+                            <p className="mt-1 break-all text-xs text-neutral-500">
+                              {subscription.endpoint && subscription.kind === 'web_push' ? subscription.endpoint : subscription.created_at}
+                            </p>
+                            <p className="mt-1 text-xs text-neutral-600">created: {subscription.created_at}</p>
                           </div>
                           <ActionButton
                             busy={busyAction === `deleteSubscription:${subscription.id}`}
@@ -1493,16 +1548,20 @@ export default function ConsoleClient() {
                         <div key={item.id} className="rounded-2xl border border-neutral-800 bg-neutral-950/80 p-4">
                           <div className="flex items-center justify-between gap-3">
                             <p className="font-medium text-neutral-100">{item.title}</p>
-                            <span className="text-xs uppercase tracking-[0.2em] text-fuchsia-300">
+                            <span className={item.status === 'failed' ? badgeClassNameDanger : item.status === 'sent' ? badgeClassNameSuccess : badgeClassNameInfo}>
                               {item.status}
                             </span>
                           </div>
                           <p className="mt-2 text-sm text-neutral-300">{item.body}</p>
                           <p className="mt-3 text-xs text-neutral-500">
                             retries: {item.retry_count} · created: {item.created_at}
+                            {item.processed_at ? ` · processed: ${item.processed_at}` : ''}
                           </p>
                           {item.last_error ? (
-                            <p className="mt-2 text-xs text-rose-300">last error: {item.last_error}</p>
+                            <div className="mt-2 rounded-2xl border border-rose-500/20 bg-rose-500/5 p-3">
+                              <p className="text-[11px] uppercase tracking-[0.2em] text-rose-300">last error</p>
+                              <p className="mt-2 whitespace-pre-wrap break-words text-xs text-rose-200">{item.last_error}</p>
+                            </div>
                           ) : null}
                         </div>
                       ))
@@ -1523,6 +1582,15 @@ const inputClassName =
 
 const listButtonClassName =
   'rounded-2xl border border-neutral-800 bg-neutral-950 px-4 py-3 text-left text-sm text-neutral-200 transition hover:border-cyan-500 hover:bg-neutral-900'
+
+const badgeClassNameInfo =
+  'rounded-full border border-sky-500/30 bg-sky-500/10 px-2 py-1 text-[10px] uppercase tracking-[0.2em] text-sky-200'
+
+const badgeClassNameSuccess =
+  'rounded-full border border-emerald-500/30 bg-emerald-500/10 px-2 py-1 text-[10px] uppercase tracking-[0.2em] text-emerald-200'
+
+const badgeClassNameDanger =
+  'rounded-full border border-rose-500/30 bg-rose-500/10 px-2 py-1 text-[10px] uppercase tracking-[0.2em] text-rose-200'
 
 function base64UrlToArrayBuffer(value: string): ArrayBuffer {
   const normalized = value.replace(/-/g, '+').replace(/_/g, '/')
@@ -1545,6 +1613,26 @@ function StatusCard({ title, value, detail, accent }: StatusCardProps) {
       <p className="text-xs uppercase tracking-[0.24em] text-neutral-500">{title}</p>
       <p className={`mt-3 text-2xl font-semibold ${accent}`}>{value}</p>
       <p className="mt-3 text-sm leading-6 text-neutral-400">{detail}</p>
+    </div>
+  )
+}
+
+type MiniMetricProps = {
+  label: string
+  value: string
+  detail: string
+  tone?: 'default' | 'danger'
+}
+
+function MiniMetric({ label, value, detail, tone = 'default' }: MiniMetricProps) {
+  return (
+    <div className={[
+      'rounded-2xl border p-4',
+      tone === 'danger' ? 'border-rose-500/20 bg-rose-500/5' : 'border-neutral-800 bg-neutral-950/70',
+    ].join(' ')}>
+      <p className="text-[11px] uppercase tracking-[0.24em] text-neutral-500">{label}</p>
+      <p className={['mt-2 text-xl font-semibold', tone === 'danger' ? 'text-rose-200' : 'text-neutral-100'].join(' ')}>{value}</p>
+      <p className={['mt-2 text-xs leading-5', tone === 'danger' ? 'text-rose-100/80' : 'text-neutral-500'].join(' ')}>{detail}</p>
     </div>
   )
 }
