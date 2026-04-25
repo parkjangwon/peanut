@@ -1,5 +1,6 @@
 use std::env;
 
+use base64::{engine::general_purpose::URL_SAFE_NO_PAD as BASE64_URL_SAFE_NO_PAD, Engine as _};
 use serde_json::json;
 use web_push::{
     ContentEncoding, IsahcWebPushClient, SubscriptionInfo, VapidSignatureBuilder, WebPushClient,
@@ -38,6 +39,12 @@ pub async fn send_web_push(
     let client = IsahcWebPushClient::new()?;
     client.send(message_builder.build()?).await?;
     Ok(())
+}
+
+pub fn public_vapid_key() -> Result<String, Box<dyn std::error::Error>> {
+    let config = load_web_push_config()?;
+    let builder = VapidSignatureBuilder::from_base64_no_sub(&config.vapid_private_key, URL_SAFE_NO_PAD)?;
+    Ok(BASE64_URL_SAFE_NO_PAD.encode(builder.get_public_key()))
 }
 
 fn load_web_push_config() -> Result<WebPushConfig, Box<dyn std::error::Error>> {
@@ -91,5 +98,20 @@ mod tests {
             env::set_var(WEB_PUSH_VAPID_SUBJECT, "mailto:ops@example.com");
         }
         assert!(load_web_push_config().is_ok());
+    }
+
+    #[test]
+    fn test_public_vapid_key_returns_base64url() {
+        unsafe {
+            env::set_var(
+                WEB_PUSH_VAPID_PRIVATE_KEY,
+                "IQ9Ur0ykXoHS9gzfYX0aBjy9lvdrjx_PFUXmie9YRcY",
+            );
+            env::set_var(WEB_PUSH_VAPID_SUBJECT, "mailto:ops@example.com");
+        }
+
+        let public_key = public_vapid_key().unwrap();
+        assert!(!public_key.is_empty());
+        assert!(public_key.chars().all(|ch| ch.is_ascii_alphanumeric() || ch == '-' || ch == '_'));
     }
 }

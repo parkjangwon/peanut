@@ -81,12 +81,14 @@ Endpoints:
 - `GET /api/push/subscriptions`
 - `POST /api/push/subscriptions`
 - `DELETE /api/push/subscriptions/:subscription_id`
+- `GET /api/push/vapid-public-key`
 - `POST /api/push/messages`
 - `GET /api/push/queue`
 
 What this means:
 - users can subscribe an ntfy topic with `{ "topic": "alerts_main" }`
 - browsers can register a Web Push subscription with `{ "endpoint": "...", "keys": { "p256dh": "...", "auth": "..." } }`
+- clients can fetch `GET /api/push/vapid-public-key` to bootstrap browser `PushManager.subscribe(...)`
 - push messages are queued in SQLite
 - a background worker delivers queue items to ntfy or Web Push subscriptions
 - queue status, retries, and last error are visible through the API and console

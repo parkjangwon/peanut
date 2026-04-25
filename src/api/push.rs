@@ -21,6 +21,11 @@ pub struct PushQueueResponse {
     pub items: Vec<PushQueueEntry>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct VapidPublicKeyResponse {
+    pub public_key: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
 pub struct PushSubscription {
     pub id: i64,
@@ -241,6 +246,13 @@ pub async fn list_queue(
     }
 }
 
+pub async fn get_vapid_public_key() -> Response {
+    match crate::push::webpush::public_vapid_key() {
+        Ok(public_key) => (StatusCode::OK, Json(VapidPublicKeyResponse { public_key })).into_response(),
+        Err(_) => json_error(StatusCode::NOT_FOUND, "web push public key is not configured"),
+    }
+}
+
 pub fn validate_topic(topic: &str) -> Result<(), String> {
     if topic.is_empty() {
         return Err("topic is required".to_string());
@@ -421,6 +433,34 @@ mod tests {
         )
         .await;
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn test_returns_vapid_public_key_when_configured() {
+        unsafe {
+            std::env::set_var(
+                "WEB_PUSH_VAPID_PRIVATE_KEY",
+                "IQ9Ur0ykXoHS9gzfYX0aBjy9lvdrjx_PFUXmie9YRcY",
+            );
+            std::env::set_var("WEB_PUSH_VAPID_SUBJECT", "mailto:ops@example.com");
+        }
+
+        let response = get_vapid_public_key().await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let body: VapidPublicKeyResponse = test_support::response_json(response).await;
+        assert!(!body.public_key.is_empty());
+        assert!(body.public_key.chars().all(|ch| ch.is_ascii_alphanumeric() || ch == '-' || ch == '_'));
+    }
+
+    #[tokio::test]
+    async fn test_returns_not_found_when_vapid_public_key_unavailable() {
+        unsafe {
+            std::env::remove_var("WEB_PUSH_VAPID_PRIVATE_KEY");
+            std::env::remove_var("WEB_PUSH_VAPID_SUBJECT");
+        }
+
+        let response = get_vapid_public_key().await;
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
     }
 
     #[test]

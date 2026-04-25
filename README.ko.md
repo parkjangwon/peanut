@@ -81,12 +81,14 @@ Peanut은 현재 실용적인 hybrid push 레이어를 제공한다.
 - `GET /api/push/subscriptions`
 - `POST /api/push/subscriptions`
 - `DELETE /api/push/subscriptions/:subscription_id`
+- `GET /api/push/vapid-public-key`
 - `POST /api/push/messages`
 - `GET /api/push/queue`
 
 의미하는 것:
 - 유저는 `{ "topic": "alerts_main" }` 형태로 ntfy topic을 구독할 수 있다
 - 브라우저는 `{ "endpoint": "...", "keys": { "p256dh": "...", "auth": "..." } }` 형태로 Web Push subscription을 등록할 수 있다
+- 클라이언트는 `GET /api/push/vapid-public-key`로 browser `PushManager.subscribe(...)`에 필요한 public key를 가져올 수 있다
 - push 메시지는 SQLite queue에 쌓인다
 - 백그라운드 워커가 ntfy 또는 Web Push subscription으로 전달한다
 - queue 상태, retry 횟수, 마지막 에러를 API/콘솔에서 볼 수 있다

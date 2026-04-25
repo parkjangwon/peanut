@@ -79,6 +79,7 @@ async fn main() {
             "/push/subscriptions/:subscription_id",
             delete(api::push::delete_subscription),
         )
+        .route("/push/vapid-public-key", get(api::push::get_vapid_public_key))
         .route("/push/messages", post(api::push::enqueue_message))
         .route("/push/queue", get(api::push::list_queue));
 

@@ -126,6 +126,10 @@ type PushQueueResponse = {
   items: PushQueueEntry[]
 }
 
+type VapidPublicKeyResponse = {
+  public_key: string
+}
+
 const RECENT_KEYS_KEY = 'peanut.console.recentKeys'
 
 function authHeaders(token: string | null): Record<string, string> {
@@ -191,6 +195,15 @@ export default function ConsoleClient() {
   const [selectedTable, setSelectedTable] = useState('todos')
   const [selectedTableDetail, setSelectedTableDetail] = useState<DataTableDetail | null>(null)
   const [dataRows, setDataRows] = useState<DataRow[]>([])
+  const [dataTableName, setDataTableName] = useState('todos')
+  const [dataDisplayName, setDataDisplayName] = useState('Todos')
+  const [dataSchemaJson, setDataSchemaJson] = useState(`{
+  "fields": {
+    "title": { "type": "string", "required": true, "max_length": 200 },
+    "done": { "type": "boolean", "required": false, "default": false }
+  }
+}`)
+  const [dataPolicyMode, setDataPolicyMode] = useState('owner_private')
   const [dataTitleFilter, setDataTitleFilter] = useState('')
   const [dataDoneFilter, setDataDoneFilter] = useState<'all' | 'true' | 'false'>('all')
   const [dataOrderBy, setDataOrderBy] = useState('created_at')
@@ -271,6 +284,18 @@ export default function ConsoleClient() {
     setPushStatus(`subscription ${subscriptionData.subscriptions.length}개 · queue ${queueData.items.length}건`)
   }, [])
 
+  const refreshVapidPublicKey = useCallback(async (currentToken: string) => {
+    const response = await fetch('/api/push/vapid-public-key', {
+      headers: authHeaders(currentToken),
+    })
+    if (!response.ok) {
+      setVapidPublicKey('')
+      return
+    }
+    const data = await readJsonOrThrow<VapidPublicKeyResponse>(response)
+    setVapidPublicKey(data.public_key)
+  }, [])
+
   const refreshDataRows = useCallback(async (currentToken: string, tableName: string) => {
     const normalizedTable = tableName.trim()
     if (!normalizedTable) {
@@ -339,6 +364,7 @@ export default function ConsoleClient() {
       await Promise.all([
         refreshStorageList(currentToken),
         refreshPushData(currentToken),
+        refreshVapidPublicKey(currentToken),
         refreshDataTables(currentToken),
         data.user.is_admin
           ? refreshAdminUsers(currentToken)
@@ -348,7 +374,7 @@ export default function ConsoleClient() {
             }),
       ])
     },
-    [refreshAdminUsers, refreshDataTables, refreshPushData, refreshStorageList],
+    [refreshAdminUsers, refreshDataTables, refreshPushData, refreshStorageList, refreshVapidPublicKey],
   )
 
   useEffect(() => {
@@ -611,13 +637,14 @@ export default function ConsoleClient() {
     }
   }
 
-  async function createSampleTable() {
+  async function createDataTable() {
     if (!token) {
       setDataStatus('먼저 로그인해줘.')
       return
     }
     setBusyAction('createDataTable')
     try {
+      const parsedSchema = JSON.parse(dataSchemaJson) as { fields: Record<string, unknown> }
       const response = await fetch('/api/data/tables', {
         method: 'POST',
         headers: {
@@ -625,15 +652,10 @@ export default function ConsoleClient() {
           'content-type': 'application/json',
         },
         body: JSON.stringify({
-          name: 'todos',
-          display_name: 'Todos',
-          schema: {
-            fields: {
-              title: { type: 'string', required: true, max_length: 200 },
-              done: { type: 'boolean', required: false, default: false },
-            },
-          },
-          access_policy: { mode: 'owner_private' },
+          name: dataTableName,
+          display_name: dataDisplayName,
+          schema: parsedSchema,
+          access_policy: { mode: dataPolicyMode },
         }),
       })
       const data = await readJsonOrThrow<DataTableResponse>(response)
@@ -1039,15 +1061,49 @@ export default function ConsoleClient() {
                 <div className="flex flex-wrap gap-3">
                   <ActionButton
                     busy={busyAction === 'createDataTable'}
-                    onClick={() => void createSampleTable()}
+                    onClick={() => void createDataTable()}
                     primary
                   >
-                    Create sample table
+                    Create table
                   </ActionButton>
                   <ActionButton busy={busyAction === 'refreshData'} onClick={() => void refreshSelectedTable()}>
                     Refresh data
                   </ActionButton>
                 </div>
+                <div className="grid gap-3 md:grid-cols-2">
+                  <Field label="Table name">
+                    <input
+                      className={inputClassName}
+                      onChange={(event) => setDataTableName(event.target.value)}
+                      value={dataTableName}
+                    />
+                  </Field>
+                  <Field label="Display name">
+                    <input
+                      className={inputClassName}
+                      onChange={(event) => setDataDisplayName(event.target.value)}
+                      value={dataDisplayName}
+                    />
+                  </Field>
+                </div>
+                <Field label="Schema JSON">
+                  <textarea
+                    className="min-h-[180px] rounded-3xl border border-neutral-800 bg-neutral-950 px-4 py-3 text-sm text-neutral-100 outline-none transition focus:border-emerald-500"
+                    onChange={(event) => setDataSchemaJson(event.target.value)}
+                    value={dataSchemaJson}
+                  />
+                </Field>
+                <Field label="Access policy mode">
+                  <select
+                    className={inputClassName}
+                    onChange={(event) => setDataPolicyMode(event.target.value)}
+                    value={dataPolicyMode}
+                  >
+                    <option value="owner_private">owner_private</option>
+                    <option value="admin_only">admin_only</option>
+                    <option value="authenticated_shared_rw">authenticated_shared_rw</option>
+                  </select>
+                </Field>
                 <Field label="Selected table">
                   <input
                     className={inputClassName}
