@@ -139,6 +139,8 @@ type ManagedFunctionSummary = {
   endpoint_slug: string
   runtime: string
   invoke_policy: string
+  rate_limit_per_minute: number
+  api_key_present: boolean
   timeout_ms: number
   enabled: boolean
   updated_at: string
@@ -157,6 +159,9 @@ type ManagedFunctionDetail = {
   source_code: string
   invoke_policy: string
   env_json: string
+  allowed_origins_json: string
+  rate_limit_per_minute: number
+  api_key_present: boolean
   timeout_ms: number
   enabled: boolean
   created_by: string
@@ -183,6 +188,10 @@ type ManagedFunctionInvocation = {
 
 type ManagedFunctionInvocationsResponse = {
   invocations: ManagedFunctionInvocation[]
+}
+
+type ManagedFunctionInvocationResponse = {
+  invocation: ManagedFunctionInvocation
 }
 
 type InvokeManagedFunctionResponse = {
@@ -279,15 +288,20 @@ export default function ConsoleClient() {
   const [selectedFunctionName, setSelectedFunctionName] = useState('')
   const [selectedFunctionDetail, setSelectedFunctionDetail] = useState<ManagedFunctionDetail | null>(null)
   const [functionInvocations, setFunctionInvocations] = useState<ManagedFunctionInvocation[]>([])
+  const [selectedInvocationDetail, setSelectedInvocationDetail] = useState<ManagedFunctionInvocation | null>(null)
+  const [showFunctionSecrets, setShowFunctionSecrets] = useState(false)
   const [functionName, setFunctionName] = useState('hello_fn')
   const [functionDisplayName, setFunctionDisplayName] = useState('Hello function')
   const [functionEndpointSlug, setFunctionEndpointSlug] = useState('hello-fn')
   const [functionRuntime, setFunctionRuntime] = useState<'javascript' | 'typescript'>('typescript')
   const [functionSourceCode, setFunctionSourceCode] = useState(DEFAULT_FUNCTION_SOURCE)
-  const [functionInvokePolicy, setFunctionInvokePolicy] = useState<'public' | 'authenticated' | 'admin_only'>('authenticated')
+  const [functionInvokePolicy, setFunctionInvokePolicy] = useState<'public' | 'authenticated' | 'admin_only' | 'api_key'>('authenticated')
   const [functionEnvJson, setFunctionEnvJson] = useState(`{
   "APP_SECRET": "peanut-secret"
 }`)
+  const [functionAllowedOriginsJson, setFunctionAllowedOriginsJson] = useState(`[]`)
+  const [functionApiKey, setFunctionApiKey] = useState('')
+  const [functionRateLimitPerMinute, setFunctionRateLimitPerMinute] = useState('60')
   const [functionTimeoutMs, setFunctionTimeoutMs] = useState('3000')
   const [functionEnabled, setFunctionEnabled] = useState(true)
   const [functionInvokeInputJson, setFunctionInvokeInputJson] = useState(`{
@@ -492,6 +506,7 @@ export default function ConsoleClient() {
         setSelectedFunctionName('')
         setSelectedFunctionDetail(null)
         setFunctionInvocations([])
+        setSelectedInvocationDetail(null)
         setFunctionsStatus('등록된 function이 없어. admin으로 먼저 만들어줘.')
         return
       }
@@ -510,13 +525,17 @@ export default function ConsoleClient() {
       setSelectedFunctionName(nextName)
       setSelectedFunctionDetail(detailData.function)
       setFunctionInvocations(invocationsData.invocations)
+      setSelectedInvocationDetail(invocationsData.invocations[0] ?? null)
       setFunctionName(detailData.function.name)
       setFunctionDisplayName(detailData.function.display_name)
       setFunctionEndpointSlug(detailData.function.endpoint_slug)
       setFunctionRuntime(detailData.function.runtime as 'javascript' | 'typescript')
       setFunctionSourceCode(detailData.function.source_code)
-      setFunctionInvokePolicy(detailData.function.invoke_policy as 'public' | 'authenticated' | 'admin_only')
+      setFunctionInvokePolicy(detailData.function.invoke_policy as 'public' | 'authenticated' | 'admin_only' | 'api_key')
       setFunctionEnvJson(detailData.function.env_json)
+      setFunctionAllowedOriginsJson(detailData.function.allowed_origins_json)
+      setFunctionRateLimitPerMinute(String(detailData.function.rate_limit_per_minute))
+      setFunctionApiKey('')
       setFunctionTimeoutMs(String(detailData.function.timeout_ms))
       setFunctionEnabled(detailData.function.enabled)
       setFunctionsStatus(`function ${detailData.function.name} · endpoint /api/functions/endpoints/${detailData.function.endpoint_slug}`)
@@ -547,6 +566,7 @@ export default function ConsoleClient() {
               setSelectedFunctionName('')
               setSelectedFunctionDetail(null)
               setFunctionInvocations([])
+              setSelectedInvocationDetail(null)
               setFunctionsStatus('현재 사용자는 function 관리 권한이 없어.')
             }),
       ])
@@ -1048,6 +1068,9 @@ export default function ConsoleClient() {
           source_code: functionSourceCode,
           invoke_policy: functionInvokePolicy,
           env: JSON.parse(functionEnvJson),
+          api_key: functionApiKey || undefined,
+          allowed_origins: JSON.parse(functionAllowedOriginsJson),
+          rate_limit_per_minute: Number(functionRateLimitPerMinute),
           timeout_ms: Number(functionTimeoutMs),
           enabled: functionEnabled,
         }),
@@ -1087,6 +1110,9 @@ export default function ConsoleClient() {
           source_code: functionSourceCode,
           invoke_policy: functionInvokePolicy,
           env: JSON.parse(functionEnvJson),
+          api_key: functionApiKey || undefined,
+          allowed_origins: JSON.parse(functionAllowedOriginsJson),
+          rate_limit_per_minute: Number(functionRateLimitPerMinute),
           timeout_ms: Number(functionTimeoutMs),
           enabled: functionEnabled,
         }),
@@ -1147,13 +1173,50 @@ export default function ConsoleClient() {
           ...authHeaders(token),
           'content-type': 'application/json',
         },
-        body: JSON.stringify({ input }),
+        body: JSON.stringify({ input, api_key: functionApiKey || undefined }),
       })
       const data = await readJsonOrThrow<InvokeManagedFunctionResponse>(response)
       setFunctionsStatus(`invoke ${data.status} · ${data.invocation_id.slice(0, 8)} · ${data.duration_ms}ms`)
       if (selectedFunctionName.trim()) await refreshFunctions(token, selectedFunctionName)
     } catch (error) {
       setFunctionsStatus(error instanceof Error ? error.message : 'function invoke failed')
+    } finally {
+      setBusyAction(null)
+    }
+  }
+
+
+  async function loadInvocationDetail(invocationId: string) {
+    if (!token || !selectedFunctionName.trim()) {
+      return
+    }
+    try {
+      const response = await fetch(`/api/functions/${encodeURIComponent(selectedFunctionName)}/invocations/${encodeURIComponent(invocationId)}`, {
+        headers: authHeaders(token),
+      })
+      const data = await readJsonOrThrow<ManagedFunctionInvocationResponse>(response)
+      setSelectedInvocationDetail(data.invocation)
+    } catch (error) {
+      setFunctionsStatus(error instanceof Error ? error.message : 'function invocation load failed')
+    }
+  }
+
+  async function retrySelectedInvocation() {
+    if (!token || !selectedFunctionName.trim() || !selectedInvocationDetail) {
+      setFunctionsStatus('먼저 재실행할 invocation을 선택해줘.')
+      return
+    }
+    setBusyAction('retrySelectedInvocation')
+    try {
+      const response = await fetch(`/api/functions/${encodeURIComponent(selectedFunctionName)}/invocations/${encodeURIComponent(selectedInvocationDetail.id)}/retry`, {
+        method: 'POST',
+        headers: authHeaders(token),
+      })
+      const data = await readJsonOrThrow<InvokeManagedFunctionResponse>(response)
+      setFunctionsStatus(`retry ${data.status} · ${data.invocation_id.slice(0, 8)} · ${data.duration_ms}ms`)
+      await refreshFunctions(token, selectedFunctionName)
+    } catch (error) {
+      setFunctionsStatus(error instanceof Error ? error.message : 'function retry failed')
     } finally {
       setBusyAction(null)
     }
@@ -1924,11 +1987,18 @@ export default function ConsoleClient() {
                       </div>
                     </Field>
                     <Field label="Invoke policy">
-                      <select className={inputClassName} onChange={(event) => setFunctionInvokePolicy(event.target.value as 'public' | 'authenticated' | 'admin_only')} value={functionInvokePolicy}>
+                      <select className={inputClassName} onChange={(event) => setFunctionInvokePolicy(event.target.value as 'public' | 'authenticated' | 'admin_only' | 'api_key')} value={functionInvokePolicy}>
                         <option value="authenticated">authenticated</option>
                         <option value="admin_only">admin_only</option>
+                        <option value="api_key">api_key</option>
                         <option value="public">public</option>
                       </select>
+                    </Field>
+                    <Field label="Rate limit / minute">
+                      <input className={inputClassName} onChange={(event) => setFunctionRateLimitPerMinute(event.target.value)} value={functionRateLimitPerMinute} />
+                    </Field>
+                    <Field label="API key (optional / rotate)">
+                      <input className={inputClassName} onChange={(event) => setFunctionApiKey(event.target.value)} type="password" value={functionApiKey} />
                     </Field>
                   </div>
                   <label className="inline-flex items-center gap-3 text-sm text-neutral-300">
@@ -1938,14 +2008,25 @@ export default function ConsoleClient() {
                   <Field label="Function source">
                     <textarea className="min-h-[260px] rounded-3xl border border-neutral-800 bg-neutral-950 px-4 py-3 text-sm text-neutral-100 outline-none transition focus:border-sky-500" onChange={(event) => setFunctionSourceCode(event.target.value)} value={functionSourceCode} />
                   </Field>
-                  <Field label="Function env / secrets JSON">
-                    <textarea className="min-h-[120px] rounded-3xl border border-neutral-800 bg-neutral-950 px-4 py-3 text-sm text-neutral-100 outline-none transition focus:border-amber-500" onChange={(event) => setFunctionEnvJson(event.target.value)} value={functionEnvJson} />
+                  <Field label="Allowed origins JSON">
+                    <textarea className="min-h-[80px] rounded-3xl border border-neutral-800 bg-neutral-950 px-4 py-3 text-sm text-neutral-100 outline-none transition focus:border-cyan-500" onChange={(event) => setFunctionAllowedOriginsJson(event.target.value)} value={functionAllowedOriginsJson} />
                   </Field>
+                  <div className="grid gap-3">
+                    <div className="flex items-center justify-between gap-3">
+                      <p className="text-sm text-neutral-300">Function env / secrets JSON</p>
+                      <button className="text-xs text-neutral-400 underline underline-offset-4" onClick={() => setShowFunctionSecrets((value) => !value)} type="button">
+                        {showFunctionSecrets ? 'Hide secrets' : 'Show secrets'}
+                      </button>
+                    </div>
+                    <textarea className="min-h-[120px] rounded-3xl border border-neutral-800 bg-neutral-950 px-4 py-3 text-sm text-neutral-100 outline-none transition focus:border-amber-500" onChange={(event) => setFunctionEnvJson(event.target.value)} value={functionEnvJson} />
+                    <InfoBox label="Masked secrets preview" value={showFunctionSecrets ? functionEnvJson : maskSecretJson(functionEnvJson)} />
+                  </div>
                   <Field label="Invoke input JSON">
                     <textarea className="min-h-[120px] rounded-3xl border border-neutral-800 bg-neutral-950 px-4 py-3 text-sm text-neutral-100 outline-none transition focus:border-fuchsia-500" onChange={(event) => setFunctionInvokeInputJson(event.target.value)} value={functionInvokeInputJson} />
                   </Field>
                   <InfoBox label="Function status" value={functionsStatus} />
                   <InfoBox label="External invoke endpoint" value={functionEndpointSlug.trim() ? `/api/functions/endpoints/${functionEndpointSlug.trim()}` : 'endpoint 없음'} />
+                  <InfoBox label="API key status" value={selectedFunctionDetail?.api_key_present ? 'configured' : functionApiKey ? 'new key entered (save needed)' : 'not configured'} />
 
                   <div className="grid gap-3 md:grid-cols-2">
                     <div className="grid gap-3">
@@ -1961,19 +2042,24 @@ export default function ConsoleClient() {
                                 {item.enabled ? 'enabled' : 'disabled'}
                               </span>
                             </div>
-                            <p className="mt-1 text-xs text-neutral-500">{item.name} · {item.runtime} · {item.invoke_policy} · /api/functions/endpoints/{item.endpoint_slug}</p>
+                            <p className="mt-1 text-xs text-neutral-500">{item.name} · {item.runtime} · {item.invoke_policy} · rpm {item.rate_limit_per_minute} · {item.api_key_present ? 'api-key' : 'no-key'} · /api/functions/endpoints/{item.endpoint_slug}</p>
                           </button>
                         ))
                       )}
                     </div>
 
                     <div className="grid gap-3">
-                      <h3 className="text-sm font-medium text-neutral-200">Recent invocations</h3>
+                      <div className="flex items-center justify-between gap-3">
+                        <h3 className="text-sm font-medium text-neutral-200">Recent invocations</h3>
+                        <ActionButton busy={busyAction === 'retrySelectedInvocation'} onClick={() => void retrySelectedInvocation()}>
+                          Retry selected
+                        </ActionButton>
+                      </div>
                       {functionInvocations.length === 0 ? (
                         <EmptyState text="이 function의 invocation 기록이 아직 없어." />
                       ) : (
                         functionInvocations.map((item) => (
-                          <div key={item.id} className="rounded-2xl border border-neutral-800 bg-neutral-950/80 p-4">
+                          <button key={item.id} className="rounded-2xl border border-neutral-800 bg-neutral-950/80 p-4 text-left transition hover:border-fuchsia-500" onClick={() => void loadInvocationDetail(item.id)} type="button">
                             <div className="flex items-center justify-between gap-3">
                               <p className="font-medium text-neutral-100">{item.id}</p>
                               <span className={item.status === 'succeeded' ? badgeClassNameSuccess : badgeClassNameDanger}>
@@ -1983,9 +2069,10 @@ export default function ConsoleClient() {
                             <p className="mt-2 text-xs text-neutral-500">created: {item.created_at}{item.finished_at ? ` · finished: ${item.finished_at}` : ''}</p>
                             {item.response_json ? <p className="mt-2 whitespace-pre-wrap break-all text-xs text-neutral-300">response: {item.response_json}</p> : null}
                             {item.error ? <p className="mt-2 whitespace-pre-wrap break-all text-xs text-rose-200">error: {item.error}</p> : null}
-                          </div>
+                          </button>
                         ))
                       )}
+                      {selectedInvocationDetail ? <InfoBox label="Selected invocation detail" value={JSON.stringify(selectedInvocationDetail, null, 2)} /> : null}
                     </div>
                   </div>
                 </div>
@@ -2031,6 +2118,16 @@ function base64UrlToArrayBuffer(value: string): ArrayBuffer {
   const raw = window.atob(padded)
   const bytes = Uint8Array.from(raw, (char) => char.charCodeAt(0))
   return bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength)
+}
+
+function maskSecretJson(raw: string): string {
+  try {
+    const parsed = JSON.parse(raw) as Record<string, unknown>
+    const masked = Object.fromEntries(Object.keys(parsed).map((key) => [key, '***']))
+    return JSON.stringify(masked, null, 2)
+  } catch {
+    return 'invalid JSON'
+  }
 }
 
 type StatusCardProps = {

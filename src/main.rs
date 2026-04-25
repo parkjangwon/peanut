@@ -90,7 +90,9 @@ async fn main() {
         .route("/functions/:name", get(api::functions::get_function))
         .route("/functions/:name", patch(api::functions::update_function))
         .route("/functions/:name", delete(api::functions::delete_function))
-        .route("/functions/:name/invocations", get(api::functions::list_function_invocations));
+        .route("/functions/:name/invocations", get(api::functions::list_function_invocations))
+        .route("/functions/:name/invocations/:invocation_id", get(api::functions::get_function_invocation))
+        .route("/functions/:name/invocations/:invocation_id/retry", post(api::functions::retry_function_invocation));
 
     let data_routes = Router::new()
         .route("/data/tables", get(api::data::list_tables))
