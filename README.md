@@ -111,12 +111,18 @@ Current capabilities:
 - authenticated, public, admin-only, or api-key invoke policy through `POST /api/functions/endpoints/:endpoint_slug`
 - separate Node subprocess execution with a temp working directory and bounded runtime timeout
 - invocation logs stored in SQLite, with detail lookup and retry from the console/API
+- bounded in-process Peanut host bindings for authenticated functions:
+  - `ctx.peanut.storage.list/get/put/delete`
+  - `ctx.peanut.push.enqueue`
+  - `ctx.peanut.data.listRows/getRow/createRow/updateRow/deleteRow`
+- host bindings reuse Peanut's existing auth and policy checks, so owner-scoped data/storage access stays user-scoped inside functions too
 
 Current constraints:
 - functions must export `default` or named `handler`
 - JSON input/output only
 - no arbitrary package installation
 - source containing blocked runtime escape patterns is rejected
+- no direct outbound network access; functions extend Peanut through bounded host bindings instead
 - this is a narrow sandboxed extension layer, not a full Lambda clone
 
 ### Console

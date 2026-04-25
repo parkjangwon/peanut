@@ -111,12 +111,18 @@ Peanut은 이제 작은 백엔드 확장용 함수 런타임을 함께 제공한
 - `POST /api/functions/endpoints/:endpoint_slug`로 authenticated / public / admin_only / api_key 정책 호출
 - temp working directory + timeout 제한을 둔 별도 Node subprocess 실행
 - invocation 로그를 SQLite에 저장하고, 상세 조회/재실행도 콘솔/API에서 가능
+- authenticated function 안에서 사용할 수 있는 bounded Peanut host binding 제공:
+  - `ctx.peanut.storage.list/get/put/delete`
+  - `ctx.peanut.push.enqueue`
+  - `ctx.peanut.data.listRows/getRow/createRow/updateRow/deleteRow`
+- host binding은 Peanut의 기존 auth/policy 검사를 그대로 재사용하므로, 함수 안에서도 owner scope 데이터/스토리지 격리가 유지된다
 
 현재 제약:
 - 함수는 `default` 또는 named `handler`를 export해야 한다
 - 입력/출력은 JSON만 지원한다
 - arbitrary package 설치는 지원하지 않는다
 - 런타임 탈출 위험이 있는 일부 패턴은 소스 단계에서 차단한다
+- 외부 네트워크를 직접 여는 대신, Peanut 내부 primitive를 bounded host binding으로만 확장한다
 - 완전한 Lambda clone이 아니라, 좁게 제한된 확장 레이어다
 
 ### Console
