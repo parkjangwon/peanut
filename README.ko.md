@@ -193,6 +193,82 @@ Peanut은 현재 실용적인 hybrid push 레이어를 제공한다.
 }
 ```
 
+### `POST /api/data/tables`
+대표적인 admin 요청:
+
+```json
+{
+  "name": "todos",
+  "display_name": "Todos",
+  "schema": {
+    "fields": {
+      "title": { "type": "string", "required": true, "max_length": 200 },
+      "done": { "type": "boolean", "required": false, "default": false }
+    }
+  },
+  "access_policy": {
+    "mode": "owner_private"
+  }
+}
+```
+
+대표 응답:
+
+```json
+{
+  "table": {
+    "name": "todos",
+    "display_name": "Todos",
+    "schema": {
+      "fields": {
+        "title": { "type": "string", "required": true, "max_length": 200, "default": null },
+        "done": { "type": "boolean", "required": false, "max_length": null, "default": false }
+      }
+    },
+    "access_policy": {
+      "mode": "owner_private"
+    }
+  }
+}
+```
+
+### `POST /api/data/tables/:table/rows`
+대표적인 인증 요청:
+
+```json
+{
+  "title": "buy milk"
+}
+```
+
+대표 응답:
+
+```json
+{
+  "row": {
+    "id": "uuid",
+    "owner_user_id": "uuid",
+    "data": {
+      "title": "buy milk",
+      "done": false
+    },
+    "created_at": "2026-04-25 01:05:58",
+    "updated_at": "2026-04-25 01:05:58"
+  }
+}
+```
+
+### `GET /api/data/tables/:table/rows`
+예시 query:
+
+```text
+/api/data/tables/todos/rows?filter_field=title&filter_op=contains&filter_value=milk&order_by=created_at&order=desc&limit=10
+```
+
+기대 동작:
+- `title_contains`와 범용 `filter_field/filter_op/filter_value`를 `order_by`, `order`, `limit`과 함께 조합할 수 있다
+- 콘솔 기본 흐름에서는 `contains`, `eq`, `ne`, `gt`, `gte`, `lt`, `lte`를 사용한다
+
 ## 디렉터리 구조
 
 ```text
@@ -285,6 +361,47 @@ cp .env.example .env
 
 docker compose up --build
 ```
+
+### Docker Compose 운영 가이드
+
+기본 `docker-compose.yml` 운영 포인트:
+- 컨테이너 `3000` 포트를 호스트 `3000`에 노출한다
+- `./data`를 컨테이너 `/app/data`에 마운트한다
+- 기본 SQLite 경로는 `sqlite://data/peanut.db`
+- 기본 storage 경로는 `data/storage`
+- restart 정책은 `always`
+
+권장 day-1 흐름:
+
+```bash
+cp .env.example .env
+# JWT_SECRET 설정
+# 필요하면 WEB_PUSH_VAPID_PRIVATE_KEY / WEB_PUSH_VAPID_SUBJECT도 설정
+
+docker compose up --build -d
+docker compose logs -f peanut
+```
+
+권장 day-2 운영 명령:
+
+```bash
+# 설정 변경 후 재배포
+docker compose up -d --build
+
+# 최근 로그 확인
+docker compose logs --tail=200 peanut
+
+# 데이터 유지한 채 정지
+docker compose stop
+
+# 다시 시작
+docker compose start
+```
+
+백업/복구 메모:
+- `./data/peanut.db`와 `./data/storage/`를 백업하면 된다
+- 기본 compose 레이아웃을 유지한다면 `./data/` 전체 백업이면 충분하다
+- 복구 시에는 컨테이너를 멈추고 `./data/`를 교체한 뒤 다시 시작하면 된다
 
 ## 로컬 브라우저 Web Push 실험 가이드
 

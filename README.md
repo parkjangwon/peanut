@@ -198,6 +198,82 @@ Request:
 }
 ```
 
+### `POST /api/data/tables`
+Typical admin request:
+
+```json
+{
+  "name": "todos",
+  "display_name": "Todos",
+  "schema": {
+    "fields": {
+      "title": { "type": "string", "required": true, "max_length": 200 },
+      "done": { "type": "boolean", "required": false, "default": false }
+    }
+  },
+  "access_policy": {
+    "mode": "owner_private"
+  }
+}
+```
+
+Typical response:
+
+```json
+{
+  "table": {
+    "name": "todos",
+    "display_name": "Todos",
+    "schema": {
+      "fields": {
+        "title": { "type": "string", "required": true, "max_length": 200, "default": null },
+        "done": { "type": "boolean", "required": false, "max_length": null, "default": false }
+      }
+    },
+    "access_policy": {
+      "mode": "owner_private"
+    }
+  }
+}
+```
+
+### `POST /api/data/tables/:table/rows`
+Typical authenticated request:
+
+```json
+{
+  "title": "buy milk"
+}
+```
+
+Typical response:
+
+```json
+{
+  "row": {
+    "id": "uuid",
+    "owner_user_id": "uuid",
+    "data": {
+      "title": "buy milk",
+      "done": false
+    },
+    "created_at": "2026-04-25 01:05:58",
+    "updated_at": "2026-04-25 01:05:58"
+  }
+}
+```
+
+### `GET /api/data/tables/:table/rows`
+Example query:
+
+```text
+/api/data/tables/todos/rows?filter_field=title&filter_op=contains&filter_value=milk&order_by=created_at&order=desc&limit=10
+```
+
+What to expect:
+- `title_contains` and generic `filter_field/filter_op/filter_value` can be combined with `order_by`, `order`, and `limit`
+- common console flow uses `contains`, `eq`, `ne`, `gt`, `gte`, `lt`, `lte`
+
 ## Repository layout
 
 ```text
@@ -292,6 +368,47 @@ cp .env.example .env
 
 docker compose up --build
 ```
+
+### Docker Compose operations guide
+
+Operational notes for the provided `docker-compose.yml`:
+- container port `3000` is published to host `3000`
+- `./data` is mounted into `/app/data`
+- the default SQLite path is `sqlite://data/peanut.db`
+- the default storage path is `data/storage`
+- restart policy is `always`
+
+Recommended day-1 flow:
+
+```bash
+cp .env.example .env
+# set JWT_SECRET
+# optionally set WEB_PUSH_VAPID_PRIVATE_KEY / WEB_PUSH_VAPID_SUBJECT
+
+docker compose up --build -d
+docker compose logs -f peanut
+```
+
+Recommended day-2 operations:
+
+```bash
+# restart after config change
+docker compose up -d --build
+
+# inspect current logs
+docker compose logs --tail=200 peanut
+
+# stop without deleting data
+docker compose stop
+
+# start again
+docker compose start
+```
+
+Backup and restore notes:
+- back up `./data/peanut.db` and `./data/storage/`
+- if you keep the default compose layout, backing up the entire `./data/` directory is enough
+- restore by stopping the container, replacing `./data/`, and starting the stack again
 
 ## Local browser Web Push experiment guide
 
