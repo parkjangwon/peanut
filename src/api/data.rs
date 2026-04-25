@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 
 use axum::{
-    extract::{Path, State},
+    extract::{Path, Query, State},
     http::StatusCode,
     response::{IntoResponse, Response},
     Extension, Json,
@@ -94,6 +94,15 @@ pub struct DataFieldSpec {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AccessPolicy {
     pub mode: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct ListRowsParams {
+    pub limit: Option<usize>,
+    pub order_by: Option<String>,
+    pub order: Option<String>,
+    pub title_contains: Option<String>,
+    pub done: Option<bool>,
 }
 
 #[derive(Debug, Clone, FromRow)]
@@ -275,6 +284,7 @@ pub async fn list_rows(
     State(state): State<crate::AppState>,
     Extension(claims): Extension<Claims>,
     Path(table): Path<String>,
+    Query(params): Query<ListRowsParams>,
 ) -> Response {
     let table = match load_table(&state.pool, &table).await {
         Ok(table) => table,
@@ -285,6 +295,14 @@ pub async fn list_rows(
 
     if !can_read_table(&claims, &table.access_policy) {
         return json_error(StatusCode::FORBIDDEN, "read access denied");
+    }
+
+    let limit = params.limit.unwrap_or(MAX_LIST_ROWS as usize).min(MAX_LIST_ROWS as usize);
+    let order_by = params.order_by.as_deref().unwrap_or("created_at");
+    let descending = !matches!(params.order.as_deref(), Some("asc"));
+
+    if let Err(message) = validate_list_rows_params(&table.schema, &params) {
+        return json_error(StatusCode::BAD_REQUEST, message);
     }
 
     let rows_result = if table.access_policy.mode == POLICY_OWNER_PRIVATE && !claims.is_admin {
@@ -315,7 +333,12 @@ pub async fn list_rows(
                     Err(message) => return json_error(StatusCode::INTERNAL_SERVER_ERROR, message),
                 }
             }
-            (StatusCode::OK, Json(DataRowsResponse { rows })).into_response()
+
+            let filtered = apply_row_filters(rows, &params);
+            let mut filtered = filtered;
+            sort_rows(&mut filtered, order_by, descending);
+            filtered.truncate(limit);
+            (StatusCode::OK, Json(DataRowsResponse { rows: filtered })).into_response()
         }
         Err(_) => json_error(StatusCode::INTERNAL_SERVER_ERROR, "failed to list rows"),
     }
@@ -501,6 +524,86 @@ fn validate_access_policy(policy: &AccessPolicy) -> Result<(), String> {
     match policy.mode.as_str() {
         POLICY_ADMIN_ONLY | POLICY_OWNER_PRIVATE | POLICY_AUTHENTICATED_SHARED_RW => Ok(()),
         _ => Err("access_policy.mode is invalid".to_string()),
+    }
+}
+
+fn validate_list_rows_params(schema: &DataTableSchema, params: &ListRowsParams) -> Result<(), String> {
+    if let Some(limit) = params.limit {
+        if limit == 0 {
+            return Err("limit must be at least 1".to_string());
+        }
+    }
+
+    if let Some(order_by) = &params.order_by {
+        if order_by != "created_at" && order_by != "updated_at" && !schema.fields.contains_key(order_by) {
+            return Err("order_by must be created_at, updated_at, or a declared field".to_string());
+        }
+    }
+
+    if let Some(order) = &params.order {
+        if order != "asc" && order != "desc" {
+            return Err("order must be asc or desc".to_string());
+        }
+    }
+
+    if params.done.is_some() && !schema.fields.contains_key("done") {
+        return Err("done filter requires a declared done field".to_string());
+    }
+
+    if params.title_contains.is_some() && !schema.fields.contains_key("title") {
+        return Err("title_contains filter requires a declared title field".to_string());
+    }
+
+    Ok(())
+}
+
+fn apply_row_filters(rows: Vec<DataRowResponse>, params: &ListRowsParams) -> Vec<DataRowResponse> {
+    rows.into_iter()
+        .filter(|row| match &params.title_contains {
+            Some(needle) => row
+                .data
+                .get("title")
+                .and_then(Value::as_str)
+                .map(|title| title.contains(needle))
+                .unwrap_or(false),
+            None => true,
+        })
+        .filter(|row| match params.done {
+            Some(done) => row.data.get("done").and_then(Value::as_bool) == Some(done),
+            None => true,
+        })
+        .collect()
+}
+
+fn sort_rows(rows: &mut [DataRowResponse], order_by: &str, descending: bool) {
+    rows.sort_by(|left, right| compare_rows(left, right, order_by));
+    if descending {
+        rows.reverse();
+    }
+}
+
+fn compare_rows(left: &DataRowResponse, right: &DataRowResponse, order_by: &str) -> std::cmp::Ordering {
+    match order_by {
+        "created_at" => left.created_at.cmp(&right.created_at),
+        "updated_at" => left.updated_at.cmp(&right.updated_at),
+        field => compare_json_values(left.data.get(field), right.data.get(field)),
+    }
+}
+
+fn compare_json_values(left: Option<&Value>, right: Option<&Value>) -> std::cmp::Ordering {
+    use std::cmp::Ordering;
+
+    match (left, right) {
+        (Some(Value::String(a)), Some(Value::String(b))) => a.cmp(b),
+        (Some(Value::Bool(a)), Some(Value::Bool(b))) => a.cmp(b),
+        (Some(Value::Number(a)), Some(Value::Number(b))) => a
+            .as_f64()
+            .partial_cmp(&b.as_f64())
+            .unwrap_or(Ordering::Equal),
+        (Some(a), Some(b)) => a.to_string().cmp(&b.to_string()),
+        (None, Some(_)) => Ordering::Less,
+        (Some(_), None) => Ordering::Greater,
+        (None, None) => Ordering::Equal,
     }
 }
 
@@ -916,6 +1019,7 @@ mod tests {
             State(state.clone()),
             Extension(claims(&user_one.user.id, false)),
             axum::extract::Path("todos".to_string()),
+            axum::extract::Query(ListRowsParams::default()),
         )
         .await;
         assert_eq!(list_user_one.status(), StatusCode::OK);
@@ -926,6 +1030,7 @@ mod tests {
             State(state.clone()),
             Extension(claims(&user_two.user.id, false)),
             axum::extract::Path("todos".to_string()),
+            axum::extract::Query(ListRowsParams::default()),
         )
         .await;
         assert_eq!(list_user_two.status(), StatusCode::OK);
@@ -939,5 +1044,67 @@ mod tests {
         )
         .await;
         assert_eq!(forbidden_get.status(), StatusCode::FORBIDDEN);
+    }
+
+    #[tokio::test]
+    async fn test_list_rows_supports_limit_order_and_filters() {
+        let (state, _dir) = test_support::make_test_state().await;
+        let admin = register_user(state.clone(), "admin@example.com").await;
+
+        let create_table_response = create_table(
+            State(state.clone()),
+            Extension(claims(&admin.user.id, true)),
+            Json(todo_table_request()),
+        )
+        .await;
+        assert_eq!(create_table_response.status(), StatusCode::CREATED);
+
+        for payload in [
+            json!({ "title": "buy milk", "done": false }),
+            json!({ "title": "write tests", "done": true }),
+            json!({ "title": "buy bread", "done": false }),
+        ] {
+            let create_row_response = create_row(
+                State(state.clone()),
+                Extension(claims(&admin.user.id, true)),
+                axum::extract::Path("todos".to_string()),
+                Json(CreateRowRequest { data: payload }),
+            )
+            .await;
+            assert_eq!(create_row_response.status(), StatusCode::CREATED);
+        }
+
+        let filtered = list_rows(
+            State(state.clone()),
+            Extension(claims(&admin.user.id, true)),
+            axum::extract::Path("todos".to_string()),
+            axum::extract::Query(ListRowsParams {
+                limit: Some(1),
+                order_by: Some("title".to_string()),
+                order: Some("asc".to_string()),
+                title_contains: Some("buy".to_string()),
+                done: Some(false),
+            }),
+        )
+        .await;
+        assert_eq!(filtered.status(), StatusCode::OK);
+        let filtered: DataRowsResponse = test_support::response_json(filtered).await;
+        assert_eq!(filtered.rows.len(), 1);
+        assert_eq!(filtered.rows[0].data.get("title"), Some(&json!("buy bread")));
+
+        let invalid = list_rows(
+            State(state),
+            Extension(claims(&admin.user.id, true)),
+            axum::extract::Path("todos".to_string()),
+            axum::extract::Query(ListRowsParams {
+                limit: Some(10),
+                order_by: Some("owner_user_id".to_string()),
+                order: Some("desc".to_string()),
+                title_contains: None,
+                done: None,
+            }),
+        )
+        .await;
+        assert_eq!(invalid.status(), StatusCode::BAD_REQUEST);
     }
 }

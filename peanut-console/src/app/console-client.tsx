@@ -191,6 +191,19 @@ export default function ConsoleClient() {
   const [selectedTable, setSelectedTable] = useState('todos')
   const [selectedTableDetail, setSelectedTableDetail] = useState<DataTableDetail | null>(null)
   const [dataRows, setDataRows] = useState<DataRow[]>([])
+  const [dataTitleFilter, setDataTitleFilter] = useState('')
+  const [dataDoneFilter, setDataDoneFilter] = useState<'all' | 'true' | 'false'>('all')
+  const [dataOrderBy, setDataOrderBy] = useState('created_at')
+  const [dataOrder, setDataOrder] = useState<'asc' | 'desc'>('desc')
+  const [dataLimit, setDataLimit] = useState('10')
+  const [selectedRowId, setSelectedRowId] = useState<string | null>(null)
+  const [selectedRowJson, setSelectedRowJson] = useState(`{
+  "title": "buy milk"
+}`)
+  const [webPushEndpoint, setWebPushEndpoint] = useState('')
+  const [webPushP256dh, setWebPushP256dh] = useState('')
+  const [webPushAuth, setWebPushAuth] = useState('')
+  const [vapidPublicKey, setVapidPublicKey] = useState('')
   const [newRowJson, setNewRowJson] = useState(`{
   "title": "buy milk"
 }`)
@@ -266,11 +279,20 @@ export default function ConsoleClient() {
       return
     }
 
+    const query = new URLSearchParams()
+    const trimmedTitle = dataTitleFilter.trim()
+    if (trimmedTitle) query.set('title_contains', trimmedTitle)
+    if (dataDoneFilter !== 'all') query.set('done', String(dataDoneFilter === 'true'))
+    if (dataOrderBy) query.set('order_by', dataOrderBy)
+    if (dataOrder) query.set('order', dataOrder)
+    if (dataLimit.trim()) query.set('limit', dataLimit.trim())
+    const rowUrl = `/api/data/tables/${encodeURIComponent(normalizedTable)}/rows${query.toString() ? `?${query.toString()}` : ''}`
+
     const [tableResponse, rowsResponse] = await Promise.all([
       fetch(`/api/data/tables/${encodeURIComponent(normalizedTable)}`, {
         headers: authHeaders(currentToken),
       }),
-      fetch(`/api/data/tables/${encodeURIComponent(normalizedTable)}/rows`, {
+      fetch(rowUrl, {
         headers: authHeaders(currentToken),
       }),
     ])
@@ -280,7 +302,7 @@ export default function ConsoleClient() {
     setSelectedTableDetail(tableData.table)
     setDataRows(rowsData.rows)
     setDataStatus(`table ${tableData.table.name} · rows ${rowsData.rows.length}건`)
-  }, [])
+  }, [dataDoneFilter, dataLimit, dataOrder, dataOrderBy, dataTitleFilter])
 
   const refreshDataTables = useCallback(
     async (currentToken: string, preferredTable?: string) => {
@@ -649,9 +671,155 @@ export default function ConsoleClient() {
       })
       const data = await readJsonOrThrow<DataRow>(response)
       setDataStatus(`row ${data.id.slice(0, 8)} 생성 완료`)
+      setSelectedRowId(data.id)
+      setSelectedRowJson(JSON.stringify(data.data, null, 2))
       await refreshDataRows(token, tableName)
     } catch (error) {
       setDataStatus(error instanceof Error ? error.message : 'row create failed')
+    } finally {
+      setBusyAction(null)
+    }
+  }
+
+  async function saveSelectedRow() {
+    if (!token) {
+      setDataStatus('먼저 로그인해줘.')
+      return
+    }
+    const tableName = selectedTable.trim()
+    if (!tableName || !selectedRowId) {
+      setDataStatus('먼저 수정할 row를 선택해줘.')
+      return
+    }
+
+    setBusyAction('saveSelectedRow')
+    try {
+      const parsed = JSON.parse(selectedRowJson) as Record<string, unknown>
+      const response = await fetch(`/api/data/tables/${encodeURIComponent(tableName)}/rows/${encodeURIComponent(selectedRowId)}`, {
+        method: 'PATCH',
+        headers: {
+          ...authHeaders(token),
+          'content-type': 'application/json',
+        },
+        body: JSON.stringify({ data: parsed }),
+      })
+      const data = await readJsonOrThrow<DataRow>(response)
+      setDataStatus(`row ${data.id.slice(0, 8)} 수정 완료`)
+      setSelectedRowJson(JSON.stringify(data.data, null, 2))
+      await refreshDataRows(token, tableName)
+    } catch (error) {
+      setDataStatus(error instanceof Error ? error.message : 'row update failed')
+    } finally {
+      setBusyAction(null)
+    }
+  }
+
+  async function deleteSelectedRow() {
+    if (!token) {
+      setDataStatus('먼저 로그인해줘.')
+      return
+    }
+    const tableName = selectedTable.trim()
+    if (!tableName || !selectedRowId) {
+      setDataStatus('먼저 삭제할 row를 선택해줘.')
+      return
+    }
+
+    setBusyAction('deleteSelectedRow')
+    try {
+      const response = await fetch(`/api/data/tables/${encodeURIComponent(tableName)}/rows/${encodeURIComponent(selectedRowId)}`, {
+        method: 'DELETE',
+        headers: authHeaders(token),
+      })
+      const data = await readJsonOrThrow<MessageResponse>(response)
+      setDataStatus(data.message)
+      setSelectedRowId(null)
+      setSelectedRowJson(newRowJson)
+      await refreshDataRows(token, tableName)
+    } catch (error) {
+      setDataStatus(error instanceof Error ? error.message : 'row delete failed')
+    } finally {
+      setBusyAction(null)
+    }
+  }
+
+  async function registerBrowserWebPush() {
+    if (!token) {
+      setPushStatus('먼저 로그인해줘.')
+      return
+    }
+    if (typeof window === 'undefined' || !('serviceWorker' in navigator)) {
+      setPushStatus('이 브라우저는 service worker를 지원하지 않아.')
+      return
+    }
+    if (!vapidPublicKey.trim()) {
+      setPushStatus('VAPID public key를 먼저 입력해줘.')
+      return
+    }
+
+    setBusyAction('registerBrowserWebPush')
+    try {
+      const permission = await window.Notification.requestPermission()
+      if (permission !== 'granted') {
+        throw new Error('브라우저 알림 권한이 필요해.')
+      }
+
+      const registration = await navigator.serviceWorker.register('/peanut-sw.js')
+      const subscription = await registration.pushManager.subscribe({
+        userVisibleOnly: true,
+        applicationServerKey: base64UrlToArrayBuffer(vapidPublicKey.trim()),
+      })
+      const json = subscription.toJSON()
+      const response = await fetch('/api/push/subscriptions', {
+        method: 'POST',
+        headers: {
+          ...authHeaders(token),
+          'content-type': 'application/json',
+        },
+        body: JSON.stringify({
+          endpoint: json.endpoint,
+          keys: json.keys,
+        }),
+      })
+      const data = await readJsonOrThrow<MessageResponse>(response)
+      setWebPushEndpoint(json.endpoint ?? '')
+      setWebPushP256dh(json.keys?.p256dh ?? '')
+      setWebPushAuth(json.keys?.auth ?? '')
+      setPushStatus(data.message)
+      await refreshPushData(token)
+    } catch (error) {
+      setPushStatus(error instanceof Error ? error.message : 'browser web push registration failed')
+    } finally {
+      setBusyAction(null)
+    }
+  }
+
+  async function saveManualWebPushSubscription() {
+    if (!token) {
+      setPushStatus('먼저 로그인해줘.')
+      return
+    }
+    setBusyAction('saveManualWebPushSubscription')
+    try {
+      const response = await fetch('/api/push/subscriptions', {
+        method: 'POST',
+        headers: {
+          ...authHeaders(token),
+          'content-type': 'application/json',
+        },
+        body: JSON.stringify({
+          endpoint: webPushEndpoint,
+          keys: {
+            p256dh: webPushP256dh,
+            auth: webPushAuth,
+          },
+        }),
+      })
+      const data = await readJsonOrThrow<MessageResponse>(response)
+      setPushStatus(data.message)
+      await refreshPushData(token)
+    } catch (error) {
+      setPushStatus(error instanceof Error ? error.message : 'manual web push subscription failed')
     } finally {
       setBusyAction(null)
     }
@@ -888,6 +1056,56 @@ export default function ConsoleClient() {
                   />
                 </Field>
                 <InfoBox label="Data status" value={dataStatus} />
+                <div className="grid gap-3 md:grid-cols-4">
+                  <Field label="Title contains">
+                    <input
+                      className={inputClassName}
+                      onChange={(event) => setDataTitleFilter(event.target.value)}
+                      value={dataTitleFilter}
+                    />
+                  </Field>
+                  <Field label="Done filter">
+                    <select
+                      className={inputClassName}
+                      onChange={(event) => setDataDoneFilter(event.target.value as 'all' | 'true' | 'false')}
+                      value={dataDoneFilter}
+                    >
+                      <option value="all">all</option>
+                      <option value="false">false</option>
+                      <option value="true">true</option>
+                    </select>
+                  </Field>
+                  <Field label="Order by">
+                    <select
+                      className={inputClassName}
+                      onChange={(event) => setDataOrderBy(event.target.value)}
+                      value={dataOrderBy}
+                    >
+                      <option value="created_at">created_at</option>
+                      <option value="updated_at">updated_at</option>
+                      <option value="title">title</option>
+                      <option value="done">done</option>
+                    </select>
+                  </Field>
+                  <Field label="Order / limit">
+                    <div className="grid gap-2 sm:grid-cols-[1fr_96px]">
+                      <select
+                        className={inputClassName}
+                        onChange={(event) => setDataOrder(event.target.value as 'asc' | 'desc')}
+                        value={dataOrder}
+                      >
+                        <option value="desc">desc</option>
+                        <option value="asc">asc</option>
+                      </select>
+                      <input
+                        className={inputClassName}
+                        onChange={(event) => setDataLimit(event.target.value)}
+                        value={dataLimit}
+                      />
+                    </div>
+                  </Field>
+                </div>
+
                 <div className="grid gap-3 md:grid-cols-2">
                   <div className="grid gap-3">
                     <h3 className="text-sm font-medium text-neutral-200">Tables</h3>
@@ -920,7 +1138,15 @@ export default function ConsoleClient() {
                       <EmptyState text="선택한 table에 아직 row가 없어." />
                     ) : (
                       dataRows.map((row) => (
-                        <div key={row.id} className="rounded-2xl border border-neutral-800 bg-neutral-950/80 p-4">
+                        <button
+                          key={row.id}
+                          className="rounded-2xl border border-neutral-800 bg-neutral-950/80 p-4 text-left transition hover:border-emerald-500"
+                          onClick={() => {
+                            setSelectedRowId(row.id)
+                            setSelectedRowJson(JSON.stringify(row.data, null, 2))
+                          }}
+                          type="button"
+                        >
                           <p className="font-medium text-neutral-100">{row.id}</p>
                           <p className="mt-1 text-xs text-neutral-500">
                             owner: {row.owner_user_id ?? 'shared'} · {row.created_at}
@@ -928,7 +1154,7 @@ export default function ConsoleClient() {
                           <p className="mt-3 whitespace-pre-wrap break-all text-xs leading-6 text-neutral-300">
                             {JSON.stringify(row.data, null, 2)}
                           </p>
-                        </div>
+                        </button>
                       ))
                     )}
                   </div>
@@ -944,6 +1170,21 @@ export default function ConsoleClient() {
                 <ActionButton busy={busyAction === 'createDataRow'} onClick={() => void createDataRow()}>
                   Create row
                 </ActionButton>
+                <Field label="Selected row JSON">
+                  <textarea
+                    className="min-h-[180px] rounded-3xl border border-neutral-800 bg-neutral-950 px-4 py-3 text-sm text-neutral-100 outline-none transition focus:border-amber-500"
+                    onChange={(event) => setSelectedRowJson(event.target.value)}
+                    value={selectedRowJson}
+                  />
+                </Field>
+                <div className="flex flex-wrap gap-3">
+                  <ActionButton busy={busyAction === 'saveSelectedRow'} onClick={() => void saveSelectedRow()} primary>
+                    Save selected row
+                  </ActionButton>
+                  <ActionButton busy={busyAction === 'deleteSelectedRow'} onClick={() => void deleteSelectedRow()}>
+                    Delete selected row
+                  </ActionButton>
+                </div>
                 {selectedTableDetail ? (
                   <InfoBox
                     label="Selected table schema"
@@ -955,6 +1196,22 @@ export default function ConsoleClient() {
 
             <Panel title="Push" subtitle="ntfy + web push subscriptions">
               <div className="grid gap-4">
+                <Field label="VAPID public key (browser subscribe)">
+                  <input
+                    className={inputClassName}
+                    onChange={(event) => setVapidPublicKey(event.target.value)}
+                    value={vapidPublicKey}
+                  />
+                </Field>
+                <div className="flex flex-wrap gap-3">
+                  <ActionButton
+                    busy={busyAction === 'registerBrowserWebPush'}
+                    onClick={() => void registerBrowserWebPush()}
+                    primary
+                  >
+                    Register browser Web Push
+                  </ActionButton>
+                </div>
                 <Field label="Topic">
                   <input
                     className={inputClassName}
@@ -968,6 +1225,38 @@ export default function ConsoleClient() {
                   </ActionButton>
                   <ActionButton onClick={() => token && void refreshPushData(token)}>Refresh push</ActionButton>
                 </div>
+                <div className="grid gap-3 md:grid-cols-3">
+                  <Field label="Manual Web Push endpoint">
+                    <input
+                      className={inputClassName}
+                      onChange={(event) => setWebPushEndpoint(event.target.value)}
+                      value={webPushEndpoint}
+                    />
+                  </Field>
+                  <Field label="p256dh">
+                    <input
+                      className={inputClassName}
+                      onChange={(event) => setWebPushP256dh(event.target.value)}
+                      value={webPushP256dh}
+                    />
+                  </Field>
+                  <Field label="auth">
+                    <input
+                      className={inputClassName}
+                      onChange={(event) => setWebPushAuth(event.target.value)}
+                      value={webPushAuth}
+                    />
+                  </Field>
+                </div>
+                <div className="flex flex-wrap gap-3">
+                  <ActionButton
+                    busy={busyAction === 'saveManualWebPushSubscription'}
+                    onClick={() => void saveManualWebPushSubscription()}
+                  >
+                    Save manual Web Push subscription
+                  </ActionButton>
+                </div>
+
                 <Field label="Push title">
                   <input
                     className={inputClassName}
@@ -999,8 +1288,8 @@ export default function ConsoleClient() {
                           className="flex items-center justify-between gap-3 rounded-2xl border border-neutral-800 bg-neutral-950/80 p-4"
                         >
                           <div>
-                            <p className="font-medium text-neutral-100">{subscription.topic}</p>
-                            <p className="text-xs text-neutral-500">{subscription.created_at}</p>
+                            <p className="font-medium text-neutral-100">{subscription.topic ?? subscription.endpoint ?? 'unknown subscription'}</p>
+                            <p className="text-xs text-neutral-500">{subscription.kind} · {subscription.created_at}</p>
                           </div>
                           <ActionButton
                             busy={busyAction === `deleteSubscription:${subscription.id}`}
@@ -1052,6 +1341,14 @@ const inputClassName =
 
 const listButtonClassName =
   'rounded-2xl border border-neutral-800 bg-neutral-950 px-4 py-3 text-left text-sm text-neutral-200 transition hover:border-cyan-500 hover:bg-neutral-900'
+
+function base64UrlToArrayBuffer(value: string): ArrayBuffer {
+  const normalized = value.replace(/-/g, '+').replace(/_/g, '/')
+  const padded = normalized + '='.repeat((4 - (normalized.length % 4 || 4)) % 4)
+  const raw = window.atob(padded)
+  const bytes = Uint8Array.from(raw, (char) => char.charCodeAt(0))
+  return bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength)
+}
 
 type StatusCardProps = {
   title: string
