@@ -316,6 +316,55 @@ Peanut은 현재 실용적인 hybrid push 레이어를 제공한다.
 
 시작점은 `.env.example` 참고.
 
+## curl 기반 API quickstart
+
+콘솔을 열지 않고 Peanut을 가장 빨리 만져보는 흐름이다.
+
+```bash
+export BASE_URL=http://127.0.0.1:3000
+
+# 1) 첫 admin 등록
+curl -s -X POST "$BASE_URL/api/register" \
+  -H 'content-type: application/json' \
+  -d '{"email":"admin@example.com","password":"your-password"}'
+
+# 2) 로그인
+curl -s -X POST "$BASE_URL/api/login" \
+  -H 'content-type: application/json' \
+  -d '{"email":"admin@example.com","password":"your-password"}'
+
+# 3) login 응답의 access_token 값을 아래에 넣어서 table 생성
+curl -s -X POST "$BASE_URL/api/data/tables" \
+  -H 'authorization: Bearer <ACCESS_TOKEN>' \
+  -H 'content-type: application/json' \
+  -d '{
+    "name": "todos",
+    "display_name": "Todos",
+    "schema": {
+      "fields": {
+        "title": { "type": "string", "required": true, "max_length": 200 },
+        "done": { "type": "boolean", "required": false, "default": false }
+      }
+    },
+    "access_policy": { "mode": "owner_private" }
+  }'
+
+# 4) row 추가
+curl -s -X POST "$BASE_URL/api/data/tables/todos/rows" \
+  -H 'authorization: Bearer <ACCESS_TOKEN>' \
+  -H 'content-type: application/json' \
+  -d '{"title":"buy milk"}'
+
+# 5) filter로 row 조회
+curl -s "$BASE_URL/api/data/tables/todos/rows?filter_field=title&filter_op=contains&filter_value=milk&order_by=created_at&order=desc&limit=10" \
+  -H 'authorization: Bearer <ACCESS_TOKEN>'
+```
+
+짧은 메모:
+- 첫 등록 유저는 자동으로 active admin이 된다
+- `owner_private` row는 인증 유저 기준으로 격리된다
+- 같은 bearer token으로 storage, data, push, session 엔드포인트를 함께 호출할 수 있다
+
 ## 로컬 개발
 
 ### 필요 조건

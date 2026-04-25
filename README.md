@@ -323,6 +323,55 @@ Optional:
 
 See `.env.example` for a starter config.
 
+## API quickstart with curl
+
+This is the fastest way to exercise Peanut without opening the console.
+
+```bash
+export BASE_URL=http://127.0.0.1:3000
+
+# 1) register first admin
+curl -s -X POST "$BASE_URL/api/register" \
+  -H 'content-type: application/json' \
+  -d '{"email":"admin@example.com","password":"your-password"}'
+
+# 2) login
+curl -s -X POST "$BASE_URL/api/login" \
+  -H 'content-type: application/json' \
+  -d '{"email":"admin@example.com","password":"your-password"}'
+
+# 3) copy access_token from the login response, then use it below
+curl -s -X POST "$BASE_URL/api/data/tables" \
+  -H 'authorization: Bearer <ACCESS_TOKEN>' \
+  -H 'content-type: application/json' \
+  -d '{
+    "name": "todos",
+    "display_name": "Todos",
+    "schema": {
+      "fields": {
+        "title": { "type": "string", "required": true, "max_length": 200 },
+        "done": { "type": "boolean", "required": false, "default": false }
+      }
+    },
+    "access_policy": { "mode": "owner_private" }
+  }'
+
+# 4) insert a row
+curl -s -X POST "$BASE_URL/api/data/tables/todos/rows" \
+  -H 'authorization: Bearer <ACCESS_TOKEN>' \
+  -H 'content-type: application/json' \
+  -d '{"title":"buy milk"}'
+
+# 5) query rows with filtering
+curl -s "$BASE_URL/api/data/tables/todos/rows?filter_field=title&filter_op=contains&filter_value=milk&order_by=created_at&order=desc&limit=10" \
+  -H 'authorization: Bearer <ACCESS_TOKEN>'
+```
+
+Quick notes:
+- the first registered user becomes active admin automatically
+- `owner_private` rows are scoped to the authenticated user
+- the same bearer token works for storage, data, push, and session endpoints
+
 ## Local development
 
 ### Prerequisites
