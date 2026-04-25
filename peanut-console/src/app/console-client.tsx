@@ -192,7 +192,7 @@ export default function ConsoleClient() {
   const [queueItems, setQueueItems] = useState<PushQueueEntry[]>([])
   const [dataStatus, setDataStatus] = useState('data 작업 대기 중')
   const [dataTables, setDataTables] = useState<DataTableSummary[]>([])
-  const [selectedTable, setSelectedTable] = useState('todos')
+  const [selectedTable, setSelectedTable] = useState('')
   const [selectedTableDetail, setSelectedTableDetail] = useState<DataTableDetail | null>(null)
   const [dataRows, setDataRows] = useState<DataRow[]>([])
   const [dataTableName, setDataTableName] = useState('todos')
@@ -348,7 +348,12 @@ export default function ConsoleClient() {
       const data = await readJsonOrThrow<DataTablesResponse>(response)
       setDataTables(data.tables)
 
-      const nextTable = preferredTable?.trim() || selectedTable.trim() || data.tables[0]?.name || ''
+      const tableNames = new Set(data.tables.map((table) => table.name))
+      const requestedTable = preferredTable?.trim() || selectedTable.trim()
+      const nextTable = requestedTable && tableNames.has(requestedTable)
+        ? requestedTable
+        : data.tables[0]?.name || ''
+
       if (!nextTable) {
         setSelectedTable('')
         setSelectedTableDetail(null)
