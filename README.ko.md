@@ -66,6 +66,12 @@ Peanut은 아래 원칙을 지향한다.
 - access token은 짧게 유지하고 refresh token으로 장기 세션을 이어갈 수 있다
 - refresh session은 서버에서 추적되며 logout, password change, password reset, admin deactivate 시 revoke된다
 - 앱은 auth session 목록 조회, 단일 세션 revoke, 전체 세션 revoke까지 Peanut API로 처리할 수 있다
+- 자세한 연동 가이드는 `docs/auth-client.ko.md`, 브라우저 예제는 `examples/auth-client-web/` 참고
+
+### 외부 auth client 가이드
+- 한국어 가이드: `docs/auth-client.ko.md`
+- English guide: `docs/auth-client.md`
+- 브라우저 예제: `examples/auth-client-web/`
 
 ### Storage
 - 유저 단위로 격리된 object storage
@@ -211,7 +217,8 @@ Peanut은 이제 작은 백엔드 확장용 함수 런타임을 함께 제공한
 
 ```json
 {
-  "access_token": "jwt",
+  "access_token": "***",
+  "refresh_token": "***",
   "token_type": "Bearer",
   "expires_at": "2026-04-25T00:00:00Z",
   "user": {
@@ -423,6 +430,7 @@ curl -s "$BASE_URL/api/data/tables/todos/rows?filter_field=title&filter_op=conta
 - 첫 등록 유저는 자동으로 active admin이 된다
 - `owner_private` row는 인증 유저 기준으로 격리된다
 - 같은 bearer token으로 storage, data, push, session 엔드포인트를 함께 호출할 수 있다
+- 외부 프론트 auth 전체 흐름은 `docs/auth-client.ko.md`와 `examples/auth-client-web/` 참고
 
 ## 로컬 개발
 

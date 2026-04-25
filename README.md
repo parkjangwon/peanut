@@ -65,6 +65,12 @@ What this means for external frontend apps:
 - Peanut can now act as the app's auth backend for signup, login, session refresh, logout, password change, and password reset
 - access tokens stay short-lived while refresh tokens provide longer-lived sessions
 - refresh sessions are server-tracked and revoked on logout, password change, password reset, or admin deactivation
+- see `docs/auth-client.md` for the integration guide and `examples/auth-client-web/` for a minimal browser example
+
+### External auth client guide
+- English guide: `docs/auth-client.md`
+- Korean guide: `docs/auth-client.ko.md`
+- browser example: `examples/auth-client-web/`
 
 ### Storage
 - user-scoped object storage
@@ -212,7 +218,8 @@ Response:
 
 ```json
 {
-  "access_token": "jwt",
+  "access_token": "***",
+  "refresh_token": "***",
   "token_type": "Bearer",
   "expires_at": "2026-04-25T00:00:00Z",
   "user": {
@@ -429,6 +436,7 @@ Quick notes:
 - the first registered user becomes active admin automatically
 - `owner_private` rows are scoped to the authenticated user
 - the same bearer token works for storage, data, push, and session endpoints
+- for a full external frontend auth flow, see `docs/auth-client.md` and `examples/auth-client-web/`
 
 ## Local development
 

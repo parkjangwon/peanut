@@ -1,0 +1,189 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Peanut Auth Client Example</title>
+    <style>
+      :root {
+        color-scheme: light;
+        font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        background: #f6f8fb;
+        color: #0f172a;
+      }
+      body {
+        margin: 0;
+        background: #f6f8fb;
+      }
+      .page {
+        max-width: 1100px;
+        margin: 0 auto;
+        padding: 24px;
+      }
+      h1, h2, h3 {
+        margin: 0 0 12px;
+      }
+      p {
+        margin: 0 0 12px;
+        line-height: 1.5;
+      }
+      .grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+        gap: 16px;
+      }
+      .panel {
+        background: #fff;
+        border: 1px solid #dbe3ee;
+        border-radius: 14px;
+        padding: 16px;
+      }
+      label {
+        display: block;
+        font-size: 12px;
+        font-weight: 600;
+        color: #475569;
+        margin: 0 0 6px;
+      }
+      input, textarea, button {
+        font: inherit;
+      }
+      input, textarea {
+        width: 100%;
+        box-sizing: border-box;
+        border: 1px solid #cbd5e1;
+        border-radius: 10px;
+        padding: 10px 12px;
+        margin-bottom: 12px;
+        background: #fff;
+        color: #0f172a;
+      }
+      textarea {
+        min-height: 120px;
+        resize: vertical;
+      }
+      .row {
+        display: flex;
+        gap: 8px;
+        flex-wrap: wrap;
+      }
+      button {
+        border: 1px solid #cbd5e1;
+        background: #f8fafc;
+        color: #0f172a;
+        border-radius: 10px;
+        padding: 10px 12px;
+        cursor: pointer;
+      }
+      button.primary {
+        background: #2563eb;
+        color: white;
+        border-color: #2563eb;
+      }
+      pre {
+        margin: 0;
+        white-space: pre-wrap;
+        word-break: break-word;
+        font-size: 12px;
+        line-height: 1.5;
+        background: #0f172a;
+        color: #e2e8f0;
+        border-radius: 12px;
+        padding: 14px;
+        min-height: 180px;
+      }
+      .muted {
+        color: #64748b;
+        font-size: 14px;
+      }
+      .pill {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        border-radius: 999px;
+        padding: 6px 10px;
+        border: 1px solid #dbe3ee;
+        background: #fff;
+        margin-bottom: 10px;
+        font-size: 12px;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="page">
+      <div class="panel" style="margin-bottom: 16px">
+        <h1>Peanut Auth Client Example</h1>
+        <p class="muted">
+          A tiny dependency-free browser client for Peanut Auth. Tokens are kept in memory only for demo purposes.
+        </p>
+      </div>
+
+      <div class="grid">
+        <section class="panel">
+          <h2>Connection</h2>
+          <label for="baseUrl">Peanut base URL</label>
+          <input id="baseUrl" value="http://127.0.0.1:3000" />
+          <div class="row">
+            <button id="saveBaseUrl" class="primary">Save base URL</button>
+            <button id="loadMe">Load me</button>
+            <button id="refreshSession">Refresh session</button>
+            <button id="logout">Logout</button>
+          </div>
+        </section>
+
+        <section class="panel">
+          <h2>Register / Login</h2>
+          <label for="email">Email</label>
+          <input id="email" type="email" value="admin@example.com" />
+          <label for="password">Password</label>
+          <input id="password" type="password" value="password123" />
+          <div class="row">
+            <button id="register">Register</button>
+            <button id="login" class="primary">Login</button>
+          </div>
+        </section>
+
+        <section class="panel">
+          <h2>Password flows</h2>
+          <label for="currentPassword">Current password</label>
+          <input id="currentPassword" type="password" value="password123" />
+          <label for="newPassword">New password</label>
+          <input id="newPassword" type="password" value="new-password-123" />
+          <label for="resetToken">Reset token</label>
+          <input id="resetToken" />
+          <div class="row">
+            <button id="changePassword">Change password</button>
+            <button id="forgotPassword">Forgot password</button>
+            <button id="resetPassword">Reset password</button>
+          </div>
+        </section>
+
+        <section class="panel">
+          <h2>Sessions</h2>
+          <div class="row">
+            <button id="listSessions">List sessions</button>
+            <button id="revokeFirstSession">Revoke first session</button>
+            <button id="revokeAllSessions">Revoke all sessions</button>
+          </div>
+          <p class="muted" style="margin-top: 12px">
+            Revoke first session uses the first session returned by the latest session list call.
+          </p>
+        </section>
+
+        <section class="panel" style="grid-column: 1 / -1">
+          <h2>Current auth state</h2>
+          <div class="pill">access token in memory: <strong id="accessState">empty</strong></div>
+          <div class="pill">refresh token in memory: <strong id="refreshState">empty</strong></div>
+          <pre id="stateOutput"></pre>
+        </section>
+
+        <section class="panel" style="grid-column: 1 / -1">
+          <h2>Last response</h2>
+          <pre id="output"></pre>
+        </section>
+      </div>
+    </div>
+
+    <script type="module" src="./app.js"></script>
+  </body>
+</html>
