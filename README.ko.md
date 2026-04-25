@@ -104,8 +104,8 @@ Peanut은 이제 작은 백엔드 확장용 함수 런타임을 함께 제공한
 현재 가능한 것:
 - admin이 SQLite에 function 메타데이터와 소스 저장
 - JavaScript / TypeScript 함수 코드를 콘솔/API에서 관리
-- function별 endpoint slug와 timeout 설정
-- `POST /api/functions/endpoints/:endpoint_slug`로 인증된 호출
+- function별 endpoint slug, invoke policy, env/secrets JSON, timeout 설정
+- `POST /api/functions/endpoints/:endpoint_slug`로 인증 또는 public 호출
 - temp working directory + timeout 제한을 둔 별도 Node subprocess 실행
 - invocation 로그를 SQLite에 저장
 

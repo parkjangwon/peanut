@@ -1,4 +1,4 @@
-use std::env;
+use std::{collections::BTreeMap, env};
 
 use axum::{
     extract::{Path, State},
@@ -22,6 +22,7 @@ pub struct FunctionSummary {
     pub display_name: String,
     pub endpoint_slug: String,
     pub runtime: String,
+    pub invoke_policy: String,
     pub timeout_ms: i64,
     pub enabled: bool,
     pub updated_at: String,
@@ -35,6 +36,8 @@ pub struct FunctionDetail {
     pub endpoint_slug: String,
     pub runtime: String,
     pub source_code: String,
+    pub invoke_policy: String,
+    pub env_json: String,
     pub timeout_ms: i64,
     pub enabled: bool,
     pub created_by: String,
@@ -88,6 +91,8 @@ pub struct UpsertFunctionRequest {
     pub source_code: String,
     pub timeout_ms: Option<i64>,
     pub enabled: Option<bool>,
+    pub invoke_policy: Option<String>,
+    pub env: Option<std::collections::BTreeMap<String, String>>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -98,6 +103,8 @@ pub struct UpdateFunctionRequest {
     pub source_code: Option<String>,
     pub timeout_ms: Option<i64>,
     pub enabled: Option<bool>,
+    pub invoke_policy: Option<String>,
+    pub env: Option<std::collections::BTreeMap<String, String>>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -115,7 +122,7 @@ pub async fn list_functions(
     }
 
     match sqlx::query_as::<_, FunctionSummary>(
-        "SELECT id, name, display_name, endpoint_slug, runtime, timeout_ms, enabled, updated_at FROM functions ORDER BY updated_at DESC, name ASC",
+        "SELECT id, name, display_name, endpoint_slug, runtime, invoke_policy, timeout_ms, enabled, updated_at FROM functions ORDER BY updated_at DESC, name ASC",
     )
     .fetch_all(&state.pool)
     .await
@@ -143,8 +150,8 @@ pub async fn create_function(
     let result = sqlx::query(
         r#"
         INSERT INTO functions (
-            id, name, display_name, endpoint_slug, runtime, source_code, timeout_ms, enabled, created_by, updated_by
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            id, name, display_name, endpoint_slug, runtime, source_code, invoke_policy, env_json, timeout_ms, enabled, created_by, updated_by
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         "#,
     )
     .bind(&function_id)
@@ -153,6 +160,8 @@ pub async fn create_function(
     .bind(&validated.endpoint_slug)
     .bind(&validated.runtime)
     .bind(&validated.source_code)
+    .bind(&validated.invoke_policy)
+    .bind(&validated.env_json)
     .bind(validated.timeout_ms)
     .bind(validated.enabled)
     .bind(&claims.sub)
@@ -218,7 +227,7 @@ pub async fn update_function(
     match sqlx::query(
         r#"
         UPDATE functions
-        SET display_name = ?, endpoint_slug = ?, runtime = ?, source_code = ?, timeout_ms = ?, enabled = ?, updated_by = ?, updated_at = CURRENT_TIMESTAMP
+        SET display_name = ?, endpoint_slug = ?, runtime = ?, source_code = ?, invoke_policy = ?, env_json = ?, timeout_ms = ?, enabled = ?, updated_by = ?, updated_at = CURRENT_TIMESTAMP
         WHERE id = ?
         "#,
     )
@@ -226,6 +235,8 @@ pub async fn update_function(
     .bind(&validated.endpoint_slug)
     .bind(&validated.runtime)
     .bind(&validated.source_code)
+    .bind(&validated.invoke_policy)
+    .bind(&validated.env_json)
     .bind(validated.timeout_ms)
     .bind(validated.enabled)
     .bind(&claims.sub)
@@ -305,7 +316,7 @@ pub async fn list_function_invocations(
 
 pub async fn invoke_function(
     State(state): State<crate::AppState>,
-    Extension(claims): Extension<Claims>,
+    claims: Option<Extension<Claims>>,
     Path(endpoint_slug): Path<String>,
     Json(payload): Json<InvokeFunctionRequest>,
 ) -> Response {
@@ -319,6 +330,10 @@ pub async fn invoke_function(
 
     if !function.enabled {
         return json_error(StatusCode::CONFLICT, "function is disabled");
+    }
+
+    if let Some(response) = require_invoke_policy(&function, claims.as_ref()) {
+        return response;
     }
 
     let invocation_id = Uuid::new_v4().to_string();
@@ -340,10 +355,14 @@ pub async fn invoke_function(
         return json_error(StatusCode::INTERNAL_SERVER_ERROR, "failed to create invocation log");
     }
 
-    let auth_payload = serde_json::json!({
-        "user_id": claims.sub,
-        "is_admin": claims.is_admin,
-    });
+    let auth_payload = match claims.as_ref() {
+        Some(Extension(claims)) => serde_json::json!({
+            "user_id": claims.sub,
+            "is_admin": claims.is_admin,
+        }),
+        None => Value::Null,
+    };
+    let env_payload = serde_json::to_value(parse_env_map(&function.env_json)).unwrap_or(Value::Null);
     let sandbox_result = execute_in_sandbox(
         SandboxExecutionRequest {
             runtime: &function.runtime,
@@ -351,6 +370,7 @@ pub async fn invoke_function(
             function_name: &function.name,
             request_payload: payload.input,
             auth_payload,
+            env_payload,
             timeout_ms: function.timeout_ms,
         },
         &env::temp_dir(),
@@ -433,6 +453,26 @@ fn require_admin(claims: &Claims) -> Option<Response> {
     }
 }
 
+
+fn require_invoke_policy(function: &FunctionDetail, claims: Option<&Extension<Claims>>) -> Option<Response> {
+    match function.invoke_policy.as_str() {
+        "public" => None,
+        "authenticated" => {
+            if claims.is_some() {
+                None
+            } else {
+                Some(json_error(StatusCode::UNAUTHORIZED, "authentication required for function invoke"))
+            }
+        }
+        "admin_only" => match claims {
+            Some(Extension(claims)) if claims.is_admin => None,
+            Some(_) => Some(json_error(StatusCode::FORBIDDEN, "admin access required for function invoke")),
+            None => Some(json_error(StatusCode::UNAUTHORIZED, "authentication required for function invoke")),
+        },
+        _ => Some(json_error(StatusCode::INTERNAL_SERVER_ERROR, "invalid invoke policy")),
+    }
+}
+
 #[derive(Debug, Clone)]
 struct ValidatedFunction {
     id: String,
@@ -441,6 +481,8 @@ struct ValidatedFunction {
     endpoint_slug: String,
     runtime: String,
     source_code: String,
+    invoke_policy: String,
+    env_json: String,
     timeout_ms: i64,
     enabled: bool,
 }
@@ -451,6 +493,8 @@ fn validate_create_payload(payload: UpsertFunctionRequest) -> Result<ValidatedFu
     let endpoint_slug = normalize_identifier(&payload.endpoint_slug, "endpoint_slug")?;
     let runtime = normalize_runtime(&payload.runtime)?;
     let source_code = normalize_non_empty(&payload.source_code, "source_code")?;
+    let invoke_policy = normalize_invoke_policy(payload.invoke_policy.as_deref().unwrap_or("authenticated"))?;
+    let env_json = normalize_env_json(payload.env.unwrap_or_default())?;
     let timeout_ms = normalize_timeout(payload.timeout_ms.unwrap_or(3000))?;
     let enabled = payload.enabled.unwrap_or(true);
 
@@ -461,6 +505,8 @@ fn validate_create_payload(payload: UpsertFunctionRequest) -> Result<ValidatedFu
         endpoint_slug,
         runtime,
         source_code,
+        invoke_policy,
+        env_json,
         timeout_ms,
         enabled,
     })
@@ -474,6 +520,11 @@ fn validate_update_payload(
     let endpoint_slug = normalize_identifier(payload.endpoint_slug.as_deref().unwrap_or(&existing.endpoint_slug), "endpoint_slug")?;
     let runtime = normalize_runtime(payload.runtime.as_deref().unwrap_or(&existing.runtime))?;
     let source_code = normalize_non_empty(payload.source_code.as_deref().unwrap_or(&existing.source_code), "source_code")?;
+    let invoke_policy = normalize_invoke_policy(payload.invoke_policy.as_deref().unwrap_or(&existing.invoke_policy))?;
+    let env_json = normalize_env_json(match payload.env {
+        Some(env) => env,
+        None => parse_env_map(&existing.env_json),
+    })?;
     let timeout_ms = normalize_timeout(payload.timeout_ms.unwrap_or(existing.timeout_ms))?;
     let enabled = payload.enabled.unwrap_or(existing.enabled);
 
@@ -484,6 +535,8 @@ fn validate_update_payload(
         endpoint_slug,
         runtime,
         source_code,
+        invoke_policy,
+        env_json,
         timeout_ms,
         enabled,
     })
@@ -522,6 +575,31 @@ fn normalize_runtime(value: &str) -> Result<String, String> {
     }
 }
 
+
+fn normalize_invoke_policy(value: &str) -> Result<String, String> {
+    let value = value.trim().to_lowercase();
+    match value.as_str() {
+        "public" | "authenticated" | "admin_only" => Ok(value),
+        _ => Err("invoke_policy must be public, authenticated, or admin_only".to_string()),
+    }
+}
+
+fn normalize_env_json(values: BTreeMap<String, String>) -> Result<String, String> {
+    for key in values.keys() {
+        if key.is_empty() {
+            return Err("env keys must not be empty".to_string());
+        }
+        if !key.chars().all(|ch| ch.is_ascii_uppercase() || ch.is_ascii_digit() || ch == '_') {
+            return Err("env keys may only contain uppercase letters, digits, and underscores".to_string());
+        }
+    }
+    serde_json::to_string(&values).map_err(|_| "failed to encode env map".to_string())
+}
+
+fn parse_env_map(env_json: &str) -> BTreeMap<String, String> {
+    serde_json::from_str(env_json).unwrap_or_default()
+}
+
 fn normalize_timeout(timeout_ms: i64) -> Result<i64, String> {
     if (100..=10_000).contains(&timeout_ms) {
         Ok(timeout_ms)
@@ -540,7 +618,7 @@ async fn load_function_by_name(
     name: &str,
 ) -> Result<FunctionDetail, LoadFunctionError> {
     sqlx::query_as::<_, FunctionDetail>(
-        "SELECT id, name, display_name, endpoint_slug, runtime, source_code, timeout_ms, enabled, created_by, updated_by, created_at, updated_at FROM functions WHERE name = ?",
+        "SELECT id, name, display_name, endpoint_slug, runtime, source_code, invoke_policy, env_json, timeout_ms, enabled, created_by, updated_by, created_at, updated_at FROM functions WHERE name = ?",
     )
     .bind(name)
     .fetch_optional(pool)
@@ -554,7 +632,7 @@ async fn load_function_by_endpoint(
     endpoint_slug: &str,
 ) -> Result<FunctionDetail, LoadFunctionError> {
     sqlx::query_as::<_, FunctionDetail>(
-        "SELECT id, name, display_name, endpoint_slug, runtime, source_code, timeout_ms, enabled, created_by, updated_by, created_at, updated_at FROM functions WHERE endpoint_slug = ?",
+        "SELECT id, name, display_name, endpoint_slug, runtime, source_code, invoke_policy, env_json, timeout_ms, enabled, created_by, updated_by, created_at, updated_at FROM functions WHERE endpoint_slug = ?",
     )
     .bind(endpoint_slug)
     .fetch_optional(pool)
@@ -606,6 +684,8 @@ mod tests {
                 source_code: "export default async function handler(ctx) { return { greeting: `hello ${ctx.request.input.name}` } }".to_string(),
                 timeout_ms: Some(1500),
                 enabled: Some(true),
+                invoke_policy: Some("authenticated".to_string()),
+                env: None,
             }),
         )
         .await;
@@ -613,7 +693,7 @@ mod tests {
 
         let invoke_response = invoke_function(
             State(state.clone()),
-            Extension(claims(&admin.user.id, true)),
+            Some(Extension(claims(&admin.user.id, true))),
             Path("hello-fn".to_string()),
             Json(InvokeFunctionRequest {
                 input: serde_json::json!({ "name": "jangwon" }),
@@ -635,6 +715,96 @@ mod tests {
         let invocations_body: FunctionInvocationsResponse = test_support::response_json(invocations_response).await;
         assert_eq!(invocations_body.invocations.len(), 1);
         assert_eq!(invocations_body.invocations[0].status, "succeeded");
+    }
+
+    #[tokio::test]
+    async fn test_function_env_is_available_and_public_policy_allows_unauthenticated_invoke() {
+        let (state, _dir) = test_support::make_test_state().await;
+        let admin = register_admin(state.clone()).await;
+        let mut env = std::collections::BTreeMap::new();
+        env.insert("APP_SECRET".to_string(), "peanut-secret".to_string());
+
+        let create_response = create_function(
+            State(state.clone()),
+            Extension(claims(&admin.user.id, true)),
+            Json(UpsertFunctionRequest {
+                name: "public_fn".to_string(),
+                display_name: "Public function".to_string(),
+                endpoint_slug: "public-fn".to_string(),
+                runtime: "javascript".to_string(),
+                source_code: "export default async function handler(ctx) { return { secret: ctx.env.APP_SECRET, caller: ctx.auth?.user_id ?? 'anonymous' } }".to_string(),
+                timeout_ms: Some(1500),
+                enabled: Some(true),
+                invoke_policy: Some("public".to_string()),
+                env: Some(env),
+            }),
+        )
+        .await;
+        assert_eq!(create_response.status(), StatusCode::CREATED);
+
+        let invoke_response = invoke_function(
+            State(state),
+            None,
+            Path("public-fn".to_string()),
+            Json(InvokeFunctionRequest {
+                input: serde_json::json!({}),
+            }),
+        )
+        .await;
+        assert_eq!(invoke_response.status(), StatusCode::OK);
+        let invoke_body: InvokeFunctionResponse = test_support::response_json(invoke_response).await;
+        assert_eq!(invoke_body.response, serde_json::json!({ "secret": "peanut-secret", "caller": "anonymous" }));
+    }
+
+    #[tokio::test]
+    async fn test_admin_only_policy_rejects_non_admin_invoke() {
+        let (state, _dir) = test_support::make_test_state().await;
+        let admin = register_admin(state.clone()).await;
+        let member = auth::register(
+            State(state.clone()),
+            Json(auth::RegisterRequest {
+                email: "member2@example.com".to_string(),
+                password: "secret123".to_string(),
+            }),
+        )
+        .await;
+        let member: auth::RegisterResponse = test_support::response_json(member).await;
+        let activate_response = crate::api::admin::activate_user(
+            State(state.clone()),
+            Extension(claims(&admin.user.id, true)),
+            Path(member.user.id.clone()),
+        )
+        .await;
+        assert_eq!(activate_response.status(), StatusCode::OK);
+
+        let create_response = create_function(
+            State(state.clone()),
+            Extension(claims(&admin.user.id, true)),
+            Json(UpsertFunctionRequest {
+                name: "admin_only_fn".to_string(),
+                display_name: "Admin only function".to_string(),
+                endpoint_slug: "admin-only-fn".to_string(),
+                runtime: "javascript".to_string(),
+                source_code: "export default async function handler() { return { ok: true } }".to_string(),
+                timeout_ms: Some(1500),
+                enabled: Some(true),
+                invoke_policy: Some("admin_only".to_string()),
+                env: None,
+            }),
+        )
+        .await;
+        assert_eq!(create_response.status(), StatusCode::CREATED);
+
+        let invoke_response = invoke_function(
+            State(state),
+            Some(Extension(claims(&member.user.id, false))),
+            Path("admin-only-fn".to_string()),
+            Json(InvokeFunctionRequest {
+                input: serde_json::json!({}),
+            }),
+        )
+        .await;
+        assert_eq!(invoke_response.status(), StatusCode::FORBIDDEN);
     }
 
     #[tokio::test]
@@ -670,6 +840,8 @@ mod tests {
                 source_code: "export default async function handler() { return { ok: true } }".to_string(),
                 timeout_ms: Some(1500),
                 enabled: Some(true),
+                invoke_policy: Some("authenticated".to_string()),
+                env: None,
             }),
         )
         .await;
@@ -692,6 +864,8 @@ mod tests {
                 source_code: "export async function handler(): Promise<{ ok: boolean }> { return { ok: true } }".to_string(),
                 timeout_ms: Some(1500),
                 enabled: Some(false),
+                invoke_policy: Some("authenticated".to_string()),
+                env: None,
             }),
         )
         .await;
@@ -699,7 +873,7 @@ mod tests {
 
         let invoke_response = invoke_function(
             State(state),
-            Extension(claims(&admin.user.id, true)),
+            Some(Extension(claims(&admin.user.id, true))),
             Path("disabled-fn".to_string()),
             Json(InvokeFunctionRequest {
                 input: serde_json::json!({}),

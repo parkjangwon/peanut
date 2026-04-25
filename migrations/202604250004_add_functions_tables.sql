@@ -5,6 +5,8 @@ CREATE TABLE IF NOT EXISTS functions (
     endpoint_slug TEXT NOT NULL UNIQUE,
     runtime TEXT NOT NULL,
     source_code TEXT NOT NULL,
+    invoke_policy TEXT NOT NULL DEFAULT 'authenticated',
+    env_json TEXT NOT NULL DEFAULT '{}',
     timeout_ms INTEGER NOT NULL DEFAULT 3000,
     enabled INTEGER NOT NULL DEFAULT 1,
     created_by TEXT NOT NULL,

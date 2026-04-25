@@ -90,8 +90,7 @@ async fn main() {
         .route("/functions/:name", get(api::functions::get_function))
         .route("/functions/:name", patch(api::functions::update_function))
         .route("/functions/:name", delete(api::functions::delete_function))
-        .route("/functions/:name/invocations", get(api::functions::list_function_invocations))
-        .route("/functions/endpoints/:endpoint_slug", post(api::functions::invoke_function));
+        .route("/functions/:name/invocations", get(api::functions::list_function_invocations));
 
     let data_routes = Router::new()
         .route("/data/tables", get(api::data::list_tables))
@@ -122,6 +121,7 @@ async fn main() {
         .route("/api/health", get(api::health::health_check))
         .route("/api/register", post(api::auth::register))
         .route("/api/login", post(api::auth::login))
+        .route("/api/functions/endpoints/:endpoint_slug", post(api::functions::invoke_function))
         .nest("/api", protected_routes)
         .fallback(crate::console::static_handler)
         .with_state(state);

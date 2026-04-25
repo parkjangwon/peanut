@@ -138,6 +138,7 @@ type ManagedFunctionSummary = {
   display_name: string
   endpoint_slug: string
   runtime: string
+  invoke_policy: string
   timeout_ms: number
   enabled: boolean
   updated_at: string
@@ -154,6 +155,8 @@ type ManagedFunctionDetail = {
   endpoint_slug: string
   runtime: string
   source_code: string
+  invoke_policy: string
+  env_json: string
   timeout_ms: number
   enabled: boolean
   created_by: string
@@ -281,6 +284,10 @@ export default function ConsoleClient() {
   const [functionEndpointSlug, setFunctionEndpointSlug] = useState('hello-fn')
   const [functionRuntime, setFunctionRuntime] = useState<'javascript' | 'typescript'>('typescript')
   const [functionSourceCode, setFunctionSourceCode] = useState(DEFAULT_FUNCTION_SOURCE)
+  const [functionInvokePolicy, setFunctionInvokePolicy] = useState<'public' | 'authenticated' | 'admin_only'>('authenticated')
+  const [functionEnvJson, setFunctionEnvJson] = useState(`{
+  "APP_SECRET": "peanut-secret"
+}`)
   const [functionTimeoutMs, setFunctionTimeoutMs] = useState('3000')
   const [functionEnabled, setFunctionEnabled] = useState(true)
   const [functionInvokeInputJson, setFunctionInvokeInputJson] = useState(`{
@@ -508,6 +515,8 @@ export default function ConsoleClient() {
       setFunctionEndpointSlug(detailData.function.endpoint_slug)
       setFunctionRuntime(detailData.function.runtime as 'javascript' | 'typescript')
       setFunctionSourceCode(detailData.function.source_code)
+      setFunctionInvokePolicy(detailData.function.invoke_policy as 'public' | 'authenticated' | 'admin_only')
+      setFunctionEnvJson(detailData.function.env_json)
       setFunctionTimeoutMs(String(detailData.function.timeout_ms))
       setFunctionEnabled(detailData.function.enabled)
       setFunctionsStatus(`function ${detailData.function.name} · endpoint /api/functions/endpoints/${detailData.function.endpoint_slug}`)
@@ -1037,6 +1046,8 @@ export default function ConsoleClient() {
           endpoint_slug: functionEndpointSlug,
           runtime: functionRuntime,
           source_code: functionSourceCode,
+          invoke_policy: functionInvokePolicy,
+          env: JSON.parse(functionEnvJson),
           timeout_ms: Number(functionTimeoutMs),
           enabled: functionEnabled,
         }),
@@ -1074,6 +1085,8 @@ export default function ConsoleClient() {
           endpoint_slug: functionEndpointSlug,
           runtime: functionRuntime,
           source_code: functionSourceCode,
+          invoke_policy: functionInvokePolicy,
+          env: JSON.parse(functionEnvJson),
           timeout_ms: Number(functionTimeoutMs),
           enabled: functionEnabled,
         }),
@@ -1910,6 +1923,13 @@ export default function ConsoleClient() {
                         <input className={inputClassName} onChange={(event) => setFunctionTimeoutMs(event.target.value)} value={functionTimeoutMs} />
                       </div>
                     </Field>
+                    <Field label="Invoke policy">
+                      <select className={inputClassName} onChange={(event) => setFunctionInvokePolicy(event.target.value as 'public' | 'authenticated' | 'admin_only')} value={functionInvokePolicy}>
+                        <option value="authenticated">authenticated</option>
+                        <option value="admin_only">admin_only</option>
+                        <option value="public">public</option>
+                      </select>
+                    </Field>
                   </div>
                   <label className="inline-flex items-center gap-3 text-sm text-neutral-300">
                     <input checked={functionEnabled} onChange={(event) => setFunctionEnabled(event.target.checked)} type="checkbox" />
@@ -1917,6 +1937,9 @@ export default function ConsoleClient() {
                   </label>
                   <Field label="Function source">
                     <textarea className="min-h-[260px] rounded-3xl border border-neutral-800 bg-neutral-950 px-4 py-3 text-sm text-neutral-100 outline-none transition focus:border-sky-500" onChange={(event) => setFunctionSourceCode(event.target.value)} value={functionSourceCode} />
+                  </Field>
+                  <Field label="Function env / secrets JSON">
+                    <textarea className="min-h-[120px] rounded-3xl border border-neutral-800 bg-neutral-950 px-4 py-3 text-sm text-neutral-100 outline-none transition focus:border-amber-500" onChange={(event) => setFunctionEnvJson(event.target.value)} value={functionEnvJson} />
                   </Field>
                   <Field label="Invoke input JSON">
                     <textarea className="min-h-[120px] rounded-3xl border border-neutral-800 bg-neutral-950 px-4 py-3 text-sm text-neutral-100 outline-none transition focus:border-fuchsia-500" onChange={(event) => setFunctionInvokeInputJson(event.target.value)} value={functionInvokeInputJson} />
@@ -1938,7 +1961,7 @@ export default function ConsoleClient() {
                                 {item.enabled ? 'enabled' : 'disabled'}
                               </span>
                             </div>
-                            <p className="mt-1 text-xs text-neutral-500">{item.name} · {item.runtime} · /api/functions/endpoints/{item.endpoint_slug}</p>
+                            <p className="mt-1 text-xs text-neutral-500">{item.name} · {item.runtime} · {item.invoke_policy} · /api/functions/endpoints/{item.endpoint_slug}</p>
                           </button>
                         ))
                       )}

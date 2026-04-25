@@ -40,6 +40,7 @@ pub struct SandboxExecutionRequest<'a> {
     pub function_name: &'a str,
     pub request_payload: Value,
     pub auth_payload: Value,
+    pub env_payload: Value,
     pub timeout_ms: i64,
 }
 
@@ -82,6 +83,7 @@ pub async fn execute_in_sandbox(
             "input": request.request_payload,
         },
         "auth": request.auth_payload,
+        "env": request.env_payload,
         "function": {
             "name": request.function_name,
             "runtime": request.runtime,
