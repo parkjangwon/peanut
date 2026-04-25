@@ -132,7 +132,98 @@ type VapidPublicKeyResponse = {
   public_key: string
 }
 
+type ManagedFunctionSummary = {
+  id: string
+  name: string
+  display_name: string
+  endpoint_slug: string
+  runtime: string
+  invoke_policy: string
+  rate_limit_per_minute: number
+  api_key_present: boolean
+  timeout_ms: number
+  enabled: boolean
+  updated_at: string
+}
+
+type ManagedFunctionsResponse = {
+  functions: ManagedFunctionSummary[]
+}
+
+type ManagedFunctionDetail = {
+  id: string
+  name: string
+  display_name: string
+  endpoint_slug: string
+  runtime: string
+  source_code: string
+  invoke_policy: string
+  env_json: string
+  allowed_origins_json: string
+  rate_limit_per_minute: number
+  api_key_present: boolean
+  timeout_ms: number
+  enabled: boolean
+  created_by: string
+  updated_by: string
+  created_at: string
+  updated_at: string
+}
+
+type ManagedFunctionResponse = {
+  function: ManagedFunctionDetail
+}
+
+type ManagedFunctionInvocation = {
+  id: string
+  function_id: string
+  status: string
+  request_json: string | null
+  response_json: string | null
+  error: string | null
+  duration_ms: number | null
+  created_at: string
+  finished_at: string | null
+}
+
+type ManagedFunctionInvocationsResponse = {
+  invocations: ManagedFunctionInvocation[]
+}
+
+type ManagedFunctionInvocationResponse = {
+  invocation: ManagedFunctionInvocation
+}
+
+type InvokeManagedFunctionResponse = {
+  invocation_id: string
+  status: string
+  response: unknown
+  duration_ms: number
+}
+
 const RECENT_KEYS_KEY = 'peanut.console.recentKeys'
+const DEFAULT_FUNCTION_SOURCE = [
+  'export async function handler(ctx: {',
+  '  request: { input: { name?: string } }',
+  '  auth: { user_id: string; is_admin: boolean }',
+  '  function: { name: string; runtime: string }',
+  '}) {',
+  '  return {',
+  "    greeting: `hello ${ctx.request.input.name ?? 'world'}`,",
+  '    user_id: ctx.auth.user_id,',
+  '    function_name: ctx.function.name,',
+  '  }',
+  '}',
+].join('\n')
+
+const CONSOLE_SECTIONS = [
+  { id: 'auth', label: 'Auth' },
+  { id: 'database', label: 'Database' },
+  { id: 'storage', label: 'Storage' },
+  { id: 'push-notification', label: 'Push Notification' },
+  { id: 'function', label: 'Function' },
+  { id: 'setting', label: 'Setting' },
+] as const
 
 type ConsoleView = 'overview' | 'auth' | 'data' | 'storage' | 'push' | 'admin'
 type StorageSource = 'server' | 'recent'
@@ -197,6 +288,30 @@ export default function ConsoleClient() {
   const [pushStatus, setPushStatus] = useState('push 작업 대기 중')
   const [subscriptions, setSubscriptions] = useState<PushSubscription[]>([])
   const [queueItems, setQueueItems] = useState<PushQueueEntry[]>([])
+  const [functionsStatus, setFunctionsStatus] = useState('function 작업 대기 중')
+  const [functions, setFunctions] = useState<ManagedFunctionSummary[]>([])
+  const [selectedFunctionName, setSelectedFunctionName] = useState('')
+  const [selectedFunctionDetail, setSelectedFunctionDetail] = useState<ManagedFunctionDetail | null>(null)
+  const [functionInvocations, setFunctionInvocations] = useState<ManagedFunctionInvocation[]>([])
+  const [selectedInvocationDetail, setSelectedInvocationDetail] = useState<ManagedFunctionInvocation | null>(null)
+  const [showFunctionSecrets, setShowFunctionSecrets] = useState(false)
+  const [functionName, setFunctionName] = useState('hello_fn')
+  const [functionDisplayName, setFunctionDisplayName] = useState('Hello function')
+  const [functionEndpointSlug, setFunctionEndpointSlug] = useState('hello-fn')
+  const [functionRuntime, setFunctionRuntime] = useState<'javascript' | 'typescript'>('typescript')
+  const [functionSourceCode, setFunctionSourceCode] = useState(DEFAULT_FUNCTION_SOURCE)
+  const [functionInvokePolicy, setFunctionInvokePolicy] = useState<'public' | 'authenticated' | 'admin_only' | 'api_key'>('authenticated')
+  const [functionEnvJson, setFunctionEnvJson] = useState(`{
+  "APP_SECRET": "peanut-secret"
+}`)
+  const [functionAllowedOriginsJson, setFunctionAllowedOriginsJson] = useState(`[]`)
+  const [functionApiKey, setFunctionApiKey] = useState('')
+  const [functionRateLimitPerMinute, setFunctionRateLimitPerMinute] = useState('60')
+  const [functionTimeoutMs, setFunctionTimeoutMs] = useState('3000')
+  const [functionEnabled, setFunctionEnabled] = useState(true)
+  const [functionInvokeInputJson, setFunctionInvokeInputJson] = useState(`{
+  "name": "jangwon"
+}`)
   const [dataStatus, setDataStatus] = useState('data 작업 대기 중')
   const [dataTables, setDataTables] = useState<DataTableSummary[]>([])
   const [selectedTable, setSelectedTable] = useState('')
@@ -385,6 +500,59 @@ export default function ConsoleClient() {
     [refreshDataRows, selectedTable],
   )
 
+  const refreshFunctions = useCallback(
+    async (currentToken: string, preferredFunction?: string) => {
+      const response = await fetch('/api/functions', {
+        headers: authHeaders(currentToken),
+      })
+      const data = await readJsonOrThrow<ManagedFunctionsResponse>(response)
+      setFunctions(data.functions)
+
+      const requestedName = preferredFunction?.trim() || selectedFunctionName.trim()
+      const availableNames = new Set(data.functions.map((item) => item.name))
+      const nextName = requestedName && availableNames.has(requestedName) ? requestedName : data.functions[0]?.name || ''
+
+      if (!nextName) {
+        setSelectedFunctionName('')
+        setSelectedFunctionDetail(null)
+        setFunctionInvocations([])
+        setSelectedInvocationDetail(null)
+        setFunctionsStatus('등록된 function이 없어. admin으로 먼저 만들어줘.')
+        return
+      }
+
+      const [detailResponse, invocationsResponse] = await Promise.all([
+        fetch(`/api/functions/${encodeURIComponent(nextName)}`, {
+          headers: authHeaders(currentToken),
+        }),
+        fetch(`/api/functions/${encodeURIComponent(nextName)}/invocations`, {
+          headers: authHeaders(currentToken),
+        }),
+      ])
+
+      const detailData = await readJsonOrThrow<ManagedFunctionResponse>(detailResponse)
+      const invocationsData = await readJsonOrThrow<ManagedFunctionInvocationsResponse>(invocationsResponse)
+      setSelectedFunctionName(nextName)
+      setSelectedFunctionDetail(detailData.function)
+      setFunctionInvocations(invocationsData.invocations)
+      setSelectedInvocationDetail(invocationsData.invocations[0] ?? null)
+      setFunctionName(detailData.function.name)
+      setFunctionDisplayName(detailData.function.display_name)
+      setFunctionEndpointSlug(detailData.function.endpoint_slug)
+      setFunctionRuntime(detailData.function.runtime as 'javascript' | 'typescript')
+      setFunctionSourceCode(detailData.function.source_code)
+      setFunctionInvokePolicy(detailData.function.invoke_policy as 'public' | 'authenticated' | 'admin_only' | 'api_key')
+      setFunctionEnvJson(detailData.function.env_json)
+      setFunctionAllowedOriginsJson(detailData.function.allowed_origins_json)
+      setFunctionRateLimitPerMinute(String(detailData.function.rate_limit_per_minute))
+      setFunctionApiKey('')
+      setFunctionTimeoutMs(String(detailData.function.timeout_ms))
+      setFunctionEnabled(detailData.function.enabled)
+      setFunctionsStatus(`function ${detailData.function.name} · endpoint /api/functions/endpoints/${detailData.function.endpoint_slug}`)
+    },
+    [selectedFunctionName],
+  )
+
   const refreshSession = useCallback(
     async (currentToken: string) => {
       const response = await fetch('/api/me', {
@@ -400,14 +568,20 @@ export default function ConsoleClient() {
         refreshVapidPublicKey(currentToken),
         refreshDataTables(currentToken),
         data.user.is_admin
-          ? refreshAdminUsers(currentToken)
+          ? Promise.all([refreshAdminUsers(currentToken), refreshFunctions(currentToken)]).then(() => undefined)
           : Promise.resolve().then(() => {
               setAdminUsers([])
               setAdminStatus('현재 사용자는 admin이 아니야.')
+              setFunctions([])
+              setSelectedFunctionName('')
+              setSelectedFunctionDetail(null)
+              setFunctionInvocations([])
+              setSelectedInvocationDetail(null)
+              setFunctionsStatus('현재 사용자는 function 관리 권한이 없어.')
             }),
       ])
     },
-    [refreshAdminUsers, refreshDataTables, refreshPushData, refreshStorageList, refreshVapidPublicKey],
+    [refreshAdminUsers, refreshDataTables, refreshFunctions, refreshPushData, refreshStorageList, refreshVapidPublicKey],
   )
 
   useEffect(() => {
@@ -944,6 +1118,182 @@ export default function ConsoleClient() {
     }
   }
 
+  async function createManagedFunction() {
+    if (!token) {
+      setFunctionsStatus('먼저 로그인해줘.')
+      return
+    }
+
+    setBusyAction('createManagedFunction')
+    try {
+      const response = await fetch('/api/functions', {
+        method: 'POST',
+        headers: {
+          ...authHeaders(token),
+          'content-type': 'application/json',
+        },
+        body: JSON.stringify({
+          name: functionName,
+          display_name: functionDisplayName,
+          endpoint_slug: functionEndpointSlug,
+          runtime: functionRuntime,
+          source_code: functionSourceCode,
+          invoke_policy: functionInvokePolicy,
+          env: JSON.parse(functionEnvJson),
+          api_key: functionApiKey || undefined,
+          allowed_origins: JSON.parse(functionAllowedOriginsJson),
+          rate_limit_per_minute: Number(functionRateLimitPerMinute),
+          timeout_ms: Number(functionTimeoutMs),
+          enabled: functionEnabled,
+        }),
+      })
+      const data = await readJsonOrThrow<ManagedFunctionResponse>(response)
+      setFunctionsStatus(`created ${data.function.name}`)
+      await refreshFunctions(token, data.function.name)
+    } catch (error) {
+      setFunctionsStatus(error instanceof Error ? error.message : 'function create failed')
+    } finally {
+      setBusyAction(null)
+    }
+  }
+
+  async function updateManagedFunction() {
+    if (!token) {
+      setFunctionsStatus('먼저 로그인해줘.')
+      return
+    }
+    if (!selectedFunctionName.trim()) {
+      setFunctionsStatus('먼저 수정할 function을 선택해줘.')
+      return
+    }
+
+    setBusyAction('updateManagedFunction')
+    try {
+      const response = await fetch(`/api/functions/${encodeURIComponent(selectedFunctionName)}`, {
+        method: 'PATCH',
+        headers: {
+          ...authHeaders(token),
+          'content-type': 'application/json',
+        },
+        body: JSON.stringify({
+          display_name: functionDisplayName,
+          endpoint_slug: functionEndpointSlug,
+          runtime: functionRuntime,
+          source_code: functionSourceCode,
+          invoke_policy: functionInvokePolicy,
+          env: JSON.parse(functionEnvJson),
+          api_key: functionApiKey || undefined,
+          allowed_origins: JSON.parse(functionAllowedOriginsJson),
+          rate_limit_per_minute: Number(functionRateLimitPerMinute),
+          timeout_ms: Number(functionTimeoutMs),
+          enabled: functionEnabled,
+        }),
+      })
+      const data = await readJsonOrThrow<ManagedFunctionResponse>(response)
+      setFunctionsStatus(`updated ${data.function.name}`)
+      await refreshFunctions(token, data.function.name)
+    } catch (error) {
+      setFunctionsStatus(error instanceof Error ? error.message : 'function update failed')
+    } finally {
+      setBusyAction(null)
+    }
+  }
+
+  async function deleteManagedFunction() {
+    if (!token) {
+      setFunctionsStatus('먼저 로그인해줘.')
+      return
+    }
+    if (!selectedFunctionName.trim()) {
+      setFunctionsStatus('먼저 삭제할 function을 선택해줘.')
+      return
+    }
+
+    setBusyAction('deleteManagedFunction')
+    try {
+      const response = await fetch(`/api/functions/${encodeURIComponent(selectedFunctionName)}`, {
+        method: 'DELETE',
+        headers: authHeaders(token),
+      })
+      const data = await readJsonOrThrow<MessageResponse>(response)
+      setFunctionsStatus(data.message)
+      await refreshFunctions(token, '')
+    } catch (error) {
+      setFunctionsStatus(error instanceof Error ? error.message : 'function delete failed')
+    } finally {
+      setBusyAction(null)
+    }
+  }
+
+  async function invokeManagedFunction() {
+    if (!token) {
+      setFunctionsStatus('먼저 로그인해줘.')
+      return
+    }
+    const endpoint = functionEndpointSlug.trim() || selectedFunctionDetail?.endpoint_slug || ''
+    if (!endpoint) {
+      setFunctionsStatus('먼저 호출할 endpoint를 준비해줘.')
+      return
+    }
+
+    setBusyAction('invokeManagedFunction')
+    try {
+      const input = JSON.parse(functionInvokeInputJson) as Record<string, unknown>
+      const response = await fetch(`/api/functions/endpoints/${encodeURIComponent(endpoint)}`, {
+        method: 'POST',
+        headers: {
+          ...authHeaders(token),
+          'content-type': 'application/json',
+        },
+        body: JSON.stringify({ input, api_key: functionApiKey || undefined }),
+      })
+      const data = await readJsonOrThrow<InvokeManagedFunctionResponse>(response)
+      setFunctionsStatus(`invoke ${data.status} · ${data.invocation_id.slice(0, 8)} · ${data.duration_ms}ms`)
+      if (selectedFunctionName.trim()) await refreshFunctions(token, selectedFunctionName)
+    } catch (error) {
+      setFunctionsStatus(error instanceof Error ? error.message : 'function invoke failed')
+    } finally {
+      setBusyAction(null)
+    }
+  }
+
+
+  async function loadInvocationDetail(invocationId: string) {
+    if (!token || !selectedFunctionName.trim()) {
+      return
+    }
+    try {
+      const response = await fetch(`/api/functions/${encodeURIComponent(selectedFunctionName)}/invocations/${encodeURIComponent(invocationId)}`, {
+        headers: authHeaders(token),
+      })
+      const data = await readJsonOrThrow<ManagedFunctionInvocationResponse>(response)
+      setSelectedInvocationDetail(data.invocation)
+    } catch (error) {
+      setFunctionsStatus(error instanceof Error ? error.message : 'function invocation load failed')
+    }
+  }
+
+  async function retrySelectedInvocation() {
+    if (!token || !selectedFunctionName.trim() || !selectedInvocationDetail) {
+      setFunctionsStatus('먼저 재실행할 invocation을 선택해줘.')
+      return
+    }
+    setBusyAction('retrySelectedInvocation')
+    try {
+      const response = await fetch(`/api/functions/${encodeURIComponent(selectedFunctionName)}/invocations/${encodeURIComponent(selectedInvocationDetail.id)}/retry`, {
+        method: 'POST',
+        headers: authHeaders(token),
+      })
+      const data = await readJsonOrThrow<InvokeManagedFunctionResponse>(response)
+      setFunctionsStatus(`retry ${data.status} · ${data.invocation_id.slice(0, 8)} · ${data.duration_ms}ms`)
+      await refreshFunctions(token, selectedFunctionName)
+    } catch (error) {
+      setFunctionsStatus(error instanceof Error ? error.message : 'function retry failed')
+    } finally {
+      setBusyAction(null)
+    }
+  }
+
   async function registerBrowserWebPush() {
     if (!token) {
       setPushStatus('먼저 로그인해줘.')
@@ -1089,6 +1439,7 @@ export default function ConsoleClient() {
                   <Badge tone={selectedTable ? 'info' : 'default'}>{selectedTable || 'no table selected'}</Badge>
                 </div>
               </div>
+            </div>
             </div>
 
             <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:hidden">

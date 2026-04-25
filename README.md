@@ -98,6 +98,24 @@ What this does not mean yet:
 - there is no polished browser service-worker setup flow in the embedded console yet
 - Web Push delivery requires VAPID runtime configuration
 
+### Peanut Functions (JS/TS sandbox MVP)
+Peanut now includes a minimal function runtime for small backend extensions.
+
+Current capabilities:
+- admin-managed functions stored in SQLite
+- JavaScript or TypeScript source managed from the console/API
+- per-function endpoint slug, invoke policy, env/secrets JSON, allowed origins, rate limit, and timeout
+- authenticated, public, admin-only, or api-key invoke policy through `POST /api/functions/endpoints/:endpoint_slug`
+- separate Node subprocess execution with a temp working directory and bounded runtime timeout
+- invocation logs stored in SQLite, with detail lookup and retry from the console/API
+
+Current constraints:
+- functions must export `default` or named `handler`
+- JSON input/output only
+- no arbitrary package installation
+- source containing blocked runtime escape patterns is rejected
+- this is a narrow sandboxed extension layer, not a full Lambda clone
+
 ### Console
 The embedded console supports:
 - health monitoring
