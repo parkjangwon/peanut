@@ -1,7 +1,8 @@
-use crate::push::ntfy::send_ntfy_notification;
+use crate::push::{ntfy::send_ntfy_notification, webpush::send_web_push};
 use sqlx::SqlitePool;
 use std::time::Duration;
 use tokio::time::sleep;
+use web_push::SubscriptionInfo;
 
 const MAX_RETRIES: i64 = 3;
 
@@ -17,6 +18,8 @@ struct PushQueueItem {
 #[derive(sqlx::FromRow)]
 struct SubscriptionRow {
     endpoint: String,
+    p256dh: String,
+    auth: String,
 }
 
 pub async fn start_push_worker(pool: SqlitePool) {
@@ -56,7 +59,7 @@ pub async fn process_queue(pool: &SqlitePool) -> Result<(), Box<dyn std::error::
         .await?;
 
         let subscriptions = sqlx::query_as::<_, SubscriptionRow>(
-            "SELECT endpoint FROM push_subscriptions WHERE user_id = ?",
+            "SELECT endpoint, p256dh, auth FROM push_subscriptions WHERE user_id = ?",
         )
         .bind(&item.user_id)
         .fetch_all(pool)
@@ -69,10 +72,21 @@ pub async fn process_queue(pool: &SqlitePool) -> Result<(), Box<dyn std::error::
 
         let mut last_error = None;
         for subscription in subscriptions {
-            if let Err(error) = send_ntfy_notification(&subscription.endpoint, &item.title, &item.body).await {
+            let delivery_result = if is_web_push_subscription(&subscription) {
+                let subscription_info = SubscriptionInfo::new(
+                    subscription.endpoint.clone(),
+                    subscription.p256dh.clone(),
+                    subscription.auth.clone(),
+                );
+                send_web_push(subscription_info, &item.title, &item.body).await
+            } else {
+                send_ntfy_notification(&subscription.endpoint, &item.title, &item.body).await
+            };
+
+            if let Err(error) = delivery_result {
                 last_error = Some(error.to_string());
                 tracing::error!(
-                    "Failed to send ntfy notification for queue item {}: {}",
+                    "Failed to send notification for queue item {}: {}",
                     item.id,
                     error
                 );
@@ -93,6 +107,10 @@ pub async fn process_queue(pool: &SqlitePool) -> Result<(), Box<dyn std::error::
     }
 
     Ok(())
+}
+
+fn is_web_push_subscription(subscription: &SubscriptionRow) -> bool {
+    !(subscription.p256dh.is_empty() && subscription.auth.is_empty())
 }
 
 async fn mark_failed(
@@ -119,4 +137,26 @@ async fn mark_failed(
     .await?;
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_detects_web_push_subscription() {
+        let ntfy = SubscriptionRow {
+            endpoint: "alerts_main".to_string(),
+            p256dh: "".to_string(),
+            auth: "".to_string(),
+        };
+        assert!(!is_web_push_subscription(&ntfy));
+
+        let web_push = SubscriptionRow {
+            endpoint: "https://example.invalid/push".to_string(),
+            p256dh: "abc".to_string(),
+            auth: "def".to_string(),
+        };
+        assert!(is_web_push_subscription(&web_push));
+    }
 }

@@ -48,9 +48,36 @@ Peanut is built around a few constraints:
   - delete objects
 - storage keys are automatically isolated per authenticated user
 
-### Push (current release MVP)
-Peanut currently ships an honest ntfy-based push MVP.
+### Data API (SQLite-backed)
+Peanut now exposes a constrained SQLite-backed data API for Peanut-managed logical tables.
 
+Current capabilities:
+- `GET /api/data/tables`
+- `POST /api/data/tables`
+- `GET /api/data/tables/:table`
+- `GET /api/data/tables/:table/rows`
+- `POST /api/data/tables/:table/rows`
+- `GET /api/data/tables/:table/rows/:row_id`
+- `PATCH /api/data/tables/:table/rows/:row_id`
+- `DELETE /api/data/tables/:table/rows/:row_id`
+
+Current model:
+- admins define logical tables with JSON schema + fixed access policy
+- rows are stored in Peanut-managed SQLite tables
+- `owner_private` policy isolates rows per authenticated user
+- row mutations are recorded in an internal event log
+
+What this still does not mean:
+- Peanut does not expose raw SQL like `POST /api/sql`
+- Peanut is not trying to be a full database-console-as-a-service
+- query/filter support is intentionally narrow in this release
+
+### Push (current release MVP)
+Peanut currently ships a practical hybrid push layer:
+- ntfy topic subscriptions for the simple self-host flow
+- Web Push delivery for stored browser subscriptions when VAPID env vars are configured
+
+Endpoints:
 - `GET /api/push/subscriptions`
 - `POST /api/push/subscriptions`
 - `DELETE /api/push/subscriptions/:subscription_id`
@@ -58,14 +85,16 @@ Peanut currently ships an honest ntfy-based push MVP.
 - `GET /api/push/queue`
 
 What this means:
-- users subscribe to ntfy topics
+- users can subscribe an ntfy topic with `{ "topic": "alerts_main" }`
+- browsers can register a Web Push subscription with `{ "endpoint": "...", "keys": { "p256dh": "...", "auth": "..." } }`
 - push messages are queued in SQLite
-- a background worker delivers messages to ntfy topics
+- a background worker delivers queue items to ntfy or Web Push subscriptions
 - queue status, retries, and last error are visible through the API and console
 
 What this does not mean yet:
-- full Web Push / VAPID production support is not part of the current release
-- `src/push/webpush.rs` remains a placeholder for future work
+- Peanut still does not try to be a complete push platform
+- there is no polished browser service-worker setup flow in the embedded console yet
+- Web Push delivery requires VAPID runtime configuration
 
 ### Console
 The embedded console supports:
@@ -211,6 +240,8 @@ Optional:
 - `BIND_ADDR` (default: `127.0.0.1:3000`)
 - `MAX_UPLOAD_BYTES` (default: `5242880`)
 - `RUST_LOG` (default: `info`)
+- `WEB_PUSH_VAPID_PRIVATE_KEY` (required only for Web Push delivery)
+- `WEB_PUSH_VAPID_SUBJECT` (required only for Web Push delivery; `mailto:` or `https://`)
 
 See `.env.example` for a starter config.
 

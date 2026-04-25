@@ -48,9 +48,36 @@ Peanut은 아래 원칙을 지향한다.
   - 삭제
 가능하다
 
-### Push (현재 릴리스 MVP)
-현재 Peanut은 ntfy 기반 push MVP를 제공한다.
+### Data API (SQLite 기반)
+Peanut은 이제 Peanut이 관리하는 logical table용 제한된 SQLite 기반 data API를 제공한다.
 
+현재 가능한 것:
+- `GET /api/data/tables`
+- `POST /api/data/tables`
+- `GET /api/data/tables/:table`
+- `GET /api/data/tables/:table/rows`
+- `POST /api/data/tables/:table/rows`
+- `GET /api/data/tables/:table/rows/:row_id`
+- `PATCH /api/data/tables/:table/rows/:row_id`
+- `DELETE /api/data/tables/:table/rows/:row_id`
+
+현재 모델:
+- admin이 JSON schema + 고정 access policy로 logical table을 정의한다
+- row는 Peanut이 관리하는 SQLite 테이블에 저장된다
+- `owner_private` 정책은 인증 유저별 row 격리를 제공한다
+- row 변경은 내부 이벤트 로그에 기록된다
+
+여전히 아닌 것:
+- `POST /api/sql` 같은 raw SQL은 열지 않는다
+- DB 콘솔 서비스처럼 가려는 것은 아니다
+- query/filter 기능은 이번 릴리스에서 의도적으로 좁게 유지한다
+
+### Push (현재 릴리스 MVP)
+Peanut은 현재 실용적인 hybrid push 레이어를 제공한다.
+- 간단한 self-host 흐름용 ntfy topic 구독
+- VAPID 환경변수가 설정된 경우 저장된 browser subscription 대상 Web Push 전송
+
+엔드포인트:
 - `GET /api/push/subscriptions`
 - `POST /api/push/subscriptions`
 - `DELETE /api/push/subscriptions/:subscription_id`
@@ -58,14 +85,16 @@ Peanut은 아래 원칙을 지향한다.
 - `GET /api/push/queue`
 
 의미하는 것:
-- 유저가 ntfy topic을 구독할 수 있다
-- push 메시지가 SQLite queue에 쌓인다
-- 백그라운드 워커가 ntfy topic으로 전달한다
+- 유저는 `{ "topic": "alerts_main" }` 형태로 ntfy topic을 구독할 수 있다
+- 브라우저는 `{ "endpoint": "...", "keys": { "p256dh": "...", "auth": "..." } }` 형태로 Web Push subscription을 등록할 수 있다
+- push 메시지는 SQLite queue에 쌓인다
+- 백그라운드 워커가 ntfy 또는 Web Push subscription으로 전달한다
 - queue 상태, retry 횟수, 마지막 에러를 API/콘솔에서 볼 수 있다
 
 아직 아닌 것:
-- 완전한 Web Push / VAPID 지원은 현재 릴리스 범위에 포함되지 않는다
-- `src/push/webpush.rs`는 향후 작업을 위한 placeholder다
+- Peanut이 완전한 push 플랫폼을 지향하는 것은 아니다
+- 내장 콘솔에 polished service-worker 등록 흐름까지 들어간 상태는 아니다
+- Web Push 전송에는 VAPID 런타임 환경변수 설정이 필요하다
 
 ### Console
 내장 콘솔에서 가능한 것:
@@ -204,6 +233,8 @@ Peanut은 아래 원칙을 지향한다.
 - `BIND_ADDR` (기본값: `127.0.0.1:3000`)
 - `MAX_UPLOAD_BYTES` (기본값: `5242880`)
 - `RUST_LOG` (기본값: `info`)
+- `WEB_PUSH_VAPID_PRIVATE_KEY` (Web Push 전송 시에만 필요)
+- `WEB_PUSH_VAPID_SUBJECT` (Web Push 전송 시에만 필요; `mailto:` 또는 `https://`)
 
 시작점은 `.env.example` 참고.
 

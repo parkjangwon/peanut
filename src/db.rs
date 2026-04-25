@@ -33,7 +33,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_db_init_creates_push_tables() {
+    async fn test_db_init_creates_push_and_data_tables() {
         let pool = init_db("sqlite::memory:").await.unwrap();
 
         let queue_exists: (i64,) = sqlx::query_as(
@@ -51,5 +51,29 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(subscriptions_exists.0, 1);
+
+        let data_tables_exists: (i64,) = sqlx::query_as(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'data_tables'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(data_tables_exists.0, 1);
+
+        let data_rows_exists: (i64,) = sqlx::query_as(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'data_rows'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(data_rows_exists.0, 1);
+
+        let data_row_events_exists: (i64,) = sqlx::query_as(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'data_row_events'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(data_row_events_exists.0, 1);
     }
 }

@@ -14,7 +14,7 @@ rust_i18n::i18n!("locales", fallback = "en");
 
 use axum::{
     extract::DefaultBodyLimit,
-    routing::{delete, get, post, put},
+    routing::{delete, get, patch, post, put},
     Router,
 };
 use std::{env, net::SocketAddr, sync::Arc};
@@ -82,12 +82,23 @@ async fn main() {
         .route("/push/messages", post(api::push::enqueue_message))
         .route("/push/queue", get(api::push::list_queue));
 
+    let data_routes = Router::new()
+        .route("/data/tables", get(api::data::list_tables))
+        .route("/data/tables", post(api::data::create_table))
+        .route("/data/tables/:table", get(api::data::get_table))
+        .route("/data/tables/:table/rows", get(api::data::list_rows))
+        .route("/data/tables/:table/rows", post(api::data::create_row))
+        .route("/data/tables/:table/rows/:row_id", get(api::data::get_row))
+        .route("/data/tables/:table/rows/:row_id", patch(api::data::update_row))
+        .route("/data/tables/:table/rows/:row_id", delete(api::data::delete_row));
+
     let protected_routes = Router::new()
         .route("/me", get(api::auth::me))
         .route("/admin/users", get(api::admin::list_users))
         .route("/admin/users/:user_id/activate", put(api::admin::activate_user))
         .merge(storage_routes)
         .merge(push_routes)
+        .merge(data_routes)
         .layer(axum::middleware::from_fn_with_state(
             state.clone(),
             crate::middleware::auth::auth_middleware,

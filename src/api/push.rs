@@ -1,15 +1,15 @@
 use axum::{
     extract::{Path, State},
-    http::StatusCode,
+    http::{self, StatusCode},
     response::{IntoResponse, Response},
     Extension, Json,
 };
+use base64::{engine::general_purpose::URL_SAFE, engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use serde::{Deserialize, Serialize};
 use sqlx::FromRow;
 
 use crate::api::common::{json_error, json_message};
 use crate::auth::jwt::Claims;
-
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PushSubscriptionsResponse {
@@ -24,7 +24,9 @@ pub struct PushQueueResponse {
 #[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
 pub struct PushSubscription {
     pub id: i64,
-    pub topic: String,
+    pub kind: String,
+    pub topic: Option<String>,
+    pub endpoint: Option<String>,
     pub created_at: String,
 }
 
@@ -42,8 +44,21 @@ pub struct PushQueueEntry {
 }
 
 #[derive(Debug, Clone, Deserialize)]
-pub struct CreateSubscriptionRequest {
-    pub topic: String,
+pub struct WebPushSubscriptionKeysRequest {
+    pub p256dh: String,
+    pub auth: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(untagged)]
+pub enum CreateSubscriptionRequest {
+    Ntfy {
+        topic: String,
+    },
+    WebPush {
+        endpoint: String,
+        keys: WebPushSubscriptionKeysRequest,
+    },
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -58,7 +73,26 @@ pub async fn list_subscriptions(
     Extension(claims): Extension<Claims>,
 ) -> Response {
     match sqlx::query_as::<_, PushSubscription>(
-        "SELECT id, endpoint AS topic, created_at FROM push_subscriptions WHERE user_id = ? ORDER BY created_at DESC",
+        r#"
+        SELECT
+            id,
+            CASE
+                WHEN p256dh = '' AND auth = '' THEN 'ntfy'
+                ELSE 'web_push'
+            END AS kind,
+            CASE
+                WHEN p256dh = '' AND auth = '' THEN endpoint
+                ELSE NULL
+            END AS topic,
+            CASE
+                WHEN p256dh = '' AND auth = '' THEN NULL
+                ELSE endpoint
+            END AS endpoint,
+            created_at
+        FROM push_subscriptions
+        WHERE user_id = ?
+        ORDER BY created_at DESC
+        "#,
     )
     .bind(&claims.sub)
     .fetch_all(&state.pool)
@@ -76,20 +110,42 @@ pub async fn create_subscription(
     Extension(claims): Extension<Claims>,
     Json(payload): Json<CreateSubscriptionRequest>,
 ) -> Response {
-    let topic = payload.topic.trim().to_lowercase();
-    if let Err(message) = validate_topic(&topic) {
-        return json_error(StatusCode::BAD_REQUEST, message);
-    }
+    let result = match payload {
+        CreateSubscriptionRequest::Ntfy { topic } => {
+            let topic = topic.trim().to_lowercase();
+            if let Err(message) = validate_topic(&topic) {
+                return json_error(StatusCode::BAD_REQUEST, message);
+            }
 
-    match sqlx::query(
-        "INSERT INTO push_subscriptions (user_id, endpoint, p256dh, auth) VALUES (?, ?, '', '')",
-    )
-    .bind(&claims.sub)
-    .bind(&topic)
-    .execute(&state.pool)
-    .await
-    {
-        Ok(_) => json_message(StatusCode::CREATED, format!("subscribed to topic {}", topic)),
+            sqlx::query(
+                "INSERT INTO push_subscriptions (user_id, endpoint, p256dh, auth) VALUES (?, ?, '', '')",
+            )
+            .bind(&claims.sub)
+            .bind(&topic)
+            .execute(&state.pool)
+            .await
+            .map(|_| format!("subscribed to topic {}", topic))
+        }
+        CreateSubscriptionRequest::WebPush { endpoint, keys } => {
+            if let Err(message) = validate_web_push_subscription(&endpoint, &keys) {
+                return json_error(StatusCode::BAD_REQUEST, message);
+            }
+
+            sqlx::query(
+                "INSERT INTO push_subscriptions (user_id, endpoint, p256dh, auth) VALUES (?, ?, ?, ?)",
+            )
+            .bind(&claims.sub)
+            .bind(endpoint.trim())
+            .bind(keys.p256dh.trim())
+            .bind(keys.auth.trim())
+            .execute(&state.pool)
+            .await
+            .map(|_| "saved web push subscription".to_string())
+        }
+    };
+
+    match result {
+        Ok(message) => json_message(StatusCode::CREATED, message),
         Err(_) => json_error(StatusCode::CONFLICT, "subscription already exists"),
     }
 }
@@ -201,6 +257,38 @@ pub fn validate_topic(topic: &str) -> Result<(), String> {
     Ok(())
 }
 
+pub fn validate_web_push_subscription(
+    endpoint: &str,
+    keys: &WebPushSubscriptionKeysRequest,
+) -> Result<(), String> {
+    let endpoint = endpoint.trim();
+    if endpoint.is_empty() {
+        return Err("endpoint is required".to_string());
+    }
+    if !endpoint.starts_with("https://") {
+        return Err("web push endpoint must use https".to_string());
+    }
+    endpoint
+        .parse::<http::Uri>()
+        .map_err(|_| "web push endpoint must be a valid URI".to_string())?;
+
+    decode_web_push_key(keys.p256dh.trim(), "p256dh")?;
+    decode_web_push_key(keys.auth.trim(), "auth")?;
+    Ok(())
+}
+
+fn decode_web_push_key(value: &str, field_name: &str) -> Result<(), String> {
+    if value.is_empty() {
+        return Err(format!("{} is required", field_name));
+    }
+
+    URL_SAFE_NO_PAD
+        .decode(value)
+        .or_else(|_| URL_SAFE.decode(value))
+        .map(|_| ())
+        .map_err(|_| format!("{} must be valid base64url", field_name))
+}
+
 #[cfg(test)]
 pub fn should_retry(retry_count: i64) -> bool {
     retry_count < 3
@@ -237,7 +325,7 @@ mod tests {
         let create_response = create_subscription(
             State(state.clone()),
             Extension(claims(&admin.user.id, true)),
-            Json(CreateSubscriptionRequest {
+            Json(CreateSubscriptionRequest::Ntfy {
                 topic: "alerts_main".to_string(),
             }),
         )
@@ -247,7 +335,8 @@ mod tests {
         let list_response = list_subscriptions(State(state.clone()), Extension(claims(&admin.user.id, true))).await;
         let list_body: PushSubscriptionsResponse = test_support::response_json(list_response).await;
         assert_eq!(list_body.subscriptions.len(), 1);
-        assert_eq!(list_body.subscriptions[0].topic, "alerts_main");
+        assert_eq!(list_body.subscriptions[0].kind, "ntfy");
+        assert_eq!(list_body.subscriptions[0].topic.as_deref(), Some("alerts_main"));
 
         let enqueue_response = enqueue_message(
             State(state.clone()),
@@ -265,6 +354,73 @@ mod tests {
         let queue_body: PushQueueResponse = test_support::response_json(queue_response).await;
         assert_eq!(queue_body.items.len(), 1);
         assert_eq!(queue_body.items[0].status, "pending");
+    }
+
+    #[tokio::test]
+    async fn test_web_push_subscription_round_trip() {
+        let (state, _dir) = test_support::make_test_state().await;
+        let admin = auth::register(
+            State(state.clone()),
+            Json(auth::RegisterRequest {
+                email: "admin@example.com".to_string(),
+                password: "secret123".to_string(),
+            }),
+        )
+        .await;
+        let admin: auth::RegisterResponse = test_support::response_json(admin).await;
+
+        let response = create_subscription(
+            State(state.clone()),
+            Extension(claims(&admin.user.id, true)),
+            Json(CreateSubscriptionRequest::WebPush {
+                endpoint: "https://example.invalid/mock-web-push".to_string(),
+                keys: WebPushSubscriptionKeysRequest {
+                    p256dh: "BH1HTeKM7-NwaLGHEqxeu2IamQaVVLkcsFHPIHmsCnqxcBHPQBprF41bEMOr3O1hUQ2jU1opNEm1F_lZV_sxMP8"
+                        .to_string(),
+                    auth: "sBXU5_tIYz-5w7G2B25BEw".to_string(),
+                },
+            }),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::CREATED);
+
+        let list_response = list_subscriptions(State(state), Extension(claims(&admin.user.id, true))).await;
+        let list_body: PushSubscriptionsResponse = test_support::response_json(list_response).await;
+        assert_eq!(list_body.subscriptions.len(), 1);
+        assert_eq!(list_body.subscriptions[0].kind, "web_push");
+        assert_eq!(
+            list_body.subscriptions[0].endpoint.as_deref(),
+            Some("https://example.invalid/mock-web-push")
+        );
+        assert_eq!(list_body.subscriptions[0].topic, None);
+    }
+
+    #[tokio::test]
+    async fn test_rejects_invalid_web_push_subscription() {
+        let (state, _dir) = test_support::make_test_state().await;
+        let admin = auth::register(
+            State(state.clone()),
+            Json(auth::RegisterRequest {
+                email: "admin@example.com".to_string(),
+                password: "secret123".to_string(),
+            }),
+        )
+        .await;
+        let admin: auth::RegisterResponse = test_support::response_json(admin).await;
+
+        let response = create_subscription(
+            State(state),
+            Extension(claims(&admin.user.id, true)),
+            Json(CreateSubscriptionRequest::WebPush {
+                endpoint: "not-a-url".to_string(),
+                keys: WebPushSubscriptionKeysRequest {
+                    p256dh: "bad-key".to_string(),
+                    auth: "bad-auth".to_string(),
+                },
+            }),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
     }
 
     #[test]

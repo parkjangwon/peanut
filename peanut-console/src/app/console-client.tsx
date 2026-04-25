@@ -53,12 +53,61 @@ type StorageListResponse = {
 
 type PushSubscription = {
   id: number
-  topic: string
+  kind: string
+  topic: string | null
+  endpoint: string | null
   created_at: string
 }
 
 type PushSubscriptionsResponse = {
   subscriptions: PushSubscription[]
+}
+
+type DataTableSummary = {
+  name: string
+  display_name: string
+  policy_mode: string
+  created_at: string
+}
+
+type DataTablesResponse = {
+  tables: DataTableSummary[]
+}
+
+type DataFieldSpec = {
+  type: string
+  required?: boolean
+  max_length?: number | null
+  default?: unknown
+}
+
+type DataTableDetail = {
+  name: string
+  display_name: string
+  schema: {
+    fields: Record<string, DataFieldSpec>
+  }
+  access_policy: {
+    mode: string
+  }
+  created_by: string
+  created_at: string
+}
+
+type DataTableResponse = {
+  table: DataTableDetail
+}
+
+type DataRow = {
+  id: string
+  owner_user_id: string | null
+  data: Record<string, unknown>
+  created_at: string
+  updated_at: string
+}
+
+type DataRowsResponse = {
+  rows: DataRow[]
 }
 
 type PushQueueEntry = {
@@ -137,6 +186,14 @@ export default function ConsoleClient() {
   const [pushStatus, setPushStatus] = useState('push 작업 대기 중')
   const [subscriptions, setSubscriptions] = useState<PushSubscription[]>([])
   const [queueItems, setQueueItems] = useState<PushQueueEntry[]>([])
+  const [dataStatus, setDataStatus] = useState('data 작업 대기 중')
+  const [dataTables, setDataTables] = useState<DataTableSummary[]>([])
+  const [selectedTable, setSelectedTable] = useState('todos')
+  const [selectedTableDetail, setSelectedTableDetail] = useState<DataTableDetail | null>(null)
+  const [dataRows, setDataRows] = useState<DataRow[]>([])
+  const [newRowJson, setNewRowJson] = useState(`{
+  "title": "buy milk"
+}`)
   const [busyAction, setBusyAction] = useState<string | null>(null)
 
   useEffect(() => {
@@ -201,6 +258,53 @@ export default function ConsoleClient() {
     setPushStatus(`subscription ${subscriptionData.subscriptions.length}개 · queue ${queueData.items.length}건`)
   }, [])
 
+  const refreshDataRows = useCallback(async (currentToken: string, tableName: string) => {
+    const normalizedTable = tableName.trim()
+    if (!normalizedTable) {
+      setSelectedTableDetail(null)
+      setDataRows([])
+      return
+    }
+
+    const [tableResponse, rowsResponse] = await Promise.all([
+      fetch(`/api/data/tables/${encodeURIComponent(normalizedTable)}`, {
+        headers: authHeaders(currentToken),
+      }),
+      fetch(`/api/data/tables/${encodeURIComponent(normalizedTable)}/rows`, {
+        headers: authHeaders(currentToken),
+      }),
+    ])
+
+    const tableData = await readJsonOrThrow<DataTableResponse>(tableResponse)
+    const rowsData = await readJsonOrThrow<DataRowsResponse>(rowsResponse)
+    setSelectedTableDetail(tableData.table)
+    setDataRows(rowsData.rows)
+    setDataStatus(`table ${tableData.table.name} · rows ${rowsData.rows.length}건`)
+  }, [])
+
+  const refreshDataTables = useCallback(
+    async (currentToken: string, preferredTable?: string) => {
+      const response = await fetch('/api/data/tables', {
+        headers: authHeaders(currentToken),
+      })
+      const data = await readJsonOrThrow<DataTablesResponse>(response)
+      setDataTables(data.tables)
+
+      const nextTable = preferredTable?.trim() || selectedTable.trim() || data.tables[0]?.name || ''
+      if (!nextTable) {
+        setSelectedTable('')
+        setSelectedTableDetail(null)
+        setDataRows([])
+        setDataStatus('등록된 data table이 없어. admin으로 먼저 생성해줘.')
+        return
+      }
+
+      setSelectedTable(nextTable)
+      await refreshDataRows(currentToken, nextTable)
+    },
+    [refreshDataRows, selectedTable],
+  )
+
   const refreshSession = useCallback(
     async (currentToken: string) => {
       const response = await fetch('/api/me', {
@@ -213,6 +317,7 @@ export default function ConsoleClient() {
       await Promise.all([
         refreshStorageList(currentToken),
         refreshPushData(currentToken),
+        refreshDataTables(currentToken),
         data.user.is_admin
           ? refreshAdminUsers(currentToken)
           : Promise.resolve().then(() => {
@@ -221,7 +326,7 @@ export default function ConsoleClient() {
             }),
       ])
     },
-    [refreshAdminUsers, refreshPushData, refreshStorageList],
+    [refreshAdminUsers, refreshDataTables, refreshPushData, refreshStorageList],
   )
 
   useEffect(() => {
@@ -301,6 +406,10 @@ export default function ConsoleClient() {
     setSubscriptions([])
     setQueueItems([])
     setPushStatus('push 작업 대기 중')
+    setDataTables([])
+    setSelectedTableDetail(null)
+    setDataRows([])
+    setDataStatus('data 작업 대기 중')
     setAuthStatus('세션을 메모리에서 제거했어.')
   }
 
@@ -465,6 +574,89 @@ export default function ConsoleClient() {
     }
   }
 
+  async function refreshSelectedTable() {
+    if (!token) {
+      setDataStatus('먼저 로그인해줘.')
+      return
+    }
+    setBusyAction('refreshData')
+    try {
+      await refreshDataTables(token, selectedTable)
+    } catch (error) {
+      setDataStatus(error instanceof Error ? error.message : 'data refresh failed')
+    } finally {
+      setBusyAction(null)
+    }
+  }
+
+  async function createSampleTable() {
+    if (!token) {
+      setDataStatus('먼저 로그인해줘.')
+      return
+    }
+    setBusyAction('createDataTable')
+    try {
+      const response = await fetch('/api/data/tables', {
+        method: 'POST',
+        headers: {
+          ...authHeaders(token),
+          'content-type': 'application/json',
+        },
+        body: JSON.stringify({
+          name: 'todos',
+          display_name: 'Todos',
+          schema: {
+            fields: {
+              title: { type: 'string', required: true, max_length: 200 },
+              done: { type: 'boolean', required: false, default: false },
+            },
+          },
+          access_policy: { mode: 'owner_private' },
+        }),
+      })
+      const data = await readJsonOrThrow<DataTableResponse>(response)
+      setSelectedTable(data.table.name)
+      setDataStatus(`table ${data.table.name} 생성 완료`)
+      await refreshDataTables(token, data.table.name)
+    } catch (error) {
+      setDataStatus(error instanceof Error ? error.message : 'table create failed')
+    } finally {
+      setBusyAction(null)
+    }
+  }
+
+  async function createDataRow() {
+    if (!token) {
+      setDataStatus('먼저 로그인해줘.')
+      return
+    }
+    const tableName = selectedTable.trim()
+    if (!tableName) {
+      setDataStatus('먼저 data table을 선택해줘.')
+      return
+    }
+
+    setBusyAction('createDataRow')
+    try {
+      const parsed = JSON.parse(newRowJson) as Record<string, unknown>
+      const response = await fetch(`/api/data/tables/${encodeURIComponent(tableName)}/rows`, {
+        method: 'POST',
+        headers: {
+          ...authHeaders(token),
+          'content-type': 'application/json',
+        },
+        body: JSON.stringify({ data: parsed }),
+      })
+      const data = await readJsonOrThrow<DataRow>(response)
+      setDataStatus(`row ${data.id.slice(0, 8)} 생성 완료`)
+      await refreshDataRows(token, tableName)
+    } catch (error) {
+      setDataStatus(error instanceof Error ? error.message : 'row create failed')
+    } finally {
+      setBusyAction(null)
+    }
+  }
+
   return (
     <div className="min-h-screen bg-neutral-950 text-neutral-100">
       <div className="mx-auto flex w-full max-w-7xl flex-col gap-6 px-6 py-8 md:px-8 lg:px-10">
@@ -507,10 +699,10 @@ export default function ConsoleClient() {
             detail={session?.user.id ?? '세션 없음'}
           />
           <StatusCard
-            title="Push queue"
-            value={String(queueItems.length)}
-            accent="text-cyan-300"
-            detail={queueItems[0]?.status ?? '큐 비어 있음'}
+            title="Data rows"
+            value={String(dataRows.length)}
+            accent="text-emerald-300"
+            detail={selectedTableDetail?.name ?? 'table 없음'}
           />
         </section>
 
@@ -674,7 +866,94 @@ export default function ConsoleClient() {
               </Panel>
             </div>
 
-            <Panel title="Push (ntfy MVP)" subtitle="subscription + queue">
+            <Panel title="Data API" subtitle="logical tables + owner-private rows">
+              <div className="grid gap-4">
+                <div className="flex flex-wrap gap-3">
+                  <ActionButton
+                    busy={busyAction === 'createDataTable'}
+                    onClick={() => void createSampleTable()}
+                    primary
+                  >
+                    Create sample table
+                  </ActionButton>
+                  <ActionButton busy={busyAction === 'refreshData'} onClick={() => void refreshSelectedTable()}>
+                    Refresh data
+                  </ActionButton>
+                </div>
+                <Field label="Selected table">
+                  <input
+                    className={inputClassName}
+                    onChange={(event) => setSelectedTable(event.target.value)}
+                    value={selectedTable}
+                  />
+                </Field>
+                <InfoBox label="Data status" value={dataStatus} />
+                <div className="grid gap-3 md:grid-cols-2">
+                  <div className="grid gap-3">
+                    <h3 className="text-sm font-medium text-neutral-200">Tables</h3>
+                    {dataTables.length === 0 ? (
+                      <EmptyState text="등록된 table이 없어. admin으로 sample table을 먼저 만들 수 있어." />
+                    ) : (
+                      dataTables.map((table) => (
+                        <button
+                          key={table.name}
+                          className={listButtonClassName}
+                          onClick={() => {
+                            setSelectedTable(table.name)
+                            if (token) void refreshDataTables(token, table.name)
+                          }}
+                          type="button"
+                        >
+                          <div className="flex items-center justify-between gap-3">
+                            <span>{table.display_name}</span>
+                            <span className="text-xs uppercase tracking-[0.2em] text-emerald-300">{table.policy_mode}</span>
+                          </div>
+                          <p className="mt-1 text-xs text-neutral-500">{table.name} · {table.created_at}</p>
+                        </button>
+                      ))
+                    )}
+                  </div>
+
+                  <div className="grid gap-3">
+                    <h3 className="text-sm font-medium text-neutral-200">Rows</h3>
+                    {dataRows.length === 0 ? (
+                      <EmptyState text="선택한 table에 아직 row가 없어." />
+                    ) : (
+                      dataRows.map((row) => (
+                        <div key={row.id} className="rounded-2xl border border-neutral-800 bg-neutral-950/80 p-4">
+                          <p className="font-medium text-neutral-100">{row.id}</p>
+                          <p className="mt-1 text-xs text-neutral-500">
+                            owner: {row.owner_user_id ?? 'shared'} · {row.created_at}
+                          </p>
+                          <p className="mt-3 whitespace-pre-wrap break-all text-xs leading-6 text-neutral-300">
+                            {JSON.stringify(row.data, null, 2)}
+                          </p>
+                        </div>
+                      ))
+                    )}
+                  </div>
+                </div>
+
+                <Field label="New row JSON">
+                  <textarea
+                    className="min-h-[160px] rounded-3xl border border-neutral-800 bg-neutral-950 px-4 py-3 text-sm text-neutral-100 outline-none transition focus:border-emerald-500"
+                    onChange={(event) => setNewRowJson(event.target.value)}
+                    value={newRowJson}
+                  />
+                </Field>
+                <ActionButton busy={busyAction === 'createDataRow'} onClick={() => void createDataRow()}>
+                  Create row
+                </ActionButton>
+                {selectedTableDetail ? (
+                  <InfoBox
+                    label="Selected table schema"
+                    value={JSON.stringify(selectedTableDetail.schema.fields, null, 2)}
+                  />
+                ) : null}
+              </div>
+            </Panel>
+
+            <Panel title="Push" subtitle="ntfy + web push subscriptions">
               <div className="grid gap-4">
                 <Field label="Topic">
                   <input
