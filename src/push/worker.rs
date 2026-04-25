@@ -5,6 +5,7 @@ use tokio::time::sleep;
 use web_push::SubscriptionInfo;
 
 const MAX_RETRIES: i64 = 3;
+const CLAIM_TIMEOUT_SECONDS: i64 = 120;
 
 #[derive(sqlx::FromRow)]
 struct PushQueueItem {
@@ -33,6 +34,8 @@ pub async fn start_push_worker(pool: SqlitePool) {
 }
 
 pub async fn process_queue(pool: &SqlitePool) -> Result<(), Box<dyn std::error::Error>> {
+    reclaim_stale_processing_items(pool).await?;
+
     let pending_ids: Vec<(i64,)> = sqlx::query_as(
         "SELECT id FROM push_queue WHERE status = 'pending' ORDER BY id ASC LIMIT 10",
     )
@@ -98,7 +101,7 @@ pub async fn process_queue(pool: &SqlitePool) -> Result<(), Box<dyn std::error::
             mark_failed(pool, item.id, item.retry_count, Some(error)).await?;
         } else {
             sqlx::query(
-                "UPDATE push_queue SET status = 'sent', last_error = NULL, processed_at = CURRENT_TIMESTAMP WHERE id = ?",
+                "UPDATE push_queue SET status = 'sent', last_error = NULL, claimed_at = NULL, processed_at = CURRENT_TIMESTAMP WHERE id = ?",
             )
             .bind(item.id)
             .execute(pool)
@@ -111,6 +114,19 @@ pub async fn process_queue(pool: &SqlitePool) -> Result<(), Box<dyn std::error::
 
 fn is_web_push_subscription(subscription: &SubscriptionRow) -> bool {
     !(subscription.p256dh.is_empty() && subscription.auth.is_empty())
+}
+
+async fn reclaim_stale_processing_items(pool: &SqlitePool) -> Result<(), sqlx::Error> {
+    let stale_after = format!("-{} seconds", CLAIM_TIMEOUT_SECONDS);
+
+    sqlx::query(
+        "UPDATE push_queue SET status = 'pending', claimed_at = NULL WHERE status = 'processing' AND claimed_at IS NOT NULL AND claimed_at <= datetime('now', ?)",
+    )
+    .bind(stale_after)
+    .execute(pool)
+    .await?;
+
+    Ok(())
 }
 
 async fn mark_failed(
@@ -127,7 +143,7 @@ async fn mark_failed(
     };
 
     sqlx::query(
-        "UPDATE push_queue SET status = ?, retry_count = ?, last_error = ?, processed_at = CURRENT_TIMESTAMP WHERE id = ?",
+        "UPDATE push_queue SET status = ?, retry_count = ?, last_error = ?, claimed_at = NULL, processed_at = CURRENT_TIMESTAMP WHERE id = ?",
     )
     .bind(next_status)
     .bind(next_retry_count)
@@ -142,6 +158,40 @@ async fn mark_failed(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn test_process_queue_reclaims_stale_processing_items() {
+        let pool = crate::db::init_db("sqlite::memory:").await.unwrap();
+        sqlx::query("INSERT INTO users (id, email, password_hash, is_active, is_admin) VALUES (?, ?, ?, 1, 1)")
+            .bind("user-1")
+            .bind("admin@example.com")
+            .bind("hash")
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query(
+            "INSERT INTO push_queue (user_id, title, body, status, retry_count, claimed_at) VALUES (?, ?, ?, 'processing', 0, datetime('now', '-10 minutes'))",
+        )
+        .bind("user-1")
+        .bind("hello")
+        .bind("world")
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        process_queue(&pool).await.unwrap();
+
+        let row: (String, i64, Option<String>) = sqlx::query_as(
+            "SELECT status, retry_count, last_error FROM push_queue WHERE user_id = ?",
+        )
+        .bind("user-1")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(row.0, "pending");
+        assert_eq!(row.1, 1);
+        assert_eq!(row.2.as_deref(), Some("no subscriptions configured"));
+    }
 
     #[test]
     fn test_detects_web_push_subscription() {

@@ -7,6 +7,7 @@ use axum::{
 use base64::{engine::general_purpose::URL_SAFE, engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use serde::{Deserialize, Serialize};
 use sqlx::FromRow;
+use sqlx::SqlitePool;
 
 use crate::api::common::{json_error, json_message};
 use crate::auth::jwt::Claims;
@@ -122,37 +123,76 @@ pub async fn create_subscription(
                 return json_error(StatusCode::BAD_REQUEST, message);
             }
 
-            sqlx::query(
-                "INSERT INTO push_subscriptions (user_id, endpoint, p256dh, auth) VALUES (?, ?, '', '')",
-            )
-            .bind(&claims.sub)
-            .bind(&topic)
-            .execute(&state.pool)
-            .await
-            .map(|_| format!("subscribed to topic {}", topic))
+            save_subscription(&state.pool, &claims.sub, &topic, "", "")
+                .await
+                .map(|created| {
+                    if created {
+                        (StatusCode::CREATED, format!("subscribed to topic {}", topic))
+                    } else {
+                        (StatusCode::OK, format!("subscription already up to date for topic {}", topic))
+                    }
+                })
         }
         CreateSubscriptionRequest::WebPush { endpoint, keys } => {
             if let Err(message) = validate_web_push_subscription(&endpoint, &keys) {
                 return json_error(StatusCode::BAD_REQUEST, message);
             }
 
-            sqlx::query(
-                "INSERT INTO push_subscriptions (user_id, endpoint, p256dh, auth) VALUES (?, ?, ?, ?)",
+            save_subscription(
+                &state.pool,
+                &claims.sub,
+                endpoint.trim(),
+                keys.p256dh.trim(),
+                keys.auth.trim(),
             )
-            .bind(&claims.sub)
-            .bind(endpoint.trim())
-            .bind(keys.p256dh.trim())
-            .bind(keys.auth.trim())
-            .execute(&state.pool)
             .await
-            .map(|_| "saved web push subscription".to_string())
+            .map(|created| {
+                if created {
+                    (StatusCode::CREATED, "saved web push subscription".to_string())
+                } else {
+                    (StatusCode::OK, "updated existing web push subscription".to_string())
+                }
+            })
         }
     };
 
     match result {
-        Ok(message) => json_message(StatusCode::CREATED, message),
-        Err(_) => json_error(StatusCode::CONFLICT, "subscription already exists"),
+        Ok((status, message)) => json_message(status, message),
+        Err(_) => json_error(StatusCode::INTERNAL_SERVER_ERROR, "failed to save subscription"),
     }
+}
+
+async fn save_subscription(
+    pool: &SqlitePool,
+    user_id: &str,
+    endpoint: &str,
+    p256dh: &str,
+    auth: &str,
+) -> Result<bool, sqlx::Error> {
+    let existed: Option<(i64,)> =
+        sqlx::query_as("SELECT id FROM push_subscriptions WHERE user_id = ? AND endpoint = ?")
+            .bind(user_id)
+            .bind(endpoint)
+            .fetch_optional(pool)
+            .await?;
+
+    sqlx::query(
+        r#"
+        INSERT INTO push_subscriptions (user_id, endpoint, p256dh, auth)
+        VALUES (?, ?, ?, ?)
+        ON CONFLICT(user_id, endpoint) DO UPDATE SET
+            p256dh = excluded.p256dh,
+            auth = excluded.auth
+        "#,
+    )
+    .bind(user_id)
+    .bind(endpoint)
+    .bind(p256dh)
+    .bind(auth)
+    .execute(pool)
+    .await?;
+
+    Ok(existed.is_none())
 }
 
 pub async fn delete_subscription(
@@ -405,6 +445,65 @@ mod tests {
             Some("https://example.invalid/mock-web-push")
         );
         assert_eq!(list_body.subscriptions[0].topic, None);
+    }
+
+    #[tokio::test]
+    async fn test_web_push_subscription_is_idempotent_for_same_endpoint() {
+        let (state, _dir) = test_support::make_test_state().await;
+        let admin = auth::register(
+            State(state.clone()),
+            Json(auth::RegisterRequest {
+                email: "admin@example.com".to_string(),
+                password: "secret123".to_string(),
+            }),
+        )
+        .await;
+        let admin: auth::RegisterResponse = test_support::response_json(admin).await;
+
+        let first_response = create_subscription(
+            State(state.clone()),
+            Extension(claims(&admin.user.id, true)),
+            Json(CreateSubscriptionRequest::WebPush {
+                endpoint: "https://example.invalid/mock-web-push".to_string(),
+                keys: WebPushSubscriptionKeysRequest {
+                    p256dh: "BH1HTeKM7-NwaLGHEqxeu2IamQaVVLkcsFHPIHmsCnqxcBHPQBprF41bEMOr3O1hUQ2jU1opNEm1F_lZV_sxMP8"
+                        .to_string(),
+                    auth: "sBXU5_tIYz-5w7G2B25BEw".to_string(),
+                },
+            }),
+        )
+        .await;
+        assert_eq!(first_response.status(), StatusCode::CREATED);
+
+        let second_response = create_subscription(
+            State(state.clone()),
+            Extension(claims(&admin.user.id, true)),
+            Json(CreateSubscriptionRequest::WebPush {
+                endpoint: "https://example.invalid/mock-web-push".to_string(),
+                keys: WebPushSubscriptionKeysRequest {
+                    p256dh: "BCVv6Ciy7Hg2uQm9kWIzxGK3G4SSQSSHqzTeWY5Avzkdxl3pNGdisz8Iky3Uczdlz7YT1DoP70uQgmO6ijLJrmo"
+                        .to_string(),
+                    auth: "dGhpcy1pcy1uZXctYXV0aA".to_string(),
+                },
+            }),
+        )
+        .await;
+        assert_eq!(second_response.status(), StatusCode::OK);
+
+        let list_response = list_subscriptions(State(state.clone()), Extension(claims(&admin.user.id, true))).await;
+        let list_body: PushSubscriptionsResponse = test_support::response_json(list_response).await;
+        assert_eq!(list_body.subscriptions.len(), 1);
+
+        let stored: (String, String) = sqlx::query_as(
+            "SELECT p256dh, auth FROM push_subscriptions WHERE user_id = ? AND endpoint = ?",
+        )
+        .bind(&admin.user.id)
+        .bind("https://example.invalid/mock-web-push")
+        .fetch_one(&state.pool)
+        .await
+        .unwrap();
+        assert_eq!(stored.0, "BCVv6Ciy7Hg2uQm9kWIzxGK3G4SSQSSHqzTeWY5Avzkdxl3pNGdisz8Iky3Uczdlz7YT1DoP70uQgmO6ijLJrmo");
+        assert_eq!(stored.1, "dGhpcy1pcy1uZXctYXV0aA");
     }
 
     #[tokio::test]
