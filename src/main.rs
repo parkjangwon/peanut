@@ -127,6 +127,7 @@ async fn main() {
 
     let protected_routes = Router::new()
         .route("/me", get(api::auth::me))
+        .route("/auth/change-password", post(api::auth::change_password))
         .route("/admin/users", get(api::admin::list_users))
         .route(
             "/admin/users/:user_id/activate",
@@ -149,6 +150,13 @@ async fn main() {
         .route("/api/health", get(api::health::health_check))
         .route("/api/register", post(api::auth::register))
         .route("/api/login", post(api::auth::login))
+        .route("/api/auth/refresh", post(api::auth::refresh_session))
+        .route("/api/auth/logout", post(api::auth::logout))
+        .route(
+            "/api/auth/forgot-password",
+            post(api::auth::forgot_password),
+        )
+        .route("/api/auth/reset-password", post(api::auth::reset_password))
         .route(
             "/api/functions/endpoints/:endpoint_slug",
             post(api::functions::invoke_function),

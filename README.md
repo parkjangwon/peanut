@@ -31,7 +31,20 @@ Peanut is built around a few constraints:
   - first user becomes active admin automatically
   - later users are created inactive and require admin approval
 - `POST /api/login`
-  - returns a typed JSON login response with bearer token and expiry
+  - returns a typed JSON login response with short-lived bearer access token, refresh token, and expiry
+- `POST /api/auth/refresh`
+  - rotates a valid refresh token and returns a fresh access token + refresh token pair
+- `POST /api/auth/logout`
+  - revokes a refresh token so external apps can explicitly end a session
+- `POST /api/auth/change-password`
+  - authenticated password change flow
+  - revokes existing refresh sessions for that user after success
+- `POST /api/auth/forgot-password`
+  - creates a password reset token for the matching user
+  - current self-host-first milestone returns the reset token in the JSON response instead of pretending an email service exists
+- `POST /api/auth/reset-password`
+  - one-time reset token flow for setting a new password
+  - revokes existing refresh sessions for that user after success
 - `GET /api/me`
   - returns the authenticated user as JSON
   - protected routes now re-check the current user record on every request, so deactivated users lose access immediately even if they still hold an unexpired token
@@ -41,6 +54,11 @@ Peanut is built around a few constraints:
   - admin-only activation flow
 - `PUT /api/admin/users/:user_id/deactivate`
   - admin-only suspension flow that immediately blocks protected API access for that user
+
+What this means for external frontend apps:
+- Peanut can now act as the app's auth backend for signup, login, session refresh, logout, password change, and password reset
+- access tokens stay short-lived while refresh tokens provide longer-lived sessions
+- refresh sessions are server-tracked and revoked on logout, password change, password reset, or admin deactivation
 
 ### Storage
 - user-scoped object storage

@@ -4,14 +4,19 @@ use axum::{
     response::{IntoResponse, Response},
     Extension,
 };
+use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use chrono::{DateTime, Duration, Utc};
+use openssl::sha::sha256;
+use rand::RngCore;
 use serde::{Deserialize, Serialize};
 use sqlx::FromRow;
 use uuid::Uuid;
 
-use crate::api::common::json_error;
+use crate::api::common::{json_error, json_message};
 
 const ACCESS_TOKEN_TTL_MINUTES: i64 = 15;
+const REFRESH_TOKEN_TTL_DAYS: i64 = 30;
+const PASSWORD_RESET_TOKEN_TTL_MINUTES: i64 = 30;
 const MIN_PASSWORD_LENGTH: usize = 8;
 
 #[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
@@ -34,6 +39,28 @@ pub struct LoginRequest {
     pub password: String,
 }
 
+#[derive(Debug, Clone, Deserialize)]
+pub struct RefreshTokenRequest {
+    pub refresh_token: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct ChangePasswordRequest {
+    pub current_password: String,
+    pub new_password: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct ForgotPasswordRequest {
+    pub email: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct ResetPasswordRequest {
+    pub reset_token: String,
+    pub new_password: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RegisterResponse {
     pub message: String,
@@ -43,6 +70,7 @@ pub struct RegisterResponse {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LoginResponse {
     pub access_token: String,
+    pub refresh_token: String,
     pub token_type: String,
     pub expires_at: DateTime<Utc>,
     pub user: UserSummary,
@@ -51,6 +79,12 @@ pub struct LoginResponse {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SessionResponse {
     pub user: UserSummary,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ForgotPasswordResponse {
+    pub message: String,
+    pub reset_token: String,
 }
 
 pub async fn register(
@@ -120,20 +154,10 @@ pub async fn login(
         return json_error(StatusCode::BAD_REQUEST, message);
     }
 
-    let pool = &state.pool;
-    let user: Option<UserWithPassword> = match sqlx::query_as(
-        "SELECT id, email, password_hash, is_active, is_admin FROM users WHERE email = ?",
-    )
-    .bind(payload.email.trim().to_lowercase())
-    .fetch_optional(pool)
-    .await
-    {
-        Ok(user) => user,
+    let user = match load_user_with_password_by_email(&state.pool, payload.email.trim()).await {
+        Ok(Some(user)) => user,
+        Ok(None) => return json_error(StatusCode::UNAUTHORIZED, "invalid credentials"),
         Err(_) => return json_error(StatusCode::INTERNAL_SERVER_ERROR, "failed to query user"),
-    };
-
-    let Some(user) = user else {
-        return json_error(StatusCode::UNAUTHORIZED, "invalid credentials");
     };
 
     if !user.is_active {
@@ -144,24 +168,178 @@ pub async fn login(
         return json_error(StatusCode::UNAUTHORIZED, "invalid credentials");
     }
 
-    let expires_at = Utc::now() + Duration::minutes(ACCESS_TOKEN_TTL_MINUTES);
-    let access_token = crate::auth::jwt::create_jwt(
-        &user.id,
-        user.is_admin,
-        state.jwt_secret.as_str(),
-        expires_at,
-    );
+    match issue_login_response(&state, user.summary()).await {
+        Ok(response) => (StatusCode::OK, Json(response)).into_response(),
+        Err(message) => json_error(StatusCode::INTERNAL_SERVER_ERROR, message),
+    }
+}
 
-    (
-        StatusCode::OK,
-        Json(LoginResponse {
-            access_token,
-            token_type: "Bearer".to_string(),
-            expires_at,
-            user: user.summary(),
-        }),
-    )
-        .into_response()
+pub async fn refresh_session(
+    State(state): State<crate::AppState>,
+    Json(payload): Json<RefreshTokenRequest>,
+) -> Response {
+    let Some(stored_token) = load_active_refresh_token(&state.pool, &payload.refresh_token)
+        .await
+        .unwrap_or(None)
+    else {
+        return json_error(StatusCode::UNAUTHORIZED, "valid refresh token is required");
+    };
+
+    let user = match load_user_summary_by_id(&state.pool, &stored_token.user_id).await {
+        Ok(Some(user)) => user,
+        Ok(None) => return json_error(StatusCode::UNAUTHORIZED, "user not found"),
+        Err(_) => return json_error(StatusCode::INTERNAL_SERVER_ERROR, "failed to load user"),
+    };
+
+    if !user.is_active {
+        let _ = revoke_refresh_token_hash(&state.pool, &stored_token.token).await;
+        return json_error(StatusCode::UNAUTHORIZED, "user is not active");
+    }
+
+    match rotate_refresh_token(&state.pool, &stored_token).await {
+        Ok(new_refresh_token) => {
+            let expires_at = Utc::now() + Duration::minutes(ACCESS_TOKEN_TTL_MINUTES);
+            let access_token = crate::auth::jwt::create_jwt(
+                &user.id,
+                user.is_admin,
+                state.jwt_secret.as_str(),
+                expires_at,
+            );
+            (
+                StatusCode::OK,
+                Json(LoginResponse {
+                    access_token,
+                    refresh_token: new_refresh_token,
+                    token_type: "Bearer".to_string(),
+                    expires_at,
+                    user,
+                }),
+            )
+                .into_response()
+        }
+        Err(message) => json_error(StatusCode::INTERNAL_SERVER_ERROR, message),
+    }
+}
+
+pub async fn logout(
+    State(state): State<crate::AppState>,
+    Json(payload): Json<RefreshTokenRequest>,
+) -> Response {
+    let _ = revoke_refresh_token(&state.pool, &payload.refresh_token).await;
+    json_message(StatusCode::OK, "logged out")
+}
+
+pub async fn change_password(
+    State(state): State<crate::AppState>,
+    Extension(claims): Extension<crate::auth::jwt::Claims>,
+    Json(payload): Json<ChangePasswordRequest>,
+) -> Response {
+    if let Err(message) = validate_password(&payload.new_password) {
+        return json_error(StatusCode::BAD_REQUEST, message);
+    }
+
+    let user = match load_user_with_password_by_id(&state.pool, &claims.sub).await {
+        Ok(Some(user)) => user,
+        Ok(None) => return json_error(StatusCode::NOT_FOUND, "user not found"),
+        Err(_) => return json_error(StatusCode::INTERNAL_SERVER_ERROR, "failed to load user"),
+    };
+
+    if !crate::auth::hash::verify_password(&payload.current_password, &user.password_hash) {
+        return json_error(StatusCode::UNAUTHORIZED, "current password is incorrect");
+    }
+
+    let next_hash = match crate::auth::hash::hash_password(&payload.new_password) {
+        Ok(hash) => hash,
+        Err(_) => return json_error(StatusCode::INTERNAL_SERVER_ERROR, "failed to hash password"),
+    };
+
+    if sqlx::query("UPDATE users SET password_hash = ? WHERE id = ?")
+        .bind(next_hash)
+        .bind(&user.id)
+        .execute(&state.pool)
+        .await
+        .is_err()
+    {
+        return json_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "failed to update password",
+        );
+    }
+
+    let _ = revoke_all_refresh_tokens_for_user(&state.pool, &user.id).await;
+    json_message(StatusCode::OK, "password updated")
+}
+
+pub async fn forgot_password(
+    State(state): State<crate::AppState>,
+    Json(payload): Json<ForgotPasswordRequest>,
+) -> Response {
+    let message = "if the user exists, a reset token was created";
+    let user = match load_user_summary_by_email(&state.pool, payload.email.trim()).await {
+        Ok(user) => user,
+        Err(_) => return json_error(StatusCode::INTERNAL_SERVER_ERROR, "failed to query user"),
+    };
+
+    let Some(user) = user else {
+        return (
+            StatusCode::OK,
+            Json(ForgotPasswordResponse {
+                message: message.to_string(),
+                reset_token: String::new(),
+            }),
+        )
+            .into_response();
+    };
+
+    match issue_password_reset_token(&state.pool, &user.id).await {
+        Ok(reset_token) => (
+            StatusCode::OK,
+            Json(ForgotPasswordResponse {
+                message: message.to_string(),
+                reset_token,
+            }),
+        )
+            .into_response(),
+        Err(error) => json_error(StatusCode::INTERNAL_SERVER_ERROR, error),
+    }
+}
+
+pub async fn reset_password(
+    State(state): State<crate::AppState>,
+    Json(payload): Json<ResetPasswordRequest>,
+) -> Response {
+    if let Err(message) = validate_password(&payload.new_password) {
+        return json_error(StatusCode::BAD_REQUEST, message);
+    }
+
+    let Some(reset_record) = load_active_password_reset_token(&state.pool, &payload.reset_token)
+        .await
+        .unwrap_or(None)
+    else {
+        return json_error(StatusCode::UNAUTHORIZED, "valid reset token is required");
+    };
+
+    let next_hash = match crate::auth::hash::hash_password(&payload.new_password) {
+        Ok(hash) => hash,
+        Err(_) => return json_error(StatusCode::INTERNAL_SERVER_ERROR, "failed to hash password"),
+    };
+
+    if sqlx::query("UPDATE users SET password_hash = ? WHERE id = ?")
+        .bind(next_hash)
+        .bind(&reset_record.user_id)
+        .execute(&state.pool)
+        .await
+        .is_err()
+    {
+        return json_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "failed to update password",
+        );
+    }
+
+    let _ = consume_password_reset_token_hash(&state.pool, &reset_record.token).await;
+    let _ = revoke_all_refresh_tokens_for_user(&state.pool, &reset_record.user_id).await;
+    json_message(StatusCode::OK, "password reset complete")
 }
 
 pub async fn me(
@@ -218,6 +396,240 @@ fn validate_password(password: &str) -> Result<(), String> {
     Ok(())
 }
 
+async fn issue_login_response(
+    state: &crate::AppState,
+    user: UserSummary,
+) -> Result<LoginResponse, String> {
+    let expires_at = Utc::now() + Duration::minutes(ACCESS_TOKEN_TTL_MINUTES);
+    let access_token = crate::auth::jwt::create_jwt(
+        &user.id,
+        user.is_admin,
+        state.jwt_secret.as_str(),
+        expires_at,
+    );
+    let refresh_token = issue_refresh_token(&state.pool, &user.id, None).await?;
+
+    Ok(LoginResponse {
+        access_token,
+        refresh_token,
+        token_type: "Bearer".to_string(),
+        expires_at,
+        user,
+    })
+}
+
+async fn issue_refresh_token(
+    pool: &sqlx::SqlitePool,
+    user_id: &str,
+    session_id: Option<&str>,
+) -> Result<String, String> {
+    let raw_token = generate_opaque_token();
+    let token_hash = hash_opaque_token(&raw_token);
+    let session_id = session_id.unwrap_or_else(|| raw_token.as_str()).to_string();
+    let expires_at = sqlite_timestamp(Utc::now() + Duration::days(REFRESH_TOKEN_TTL_DAYS));
+
+    sqlx::query(
+        "INSERT INTO refresh_tokens (token, user_id, expires_at, created_at, session_id, revoked_at, replaced_by_token) VALUES (?, ?, ?, CURRENT_TIMESTAMP, ?, NULL, NULL)",
+    )
+    .bind(&token_hash)
+    .bind(user_id)
+    .bind(expires_at)
+    .bind(session_id)
+    .execute(pool)
+    .await
+    .map_err(|_| "failed to create refresh token".to_string())?;
+
+    Ok(raw_token)
+}
+
+async fn rotate_refresh_token(
+    pool: &sqlx::SqlitePool,
+    stored_token: &StoredRefreshToken,
+) -> Result<String, String> {
+    let next_token = generate_opaque_token();
+    let next_hash = hash_opaque_token(&next_token);
+    let expires_at = sqlite_timestamp(Utc::now() + Duration::days(REFRESH_TOKEN_TTL_DAYS));
+
+    sqlx::query(
+        "INSERT INTO refresh_tokens (token, user_id, expires_at, created_at, session_id, revoked_at, replaced_by_token) VALUES (?, ?, ?, CURRENT_TIMESTAMP, ?, NULL, NULL)",
+    )
+    .bind(&next_hash)
+    .bind(&stored_token.user_id)
+    .bind(expires_at)
+    .bind(&stored_token.session_id)
+    .execute(pool)
+    .await
+    .map_err(|_| "failed to rotate refresh token".to_string())?;
+
+    sqlx::query(
+        "UPDATE refresh_tokens SET revoked_at = CURRENT_TIMESTAMP, replaced_by_token = ? WHERE token = ?",
+    )
+    .bind(&next_hash)
+    .bind(&stored_token.token)
+    .execute(pool)
+    .await
+    .map_err(|_| "failed to revoke previous refresh token".to_string())?;
+
+    Ok(next_token)
+}
+
+async fn revoke_refresh_token(pool: &sqlx::SqlitePool, raw_token: &str) -> Result<(), sqlx::Error> {
+    let token_hash = hash_opaque_token(raw_token);
+    revoke_refresh_token_hash(pool, &token_hash).await
+}
+
+async fn revoke_refresh_token_hash(
+    pool: &sqlx::SqlitePool,
+    token_hash: &str,
+) -> Result<(), sqlx::Error> {
+    sqlx::query("UPDATE refresh_tokens SET revoked_at = CURRENT_TIMESTAMP WHERE token = ?")
+        .bind(token_hash)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
+async fn revoke_all_refresh_tokens_for_user(
+    pool: &sqlx::SqlitePool,
+    user_id: &str,
+) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        "UPDATE refresh_tokens SET revoked_at = CURRENT_TIMESTAMP WHERE user_id = ? AND revoked_at IS NULL",
+    )
+    .bind(user_id)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+async fn issue_password_reset_token(
+    pool: &sqlx::SqlitePool,
+    user_id: &str,
+) -> Result<String, String> {
+    let raw_token = generate_opaque_token();
+    let token_hash = hash_opaque_token(&raw_token);
+    let expires_at =
+        sqlite_timestamp(Utc::now() + Duration::minutes(PASSWORD_RESET_TOKEN_TTL_MINUTES));
+
+    sqlx::query("UPDATE password_reset_tokens SET consumed_at = CURRENT_TIMESTAMP WHERE user_id = ? AND consumed_at IS NULL")
+        .bind(user_id)
+        .execute(pool)
+        .await
+        .map_err(|_| "failed to clear previous reset tokens".to_string())?;
+
+    sqlx::query(
+        "INSERT INTO password_reset_tokens (token, user_id, expires_at, created_at, consumed_at) VALUES (?, ?, ?, CURRENT_TIMESTAMP, NULL)",
+    )
+    .bind(&token_hash)
+    .bind(user_id)
+    .bind(expires_at)
+    .execute(pool)
+    .await
+    .map_err(|_| "failed to create reset token".to_string())?;
+
+    Ok(raw_token)
+}
+
+async fn consume_password_reset_token_hash(
+    pool: &sqlx::SqlitePool,
+    token_hash: &str,
+) -> Result<(), sqlx::Error> {
+    sqlx::query("UPDATE password_reset_tokens SET consumed_at = CURRENT_TIMESTAMP WHERE token = ?")
+        .bind(token_hash)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
+async fn load_active_refresh_token(
+    pool: &sqlx::SqlitePool,
+    raw_token: &str,
+) -> Result<Option<StoredRefreshToken>, sqlx::Error> {
+    let token_hash = hash_opaque_token(raw_token);
+    sqlx::query_as::<_, StoredRefreshToken>(
+        "SELECT token, user_id, expires_at, session_id, revoked_at, replaced_by_token FROM refresh_tokens WHERE token = ? AND revoked_at IS NULL AND expires_at > CURRENT_TIMESTAMP",
+    )
+    .bind(token_hash)
+    .fetch_optional(pool)
+    .await
+}
+
+async fn load_active_password_reset_token(
+    pool: &sqlx::SqlitePool,
+    raw_token: &str,
+) -> Result<Option<StoredPasswordResetToken>, sqlx::Error> {
+    let token_hash = hash_opaque_token(raw_token);
+    sqlx::query_as::<_, StoredPasswordResetToken>(
+        "SELECT token, user_id, expires_at, consumed_at FROM password_reset_tokens WHERE token = ? AND consumed_at IS NULL AND expires_at > CURRENT_TIMESTAMP",
+    )
+    .bind(token_hash)
+    .fetch_optional(pool)
+    .await
+}
+
+async fn load_user_summary_by_id(
+    pool: &sqlx::SqlitePool,
+    user_id: &str,
+) -> Result<Option<UserSummary>, sqlx::Error> {
+    sqlx::query_as::<_, UserSummary>(
+        "SELECT id, email, is_active, is_admin FROM users WHERE id = ?",
+    )
+    .bind(user_id)
+    .fetch_optional(pool)
+    .await
+}
+
+async fn load_user_summary_by_email(
+    pool: &sqlx::SqlitePool,
+    email: &str,
+) -> Result<Option<UserSummary>, sqlx::Error> {
+    sqlx::query_as::<_, UserSummary>(
+        "SELECT id, email, is_active, is_admin FROM users WHERE email = ?",
+    )
+    .bind(email.trim().to_lowercase())
+    .fetch_optional(pool)
+    .await
+}
+
+async fn load_user_with_password_by_email(
+    pool: &sqlx::SqlitePool,
+    email: &str,
+) -> Result<Option<UserWithPassword>, sqlx::Error> {
+    sqlx::query_as(
+        "SELECT id, email, password_hash, is_active, is_admin FROM users WHERE email = ?",
+    )
+    .bind(email.trim().to_lowercase())
+    .fetch_optional(pool)
+    .await
+}
+
+async fn load_user_with_password_by_id(
+    pool: &sqlx::SqlitePool,
+    user_id: &str,
+) -> Result<Option<UserWithPassword>, sqlx::Error> {
+    sqlx::query_as("SELECT id, email, password_hash, is_active, is_admin FROM users WHERE id = ?")
+        .bind(user_id)
+        .fetch_optional(pool)
+        .await
+}
+
+fn generate_opaque_token() -> String {
+    let mut bytes = [0u8; 32];
+    rand::thread_rng().fill_bytes(&mut bytes);
+    URL_SAFE_NO_PAD.encode(bytes)
+}
+
+fn hash_opaque_token(token: &str) -> String {
+    sha256(token.as_bytes())
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>()
+}
+
+fn sqlite_timestamp(datetime: DateTime<Utc>) -> String {
+    datetime.format("%Y-%m-%d %H:%M:%S").to_string()
+}
+
 #[derive(Debug, Clone, FromRow)]
 struct UserWithPassword {
     id: String,
@@ -236,6 +648,19 @@ impl UserWithPassword {
             is_admin: self.is_admin,
         }
     }
+}
+
+#[derive(Debug, Clone, FromRow)]
+struct StoredRefreshToken {
+    token: String,
+    user_id: String,
+    session_id: String,
+}
+
+#[derive(Debug, Clone, FromRow)]
+struct StoredPasswordResetToken {
+    token: String,
+    user_id: String,
 }
 
 #[cfg(test)]
@@ -299,6 +724,7 @@ mod tests {
         let login_body: LoginResponse = test_support::response_json(login_response).await;
         assert_eq!(login_body.user.email, "admin@example.com");
         assert_eq!(login_body.token_type, "Bearer");
+        assert!(!login_body.refresh_token.is_empty());
 
         let claims = verify_jwt(&login_body.access_token, state.jwt_secret.as_str()).unwrap();
         let me_response = me(State(state), Extension(claims)).await;
@@ -306,6 +732,186 @@ mod tests {
         let me_body: SessionResponse = test_support::response_json(me_response).await;
         assert_eq!(me_body.user.email, "admin@example.com");
         assert!(me_body.user.is_admin);
+    }
+
+    #[tokio::test]
+    async fn test_refresh_and_logout_flow() {
+        let (state, _dir) = test_support::make_test_state().await;
+
+        let register_response = register(
+            State(state.clone()),
+            Json(RegisterRequest {
+                email: "admin@example.com".to_string(),
+                password: "secret123".to_string(),
+            }),
+        )
+        .await;
+        let _: RegisterResponse = test_support::response_json(register_response).await;
+
+        let login_response = login(
+            State(state.clone()),
+            Json(LoginRequest {
+                email: "admin@example.com".to_string(),
+                password: "secret123".to_string(),
+            }),
+        )
+        .await;
+        let login_body: LoginResponse = test_support::response_json(login_response).await;
+
+        let refresh_response = refresh_session(
+            State(state.clone()),
+            Json(RefreshTokenRequest {
+                refresh_token: login_body.refresh_token.clone(),
+            }),
+        )
+        .await;
+        assert_eq!(refresh_response.status(), StatusCode::OK);
+        let refresh_body: LoginResponse = test_support::response_json(refresh_response).await;
+        assert_ne!(refresh_body.refresh_token, login_body.refresh_token);
+
+        let logout_response = logout(
+            State(state.clone()),
+            Json(RefreshTokenRequest {
+                refresh_token: refresh_body.refresh_token.clone(),
+            }),
+        )
+        .await;
+        assert_eq!(logout_response.status(), StatusCode::OK);
+
+        let second_refresh = refresh_session(
+            State(state),
+            Json(RefreshTokenRequest {
+                refresh_token: refresh_body.refresh_token,
+            }),
+        )
+        .await;
+        assert_eq!(second_refresh.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn test_change_password_revokes_sessions_and_requires_new_password() {
+        let (state, _dir) = test_support::make_test_state().await;
+
+        let register_response = register(
+            State(state.clone()),
+            Json(RegisterRequest {
+                email: "admin@example.com".to_string(),
+                password: "secret123".to_string(),
+            }),
+        )
+        .await;
+        let register_body: RegisterResponse = test_support::response_json(register_response).await;
+
+        let login_response = login(
+            State(state.clone()),
+            Json(LoginRequest {
+                email: "admin@example.com".to_string(),
+                password: "secret123".to_string(),
+            }),
+        )
+        .await;
+        let login_body: LoginResponse = test_support::response_json(login_response).await;
+
+        let change_response = change_password(
+            State(state.clone()),
+            Extension(crate::auth::jwt::Claims {
+                sub: register_body.user.id.clone(),
+                exp: 9999999999,
+                is_admin: true,
+            }),
+            Json(ChangePasswordRequest {
+                current_password: "secret123".to_string(),
+                new_password: "new-secret-123".to_string(),
+            }),
+        )
+        .await;
+        assert_eq!(change_response.status(), StatusCode::OK);
+
+        let old_refresh = refresh_session(
+            State(state.clone()),
+            Json(RefreshTokenRequest {
+                refresh_token: login_body.refresh_token,
+            }),
+        )
+        .await;
+        assert_eq!(old_refresh.status(), StatusCode::UNAUTHORIZED);
+
+        let old_login = login(
+            State(state.clone()),
+            Json(LoginRequest {
+                email: "admin@example.com".to_string(),
+                password: "secret123".to_string(),
+            }),
+        )
+        .await;
+        assert_eq!(old_login.status(), StatusCode::UNAUTHORIZED);
+
+        let new_login = login(
+            State(state),
+            Json(LoginRequest {
+                email: "admin@example.com".to_string(),
+                password: "new-secret-123".to_string(),
+            }),
+        )
+        .await;
+        assert_eq!(new_login.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn test_forgot_and_reset_password_flow() {
+        let (state, _dir) = test_support::make_test_state().await;
+
+        let register_response = register(
+            State(state.clone()),
+            Json(RegisterRequest {
+                email: "admin@example.com".to_string(),
+                password: "secret123".to_string(),
+            }),
+        )
+        .await;
+        let _: RegisterResponse = test_support::response_json(register_response).await;
+
+        let forgot_response = forgot_password(
+            State(state.clone()),
+            Json(ForgotPasswordRequest {
+                email: "admin@example.com".to_string(),
+            }),
+        )
+        .await;
+        assert_eq!(forgot_response.status(), StatusCode::OK);
+        let forgot_body: ForgotPasswordResponse =
+            test_support::response_json(forgot_response).await;
+        assert!(!forgot_body.reset_token.is_empty());
+
+        let reset_response = reset_password(
+            State(state.clone()),
+            Json(ResetPasswordRequest {
+                reset_token: forgot_body.reset_token,
+                new_password: "reset-secret-123".to_string(),
+            }),
+        )
+        .await;
+        assert_eq!(reset_response.status(), StatusCode::OK);
+
+        let login_response = login(
+            State(state.clone()),
+            Json(LoginRequest {
+                email: "admin@example.com".to_string(),
+                password: "secret123".to_string(),
+            }),
+        )
+        .await;
+        assert_eq!(login_response.status(), StatusCode::UNAUTHORIZED);
+
+        let login_response = login(
+            State(state),
+            Json(LoginRequest {
+                email: "admin@example.com".to_string(),
+                password: "reset-secret-123".to_string(),
+            }),
+        )
+        .await;
+        assert_eq!(login_response.status(), StatusCode::OK);
     }
 
     #[tokio::test]
