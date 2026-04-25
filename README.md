@@ -293,6 +293,28 @@ cp .env.example .env
 docker compose up --build
 ```
 
+## Local browser Web Push experiment guide
+
+Use this when you want to verify the browser-facing Web Push path end to end on your own machine.
+
+1. Set runtime env:
+   - `JWT_SECRET`
+   - `WEB_PUSH_VAPID_PRIVATE_KEY`
+   - `WEB_PUSH_VAPID_SUBJECT`
+2. Start Peanut and open `http://127.0.0.1:3000`
+3. Register the first admin user and log in
+4. In the Push section, confirm that the VAPID public key field is auto-filled
+5. Click `Register browser Web Push`
+6. Allow browser notification permission when prompted
+7. Confirm that a `web_push` subscription appears in the console
+8. Enqueue a push message
+9. Confirm the queue item moves to `sent` or inspect `last_error` if delivery fails
+
+Notes:
+- automatic browser registration requires notification permission in the real browser
+- the manual Web Push subscription form is useful for validating the backend API path even when browser permission prompts are blocked
+- if `GET /api/push/vapid-public-key` returns 404, check the VAPID env vars first
+
 ## Release checklist
 
 Before shipping a change, verify:
@@ -307,9 +329,11 @@ Manual smoke test:
 1. open the console
 2. register first admin
 3. login
-4. activate a second user
-5. upload/read/delete a storage object
-6. subscribe an ntfy topic and enqueue a push message
+4. create a data table
+5. create and update a row
+6. verify title filter or generic field filter works
+7. subscribe an ntfy topic and enqueue a push message
+8. if VAPID is configured, confirm the public key auto-loads and try browser or manual Web Push subscription
 
 ## Backups and operations
 

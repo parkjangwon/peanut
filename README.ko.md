@@ -286,6 +286,28 @@ cp .env.example .env
 docker compose up --build
 ```
 
+## 로컬 브라우저 Web Push 실험 가이드
+
+로컬 브라우저에서 Web Push 경로를 끝까지 확인하고 싶을 때 아래 순서로 보면 된다.
+
+1. 런타임 환경변수 설정
+   - `JWT_SECRET`
+   - `WEB_PUSH_VAPID_PRIVATE_KEY`
+   - `WEB_PUSH_VAPID_SUBJECT`
+2. Peanut 실행 후 `http://127.0.0.1:3000` 접속
+3. 첫 admin 유저 등록 후 로그인
+4. Push 섹션에서 VAPID public key가 자동으로 채워지는지 확인
+5. `Register browser Web Push` 클릭
+6. 브라우저 알림 권한 요청이 뜨면 허용
+7. 콘솔에 `web_push` subscription이 생기는지 확인
+8. push 메시지 enqueue
+9. queue 항목이 `sent`로 바뀌는지 확인하고, 실패하면 `last_error` 확인
+
+메모:
+- 자동 브라우저 등록은 실제 브라우저 알림 권한이 필요하다
+- 브라우저 권한 팝업이 막히는 환경에서는 manual Web Push subscription 폼으로 백엔드 API 경로를 검증할 수 있다
+- `GET /api/push/vapid-public-key`가 404를 반환하면 먼저 VAPID 환경변수를 확인하면 된다
+
 ## 릴리스 전 체크리스트
 
 ```bash
@@ -298,9 +320,11 @@ cd peanut-console && npm run lint && npm run build && cd ..
 1. 콘솔 열기
 2. 첫 admin 유저 등록
 3. 로그인
-4. 두 번째 유저 승인
-5. storage 업로드/읽기/삭제
-6. ntfy topic 구독 후 push queue 메시지 전송
+4. data table 생성
+5. row 생성/수정
+6. title filter 또는 generic field filter 동작 확인
+7. ntfy topic 구독 후 push queue 메시지 전송
+8. VAPID가 설정돼 있으면 public key 자동 로드와 browser/manual Web Push subscription 확인
 
 ## 백업과 운영
 
