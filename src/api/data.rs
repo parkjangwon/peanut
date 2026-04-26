@@ -495,6 +495,32 @@ pub async fn delete_query_preset(
     }
 }
 
+pub async fn run_query_preset(
+    State(state): State<crate::AppState>,
+    Extension(claims): Extension<Claims>,
+    Path((table, preset_id)): Path<(String, String)>,
+) -> Response {
+    if !claims.is_admin {
+        return json_error(StatusCode::FORBIDDEN, "admin access required");
+    }
+
+    let table = match load_table(&state.pool, &table).await {
+        Ok(table) => table,
+        Err(LoadTableError::NotFound) => return json_error(StatusCode::NOT_FOUND, "data table not found"),
+        Err(LoadTableError::Invalid(message)) => return json_error(StatusCode::INTERNAL_SERVER_ERROR, message),
+        Err(LoadTableError::QueryFailed) => return json_error(StatusCode::INTERNAL_SERVER_ERROR, "failed to load data table"),
+    };
+
+    let preset = match load_query_preset(&state.pool, &table.id, &preset_id).await {
+        Ok(preset) => preset,
+        Err(LoadPresetError::NotFound) => return json_error(StatusCode::NOT_FOUND, "query preset not found"),
+        Err(LoadPresetError::Invalid(message)) => return json_error(StatusCode::INTERNAL_SERVER_ERROR, message),
+        Err(LoadPresetError::QueryFailed) => return json_error(StatusCode::INTERNAL_SERVER_ERROR, "failed to load query preset"),
+    };
+
+    execute_list_rows(&state, &claims, &table, &preset.params).await
+}
+
 pub async fn update_table(
     State(state): State<crate::AppState>,
     Extension(claims): Extension<Claims>,
@@ -667,7 +693,16 @@ pub async fn list_rows(
         Err(LoadTableError::QueryFailed) => return json_error(StatusCode::INTERNAL_SERVER_ERROR, "failed to load data table"),
     };
 
-    if !can_read_table(&claims, &table.access_policy) {
+    execute_list_rows(&state, &claims, &table, &params).await
+}
+
+async fn execute_list_rows(
+    state: &crate::AppState,
+    claims: &Claims,
+    table: &LoadedTable,
+    params: &ListRowsParams,
+) -> Response {
+    if !can_read_table(claims, &table.access_policy) {
         return json_error(StatusCode::FORBIDDEN, "read access denied");
     }
 
@@ -676,7 +711,7 @@ pub async fn list_rows(
     let order_by = params.order_by.as_deref().unwrap_or("created_at");
     let descending = !matches!(params.order.as_deref(), Some("asc"));
 
-    if let Err(message) = validate_list_rows_params(&table.schema, &params) {
+    if let Err(message) = validate_list_rows_params(&table.schema, params) {
         return json_error(StatusCode::BAD_REQUEST, message);
     }
 
@@ -709,7 +744,7 @@ pub async fn list_rows(
                 }
             }
 
-            let filtered = apply_row_filters(rows, &table.schema, &params);
+            let filtered = apply_row_filters(rows, &table.schema, params);
             let mut filtered = filtered;
             sort_rows(&mut filtered, order_by, descending);
             let filtered: Vec<_> = filtered.into_iter().skip(offset).take(limit).collect();
@@ -2528,6 +2563,47 @@ mod tests {
         let created_preset: QueryPresetResponse = test_support::response_json(create_preset_response).await;
         assert_eq!(created_preset.name, "open-buy-items");
         assert_eq!(created_preset.params.search.as_deref(), Some("buy"));
+
+        let create_first_row = create_row(
+            State(state.clone()),
+            Extension(claims(&admin.user.id, true)),
+            axum::extract::Path("todos".to_string()),
+            Json(CreateRowRequest {
+                data: json!({ "title": "buy coffee", "done": false }),
+            }),
+        )
+        .await;
+        assert_eq!(create_first_row.status(), StatusCode::CREATED);
+
+        let create_second_row = create_row(
+            State(state.clone()),
+            Extension(claims(&admin.user.id, true)),
+            axum::extract::Path("todos".to_string()),
+            Json(CreateRowRequest {
+                data: json!({ "title": "done item", "done": true }),
+            }),
+        )
+        .await;
+        assert_eq!(create_second_row.status(), StatusCode::CREATED);
+
+        let run_response = run_query_preset(
+            State(state.clone()),
+            Extension(claims(&admin.user.id, true)),
+            axum::extract::Path(("todos".to_string(), created_preset.id.clone())),
+        )
+        .await;
+        assert_eq!(run_response.status(), StatusCode::OK);
+        let run_body: DataRowsResponse = test_support::response_json(run_response).await;
+        assert_eq!(run_body.rows.len(), 1);
+        assert_eq!(run_body.rows[0].data.get("title"), Some(&json!("buy coffee")));
+
+        let forbidden_run = run_query_preset(
+            State(state.clone()),
+            Extension(claims(&admin.user.id, false)),
+            axum::extract::Path(("todos".to_string(), created_preset.id.clone())),
+        )
+        .await;
+        assert_eq!(forbidden_run.status(), StatusCode::FORBIDDEN);
 
         let list_response = list_query_presets(
             State(state.clone()),

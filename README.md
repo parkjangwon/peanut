@@ -99,6 +99,7 @@ Current capabilities:
 - `PATCH /api/data/tables/:table`
 - `GET /api/data/tables/:table/presets`
 - `POST /api/data/tables/:table/presets`
+- `GET /api/data/tables/:table/presets/:preset_id/run`
 - `PATCH /api/data/tables/:table/presets/:preset_id`
 - `DELETE /api/data/tables/:table/presets/:preset_id`
 - `GET /api/data/tables/:table/export`
@@ -413,12 +414,14 @@ Admin row realtime stream:
 
 ### `GET /api/data/tables/:table/presets`
 ### `POST /api/data/tables/:table/presets`
+### `GET /api/data/tables/:table/presets/:preset_id/run`
 ### `PATCH /api/data/tables/:table/presets/:preset_id`
 ### `DELETE /api/data/tables/:table/presets/:preset_id`
 Admin saved query presets:
 - store reusable bounded row-query params per table
 - useful for repeated operator filters like "open items", "recent failures", or "buy-* tasks"
 - presets persist `search`, filters, ordering, limit, and offset
+- `GET /api/data/tables/:table/presets/:preset_id/run` executes the saved preset and returns bounded row results directly
 
 ### `POST /api/data/tables/:table/import`
 Admin snapshot import:

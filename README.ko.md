@@ -100,6 +100,7 @@ Peanut은 이제 Peanut이 관리하는 logical table용 제한된 SQLite 기반
 - `PATCH /api/data/tables/:table`
 - `GET /api/data/tables/:table/presets`
 - `POST /api/data/tables/:table/presets`
+- `GET /api/data/tables/:table/presets/:preset_id/run`
 - `PATCH /api/data/tables/:table/presets/:preset_id`
 - `DELETE /api/data/tables/:table/presets/:preset_id`
 - `GET /api/data/tables/:table/export`
@@ -409,12 +410,14 @@ admin row realtime stream:
 
 ### `GET /api/data/tables/:table/presets`
 ### `POST /api/data/tables/:table/presets`
+### `GET /api/data/tables/:table/presets/:preset_id/run`
 ### `PATCH /api/data/tables/:table/presets/:preset_id`
 ### `DELETE /api/data/tables/:table/presets/:preset_id`
 admin saved query presets:
 - table별 bounded row-query params를 재사용 가능한 preset으로 저장한다
 - "open items", "recent failures", "buy-* tasks" 같은 반복 조회에 유용하다
 - preset에는 `search`, filters, ordering, limit, offset이 저장된다
+- `GET /api/data/tables/:table/presets/:preset_id/run`으로 저장된 preset을 바로 실행해 bounded row 결과를 받을 수 있다
 
 ### `POST /api/data/tables/:table/import`
 admin snapshot import:
