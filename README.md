@@ -89,7 +89,7 @@ What this means for external frontend apps:
   - delete objects
 - S3-like path-style endpoints are now also available under `/api/s3/:bucket/*key`
 - authenticated clients can now mint presigned S3-like URLs through `POST /api/s3/:bucket/*key/presign`
-- S3-like object routes now accept either bearer auth or SigV4-style query auth from presigned URLs
+- S3-like object routes now accept either bearer auth, SigV4-style `Authorization` header auth, or SigV4-style query auth from presigned URLs
 - S3-like object responses now include content-type, content-length, ETag, and last-modified metadata
 - S3-like success/error responses now also include `x-amz-request-id` headers, and object `Last-Modified` headers are emitted as HTTP-date strings
 - S3-like bucket listing supports `list-type=2`, `prefix`, `delimiter`, `max-keys`, and `continuation-token`

@@ -876,6 +876,94 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_header_sigv4_get_round_trip_uses_authorization_header() {
+        let (state, _dir) = test_support::make_test_state().await;
+        let user = register_user(state.clone(), "header-auth@example.com").await;
+        let claims = claims_for(&user.user.id);
+
+        let put_response = put_bucket_object(
+            State(state.clone()),
+            Extension(claims),
+            axum::extract::Path(("assets".to_string(), "notes/header.txt".to_string())),
+            HeaderMap::new(),
+            Bytes::from_static(b"hello header"),
+        )
+        .await;
+        assert_eq!(put_response.status(), StatusCode::OK);
+
+        let signed = crate::middleware::s3_auth::build_signed_header_auth(
+            "GET",
+            "https://example.com/api/s3/assets/notes/header.txt",
+            &user.user.id,
+            state.jwt_secret.as_str(),
+            None,
+        )
+        .unwrap();
+
+        let app = axum::Router::new()
+            .route("/api/s3/:bucket/*key", axum::routing::get(get_bucket_object))
+            .layer(axum::middleware::from_fn_with_state(
+                state.clone(),
+                crate::middleware::s3_auth::s3_auth_middleware,
+            ))
+            .with_state(state);
+
+        let response = tower::ServiceExt::oneshot(
+            app,
+            axum::http::Request::builder()
+                .uri("/api/s3/assets/notes/header.txt")
+                .header("host", "example.com")
+                .header("authorization", signed.authorization)
+                .header("x-amz-date", signed.amz_date)
+                .header("x-amz-content-sha256", signed.payload_hash)
+                .body(axum::body::Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn test_header_sigv4_rejects_invalid_signature() {
+        let (state, _dir) = test_support::make_test_state().await;
+        let user = register_user(state.clone(), "header-bad@example.com").await;
+
+        let signed = crate::middleware::s3_auth::build_signed_header_auth(
+            "GET",
+            "https://example.com/api/s3/assets/notes/missing.txt",
+            &user.user.id,
+            state.jwt_secret.as_str(),
+            None,
+        )
+        .unwrap();
+        let bad_auth = signed.authorization.replacen("Signature=", "Signature=deadbeef", 1);
+
+        let app = axum::Router::new()
+            .route("/api/s3/:bucket/*key", axum::routing::get(get_bucket_object))
+            .layer(axum::middleware::from_fn_with_state(
+                state.clone(),
+                crate::middleware::s3_auth::s3_auth_middleware,
+            ))
+            .with_state(state);
+
+        let response = tower::ServiceExt::oneshot(
+            app,
+            axum::http::Request::builder()
+                .uri("/api/s3/assets/notes/missing.txt")
+                .header("host", "example.com")
+                .header("authorization", bad_auth)
+                .header("x-amz-date", signed.amz_date)
+                .header("x-amz-content-sha256", signed.payload_hash)
+                .body(axum::body::Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
     async fn test_s3_like_list_objects_v2_supports_delimiter_common_prefixes() {
         let (state, _dir) = test_support::make_test_state().await;
         let user = register_user(state.clone(), "prefixes@example.com").await;

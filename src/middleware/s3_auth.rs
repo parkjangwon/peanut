@@ -1,6 +1,6 @@
 use axum::{
     extract::{Request, State},
-    http::StatusCode,
+    http::{HeaderMap, StatusCode},
     middleware::Next,
     response::Response,
 };
@@ -44,7 +44,21 @@ pub async fn s3_auth_middleware(
         .get("Authorization")
         .and_then(|value| value.to_str().ok())
     {
-        crate::middleware::auth::authenticate_bearer_token(&state, Some(auth_header)).await?
+        if auth_header.starts_with("Bearer ") {
+            crate::middleware::auth::authenticate_bearer_token(&state, Some(auth_header)).await?
+        } else if auth_header.starts_with(SUPPORTED_ALGORITHM) {
+            let method = req.method().as_str().to_string();
+            let path = req.uri().path().to_string();
+            let query = req.uri().query().unwrap_or_default().to_string();
+            let headers = req.headers().clone();
+            authenticate_header_signed_request(&state, &method, &path, &query, &headers, auth_header)
+                .await?
+        } else {
+            return Err(crate::api::common::json_error(
+                StatusCode::UNAUTHORIZED,
+                "unsupported authorization scheme",
+            ));
+        }
     } else {
         let method = req.method().as_str().to_string();
         let path = req.uri().path().to_string();
@@ -59,6 +73,14 @@ pub async fn s3_auth_middleware(
 
     req.extensions_mut().insert(claims);
     Ok(next.run(req).await)
+}
+
+#[cfg_attr(not(test), allow(dead_code))]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SignedHeaderAuth {
+    pub authorization: String,
+    pub amz_date: String,
+    pub payload_hash: String,
 }
 
 pub fn build_presigned_url(
@@ -106,7 +128,7 @@ pub fn build_presigned_url(
         &method,
         &canonical_uri,
         &canonical_query,
-        &host,
+        &[("host".to_string(), host.clone())],
         "host",
         "UNSIGNED-PAYLOAD",
     );
@@ -122,6 +144,50 @@ pub fn build_presigned_url(
         method,
         url,
         expires_at,
+    })
+}
+
+#[cfg_attr(not(test), allow(dead_code))]
+pub fn build_signed_header_auth(
+    method: &str,
+    url: &str,
+    access_key: &str,
+    jwt_secret: &str,
+    payload_hash: Option<&str>,
+) -> Result<SignedHeaderAuth, String> {
+    let method = normalize_method(method)?;
+    let payload_hash = payload_hash.unwrap_or("UNSIGNED-PAYLOAD").to_string();
+    let (host, canonical_uri, canonical_query) = parse_absolute_request_target(url)?;
+    let now = Utc::now();
+    let amz_date = now.format("%Y%m%dT%H%M%SZ").to_string();
+    let short_date = now.format("%Y%m%d").to_string();
+    let credential_scope = format!("{short_date}/{REGION}/{SERVICE}/{TERMINATOR}");
+    let credential = format!("{access_key}/{credential_scope}");
+    let signed_headers = "host;x-amz-content-sha256;x-amz-date".to_string();
+    let canonical_request = canonical_request(
+        &method,
+        &canonical_uri,
+        &canonical_query,
+        &[
+            ("host".to_string(), host.clone()),
+            ("x-amz-content-sha256".to_string(), payload_hash.clone()),
+            ("x-amz-date".to_string(), amz_date.clone()),
+        ],
+        &signed_headers,
+        &payload_hash,
+    );
+    let signing_key = signing_key(jwt_secret, access_key, &short_date);
+    let signature = hex_encode(&hmac_sha256(
+        &signing_key,
+        string_to_sign(&amz_date, &credential_scope, &canonical_request).as_bytes(),
+    ));
+    let authorization = format!(
+        "{SUPPORTED_ALGORITHM} Credential={credential}, SignedHeaders={signed_headers}, Signature={signature}"
+    );
+    Ok(SignedHeaderAuth {
+        authorization,
+        amz_date,
+        payload_hash,
     })
 }
 
@@ -208,8 +274,8 @@ async fn authenticate_presigned_request(
         &method,
         &canonical_uri,
         &canonical_query,
-        host,
-        &signed_headers,
+        &[("host".to_string(), host.trim().to_lowercase())],
+        "host",
         "UNSIGNED-PAYLOAD",
     );
     let credential_scope = format!("{scope_date}/{REGION}/{SERVICE}/{TERMINATOR}");
@@ -229,6 +295,68 @@ async fn authenticate_presigned_request(
     Ok(crate::auth::jwt::Claims {
         sub: user.id,
         exp: (request_time + Duration::seconds(expires as i64)).timestamp(),
+        is_admin: user.is_admin,
+    })
+}
+
+async fn authenticate_header_signed_request(
+    state: &crate::AppState,
+    method: &str,
+    path: &str,
+    query: &str,
+    headers: &HeaderMap,
+    authorization: &str,
+) -> Result<crate::auth::jwt::Claims, Response> {
+    let method = method.to_uppercase();
+    if !matches!(method.as_str(), "GET" | "PUT" | "HEAD" | "DELETE") {
+        return Err(crate::api::common::json_error(
+            StatusCode::UNAUTHORIZED,
+            "unsupported s3 auth method",
+        ));
+    }
+
+    let parsed = parse_authorization_header(authorization)?;
+    let amz_date = header_value(headers, "x-amz-date")?;
+    let payload_hash = header_value(headers, "x-amz-content-sha256")?;
+    let request_time = chrono::NaiveDateTime::parse_from_str(&amz_date, "%Y%m%dT%H%M%SZ")
+        .map(|value| value.and_utc())
+        .map_err(|_| crate::api::common::json_error(StatusCode::UNAUTHORIZED, "invalid x-amz-date"))?;
+    if Utc::now() > request_time + Duration::minutes(15) {
+        return Err(crate::api::common::json_error(
+            StatusCode::UNAUTHORIZED,
+            "signed request has expired",
+        ));
+    }
+
+    let (access_key, scope_date) = parse_credential(&parsed.credential)
+        .map_err(|message| crate::api::common::json_error(StatusCode::UNAUTHORIZED, message))?;
+    let signed_headers = parse_signed_headers(&parsed.signed_headers)?;
+    let canonical_headers = canonical_headers(headers, &signed_headers)?;
+    let canonical_request = canonical_request(
+        &method,
+        path,
+        &canonical_query_string_without_signature(query)?,
+        &canonical_headers,
+        &parsed.signed_headers,
+        &payload_hash,
+    );
+    let credential_scope = format!("{scope_date}/{REGION}/{SERVICE}/{TERMINATOR}");
+    let signing_key = signing_key(state.jwt_secret.as_str(), &access_key, &scope_date);
+    let computed = hex_encode(&hmac_sha256(
+        &signing_key,
+        string_to_sign(&amz_date, &credential_scope, &canonical_request).as_bytes(),
+    ));
+    if computed != parsed.signature {
+        return Err(crate::api::common::json_error(
+            StatusCode::UNAUTHORIZED,
+            "invalid authorization signature",
+        ));
+    }
+
+    let user = load_active_user(state, &access_key).await?;
+    Ok(crate::auth::jwt::Claims {
+        sub: user.id,
+        exp: (request_time + Duration::minutes(15)).timestamp(),
         is_admin: user.is_admin,
     })
 }
@@ -289,6 +417,23 @@ fn encode_key_path(key: &str) -> Result<String, String> {
     Ok(parts.join("/"))
 }
 
+#[cfg_attr(not(test), allow(dead_code))]
+fn parse_absolute_request_target(url: &str) -> Result<(String, String, String), String> {
+    let without_scheme = url
+        .strip_prefix("https://")
+        .or_else(|| url.strip_prefix("http://"))
+        .ok_or_else(|| "url must start with http:// or https://".to_string())?;
+    let mut parts = without_scheme.splitn(2, '/');
+    let host = parts.next().unwrap_or_default().trim();
+    if host.is_empty() {
+        return Err("url host must not be empty".to_string());
+    }
+    let remainder = parts.next().unwrap_or_default();
+    let path_and_query = format!("/{}", remainder);
+    let (path, query) = path_and_query.split_once('?').unwrap_or((path_and_query.as_str(), ""));
+    Ok((host.to_string(), path.to_string(), canonical_query_string_without_signature(query).map_err(|_| "invalid query string".to_string())?))
+}
+
 fn parse_credential(credential: &str) -> Result<(String, String), String> {
     let parts = credential.split('/').collect::<Vec<_>>();
     if parts.len() != 5 {
@@ -319,13 +464,16 @@ fn canonical_request(
     method: &str,
     canonical_uri: &str,
     canonical_query: &str,
-    host: &str,
+    canonical_headers: &[(String, String)],
     signed_headers: &str,
     payload_hash: &str,
 ) -> String {
+    let headers_block = canonical_headers
+        .iter()
+        .map(|(name, value)| format!("{}:{}\n", name.trim().to_lowercase(), value.trim()))
+        .collect::<String>();
     format!(
-        "{method}\n{canonical_uri}\n{canonical_query}\nhost:{}\n\n{signed_headers}\n{payload_hash}",
-        host.trim().to_lowercase()
+        "{method}\n{canonical_uri}\n{canonical_query}\n{headers_block}\n{signed_headers}\n{payload_hash}"
     )
 }
 
@@ -364,6 +512,81 @@ fn parse_query_pairs(query: &str) -> std::collections::HashMap<String, String> {
         }
     }
     values
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct AuthorizationHeader {
+    credential: String,
+    signed_headers: String,
+    signature: String,
+}
+
+fn parse_authorization_header(value: &str) -> Result<AuthorizationHeader, Response> {
+    let remainder = value
+        .strip_prefix(&format!("{SUPPORTED_ALGORITHM} "))
+        .ok_or_else(|| crate::api::common::json_error(StatusCode::UNAUTHORIZED, "unsupported authorization scheme"))?;
+    let mut credential = None;
+    let mut signed_headers = None;
+    let mut signature = None;
+    for segment in remainder.split(',') {
+        let segment = segment.trim();
+        if let Some(value) = segment.strip_prefix("Credential=") {
+            credential = Some(value.to_string());
+        } else if let Some(value) = segment.strip_prefix("SignedHeaders=") {
+            signed_headers = Some(value.to_string());
+        } else if let Some(value) = segment.strip_prefix("Signature=") {
+            signature = Some(value.to_string());
+        }
+    }
+    match (credential, signed_headers, signature) {
+        (Some(credential), Some(signed_headers), Some(signature)) => Ok(AuthorizationHeader {
+            credential,
+            signed_headers,
+            signature,
+        }),
+        _ => Err(crate::api::common::json_error(
+            StatusCode::UNAUTHORIZED,
+            "invalid authorization header",
+        )),
+    }
+}
+
+fn parse_signed_headers(value: &str) -> Result<Vec<String>, Response> {
+    let headers = value
+        .split(';')
+        .map(|item| item.trim().to_lowercase())
+        .filter(|item| !item.is_empty())
+        .collect::<Vec<_>>();
+    if headers.is_empty() {
+        return Err(crate::api::common::json_error(
+            StatusCode::UNAUTHORIZED,
+            "signed headers must not be empty",
+        ));
+    }
+    Ok(headers)
+}
+
+fn canonical_headers(headers: &HeaderMap, signed_headers: &[String]) -> Result<Vec<(String, String)>, Response> {
+    let mut values = Vec::new();
+    for name in signed_headers {
+        let value = headers
+            .get(name)
+            .and_then(|header| header.to_str().ok())
+            .map(|raw| raw.trim().split_whitespace().collect::<Vec<_>>().join(" "))
+            .filter(|raw| !raw.is_empty())
+            .ok_or_else(|| crate::api::common::json_error(StatusCode::UNAUTHORIZED, format!("missing signed header {name}")))?;
+        values.push((name.clone(), value));
+    }
+    Ok(values)
+}
+
+fn header_value(headers: &HeaderMap, name: &str) -> Result<String, Response> {
+    headers
+        .get(name)
+        .and_then(|value| value.to_str().ok())
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| crate::api::common::json_error(StatusCode::UNAUTHORIZED, format!("missing {name}")))
 }
 
 fn percent_encode_query_component(value: &str) -> String {
