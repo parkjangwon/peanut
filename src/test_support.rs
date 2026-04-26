@@ -13,6 +13,7 @@ pub async fn make_test_state() -> (crate::AppState, tempfile::TempDir) {
         pool,
         storage: Arc::new(crate::storage::local::LocalStorage::new(dir.path())),
         jwt_secret: Arc::new("test_secret".to_string()),
+        password_reset_delivery: crate::config::PasswordResetDelivery::Inline,
     };
     (state, dir)
 }

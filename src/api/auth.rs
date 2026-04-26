@@ -85,6 +85,7 @@ pub struct SessionResponse {
 pub struct ForgotPasswordResponse {
     pub message: String,
     pub reset_token: String,
+    pub delivery: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
@@ -300,20 +301,30 @@ pub async fn forgot_password(
             Json(ForgotPasswordResponse {
                 message: message.to_string(),
                 reset_token: String::new(),
+                delivery: password_reset_delivery_label(&state.password_reset_delivery).to_string(),
             }),
         )
             .into_response();
     };
 
     match issue_password_reset_token(&state.pool, &user.id).await {
-        Ok(reset_token) => (
-            StatusCode::OK,
-            Json(ForgotPasswordResponse {
-                message: message.to_string(),
-                reset_token,
-            }),
-        )
-            .into_response(),
+        Ok(reset_token) => {
+            let response_token = deliver_password_reset_token(
+                &state.password_reset_delivery,
+                &user.email,
+                &reset_token,
+            );
+            (
+                StatusCode::OK,
+                Json(ForgotPasswordResponse {
+                    message: message.to_string(),
+                    reset_token: response_token,
+                    delivery: password_reset_delivery_label(&state.password_reset_delivery)
+                        .to_string(),
+                }),
+            )
+                .into_response()
+        }
         Err(error) => json_error(StatusCode::INTERNAL_SERVER_ERROR, error),
     }
 }
@@ -593,6 +604,27 @@ async fn load_sessions_for_user(
     .bind(user_id)
     .fetch_all(pool)
     .await
+}
+
+fn password_reset_delivery_label(delivery: &crate::config::PasswordResetDelivery) -> &'static str {
+    match delivery {
+        crate::config::PasswordResetDelivery::Inline => "inline",
+        crate::config::PasswordResetDelivery::Log => "log",
+    }
+}
+
+fn deliver_password_reset_token(
+    delivery: &crate::config::PasswordResetDelivery,
+    email: &str,
+    reset_token: &str,
+) -> String {
+    match delivery {
+        crate::config::PasswordResetDelivery::Inline => reset_token.to_string(),
+        crate::config::PasswordResetDelivery::Log => {
+            tracing::info!(email = email, reset_token = reset_token, "issued password reset token");
+            String::new()
+        }
+    }
 }
 
 async fn issue_password_reset_token(
@@ -974,6 +1006,7 @@ mod tests {
         assert_eq!(forgot_response.status(), StatusCode::OK);
         let forgot_body: ForgotPasswordResponse =
             test_support::response_json(forgot_response).await;
+        assert_eq!(forgot_body.delivery, "inline");
         assert!(!forgot_body.reset_token.is_empty());
 
         let reset_response = reset_password(
@@ -1005,6 +1038,35 @@ mod tests {
         )
         .await;
         assert_eq!(login_response.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn test_forgot_password_omits_reset_token_when_delivery_mode_is_log() {
+        let (mut state, _dir) = test_support::make_test_state().await;
+        state.password_reset_delivery = crate::config::PasswordResetDelivery::Log;
+
+        let register_response = register(
+            State(state.clone()),
+            Json(RegisterRequest {
+                email: "admin@example.com".to_string(),
+                password: "secret123".to_string(),
+            }),
+        )
+        .await;
+        let _: RegisterResponse = test_support::response_json(register_response).await;
+
+        let forgot_response = forgot_password(
+            State(state),
+            Json(ForgotPasswordRequest {
+                email: "admin@example.com".to_string(),
+            }),
+        )
+        .await;
+        assert_eq!(forgot_response.status(), StatusCode::OK);
+        let forgot_body: ForgotPasswordResponse =
+            test_support::response_json(forgot_response).await;
+        assert_eq!(forgot_body.delivery, "log");
+        assert!(forgot_body.reset_token.is_empty());
     }
 
     #[tokio::test]

@@ -170,12 +170,14 @@ Response:
 ```json
 {
   "message": "if the user exists, a reset token was created",
-  "reset_token": "dev-or-self-host-token"
+  "reset_token": "dev-or-self-host-token",
+  "delivery": "inline"
 }
 ```
 Notes:
-- for self-host practicality, return token in response for now rather than pretending email is wired
-- later can gate response exposure behind config / dev mode
+- `PASSWORD_RESET_DELIVERY=inline` returns the token in the JSON response
+- `PASSWORD_RESET_DELIVERY=log` returns an empty `reset_token` and writes the token to server logs instead
+- this keeps the current self-host flow while creating a delivery abstraction for later email/webhook drivers
 
 ### `POST /api/auth/reset-password`
 Request:

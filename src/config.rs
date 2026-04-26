@@ -6,12 +6,19 @@ pub const DEFAULT_BIND_ADDR: &str = "127.0.0.1:3000";
 pub const DEFAULT_MAX_UPLOAD_BYTES: usize = 5 * 1024 * 1024;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PasswordResetDelivery {
+    Inline,
+    Log,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AppConfig {
     pub database_url: String,
     pub storage_dir: PathBuf,
     pub bind_addr: SocketAddr,
     pub jwt_secret: String,
     pub max_upload_bytes: usize,
+    pub password_reset_delivery: PasswordResetDelivery,
 }
 
 pub fn load_config_from_env() -> Result<AppConfig, String> {
@@ -66,12 +73,27 @@ fn load_config_from_map(values: &HashMap<String, String>) -> Result<AppConfig, S
         None => DEFAULT_MAX_UPLOAD_BYTES,
     };
 
+    let password_reset_delivery = match values
+        .get("PASSWORD_RESET_DELIVERY")
+        .map(|value| value.trim())
+        .unwrap_or("inline")
+    {
+        "inline" => PasswordResetDelivery::Inline,
+        "log" => PasswordResetDelivery::Log,
+        _ => {
+            return Err(
+                "PASSWORD_RESET_DELIVERY must be either 'inline' or 'log'".to_string(),
+            )
+        }
+    };
+
     Ok(AppConfig {
         database_url,
         storage_dir,
         bind_addr,
         jwt_secret,
         max_upload_bytes,
+        password_reset_delivery,
     })
 }
 
@@ -98,6 +120,7 @@ mod tests {
             DEFAULT_BIND_ADDR.parse::<SocketAddr>().unwrap()
         );
         assert_eq!(config.max_upload_bytes, DEFAULT_MAX_UPLOAD_BYTES);
+        assert_eq!(config.password_reset_delivery, PasswordResetDelivery::Inline);
         assert_eq!(config.jwt_secret, "test-secret");
     }
 
@@ -130,5 +153,27 @@ mod tests {
 
         let error = load_config_from_map(&values).unwrap_err();
         assert!(error.contains("greater than zero"));
+    }
+
+    #[test]
+    fn test_load_config_from_env_supports_log_password_reset_delivery() {
+        let values = config(&[
+            ("JWT_SECRET", "test-secret"),
+            ("PASSWORD_RESET_DELIVERY", "log"),
+        ]);
+
+        let config = load_config_from_map(&values).unwrap();
+        assert_eq!(config.password_reset_delivery, PasswordResetDelivery::Log);
+    }
+
+    #[test]
+    fn test_load_config_from_env_rejects_unknown_password_reset_delivery() {
+        let values = config(&[
+            ("JWT_SECRET", "test-secret"),
+            ("PASSWORD_RESET_DELIVERY", "webhook"),
+        ]);
+
+        let error = load_config_from_map(&values).unwrap_err();
+        assert!(error.contains("PASSWORD_RESET_DELIVERY"));
     }
 }

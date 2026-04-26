@@ -178,10 +178,21 @@ content-type: application/json
 }
 ```
 
+대표 응답:
+
+```json
+{
+  "message": "if the user exists, a reset token was created",
+  "reset_token": "...",
+  "delivery": "inline"
+}
+```
+
 현재 self-host 우선 동작:
-- Peanut은 JSON 응답에 `reset_token`을 바로 반환한다
-- self-host / 내부 운영 환경에서 바로 실험 가능한 형태를 우선한 것이다
-- 이후 email, webhook, 운영자 전달 흐름으로 감쌀 수 있다
+- Peanut은 `PASSWORD_RESET_DELIVERY` 로 전달 방식을 제어한다
+- `inline` 은 JSON 응답에 `reset_token` 을 바로 반환한다
+- `log` 는 응답에는 빈 token을 주고 실제 reset token은 서버 로그에 기록한다
+- 이후 email, webhook, 운영자 전달 흐름으로 확장할 수 있다
 
 ```http
 POST /api/auth/reset-password

@@ -41,7 +41,9 @@ Peanut is built around a few constraints:
   - revokes existing refresh sessions for that user after success
 - `POST /api/auth/forgot-password`
   - creates a password reset token for the matching user
-  - current self-host-first milestone returns the reset token in the JSON response instead of pretending an email service exists
+  - delivery is controlled by `PASSWORD_RESET_DELIVERY`
+  - `inline` returns the reset token in JSON for local/dev/self-host flows
+  - `log` omits the token from the response and writes it to the server log for operator-managed delivery
 - `POST /api/auth/reset-password`
   - one-time reset token flow for setting a new password
   - revokes existing refresh sessions for that user after success

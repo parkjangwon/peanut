@@ -178,10 +178,21 @@ content-type: application/json
 }
 ```
 
+Typical response:
+
+```json
+{
+  "message": "if the user exists, a reset token was created",
+  "reset_token": "...",
+  "delivery": "inline"
+}
+```
+
 Current self-host-first behavior:
-- Peanut returns a `reset_token` in the JSON response
-- this is intentionally simple for self-host and internal deployments
-- later this can be wrapped by email, webhook, or an operator flow
+- Peanut supports a delivery abstraction controlled by `PASSWORD_RESET_DELIVERY`
+- `inline` returns a `reset_token` in the JSON response
+- `log` returns an empty token and writes the reset token to the server log instead
+- later this can be extended to email, webhook, or an operator flow
 
 ```http
 POST /api/auth/reset-password

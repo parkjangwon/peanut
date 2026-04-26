@@ -27,6 +27,7 @@ pub struct AppState {
     pub pool: sqlx::SqlitePool,
     pub storage: Arc<crate::storage::local::LocalStorage>,
     pub jwt_secret: Arc<String>,
+    pub password_reset_delivery: crate::config::PasswordResetDelivery,
 }
 
 #[tokio::main]
@@ -49,6 +50,7 @@ async fn main() {
         pool,
         storage,
         jwt_secret: Arc::new(config.jwt_secret.clone()),
+        password_reset_delivery: config.password_reset_delivery.clone(),
     };
 
     let pool_clone = state.pool.clone();

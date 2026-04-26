@@ -41,7 +41,9 @@ Peanut은 아래 원칙을 지향한다.
   - 성공 시 해당 유저의 기존 refresh session을 모두 revoke한다
 - `POST /api/auth/forgot-password`
   - 일치하는 유저에 대해 password reset token을 생성한다
-  - 현재 self-host 우선 단계에서는 메일 전송 대신 reset token을 JSON 응답으로 바로 반환한다
+  - 전달 방식은 `PASSWORD_RESET_DELIVERY` 로 제어된다
+  - `inline` 은 로컬/dev/self-host 흐름을 위해 reset token을 JSON으로 반환한다
+  - `log` 는 응답에서 token을 숨기고 서버 로그에 기록해 운영자 전달 흐름을 만들 수 있게 한다
 - `POST /api/auth/reset-password`
   - 1회용 reset token으로 새 비밀번호를 설정한다
   - 성공 시 해당 유저의 기존 refresh session을 모두 revoke한다
