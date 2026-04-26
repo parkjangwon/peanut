@@ -22,6 +22,7 @@ const POLICY_ADMIN_ONLY: &str = "admin_only";
 const POLICY_OWNER_PRIVATE: &str = "owner_private";
 const POLICY_AUTHENTICATED_SHARED_RW: &str = "authenticated_shared_rw";
 const MAX_LIST_ROWS: i64 = 50;
+const TABLE_EXPORT_VERSION: &str = "peanut.table-export.v1";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DataTablesResponse {
@@ -108,8 +109,16 @@ pub struct QueryPresetResponse {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TableExportResponse {
+    pub metadata: TableExportMetadata,
     pub table: DataTableDetail,
     pub rows: Vec<DataRowResponse>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TableExportMetadata {
+    pub export_version: String,
+    pub row_count: usize,
+    pub checksum_sha256: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1045,7 +1054,36 @@ pub async fn export_table(
         }
     }
 
-    (StatusCode::OK, Json(TableExportResponse { table: table.into(), rows })).into_response()
+    let table_detail: DataTableDetail = table.into();
+    let checksum_sha256 = match build_table_export_checksum(&table_detail, &rows) {
+        Ok(checksum) => checksum,
+        Err(message) => return json_error(StatusCode::INTERNAL_SERVER_ERROR, message),
+    };
+
+    (
+        StatusCode::OK,
+        Json(TableExportResponse {
+            metadata: TableExportMetadata {
+                export_version: TABLE_EXPORT_VERSION.to_string(),
+                row_count: rows.len(),
+                checksum_sha256,
+            },
+            table: table_detail,
+            rows,
+        }),
+    )
+    .into_response()
+}
+
+fn build_table_export_checksum(table: &DataTableDetail, rows: &[DataRowResponse]) -> Result<String, String> {
+    let payload = serde_json::json!({
+        "export_version": TABLE_EXPORT_VERSION,
+        "table": table,
+        "rows": rows,
+    });
+    let encoded = serde_json::to_vec(&payload).map_err(|_| "failed to encode export payload".to_string())?;
+    let digest = openssl::sha::sha256(&encoded);
+    Ok(digest.iter().map(|byte| format!("{byte:02x}")).collect())
 }
 
 pub async fn import_rows(

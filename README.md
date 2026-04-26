@@ -397,6 +397,8 @@ What to expect:
 ### `GET /api/data/tables/:table/export`
 Admin snapshot export:
 - returns table metadata plus normalized rows
+- includes `metadata.export_version`, `metadata.row_count`, and `metadata.checksum_sha256`
+- checksum is calculated over the exported table+rows artifact for backup verification
 - useful for backups, migration between environments, or fixture generation
 
 ### `GET /api/data/tables/:table/events`

@@ -393,6 +393,8 @@ Peanut은 현재 API-first 모드로 동작한다.
 ### `GET /api/data/tables/:table/export`
 admin snapshot export:
 - table 메타데이터와 정규화된 row를 함께 반환한다
+- `metadata.export_version`, `metadata.row_count`, `metadata.checksum_sha256`를 포함한다
+- checksum은 export된 table+rows artifact 기준으로 계산되어 백업 검증에 쓸 수 있다
 - 백업, 환경 간 마이그레이션, fixture 생성에 쓸 수 있다
 
 ### `GET /api/data/tables/:table/events`
