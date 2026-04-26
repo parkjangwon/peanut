@@ -106,6 +106,10 @@ async fn main() {
             get(api::functions::get_function_invocation),
         )
         .route(
+            "/functions/:name/invocations/:invocation_id/attempts",
+            get(api::functions::list_function_invocation_attempts),
+        )
+        .route(
             "/functions/:name/invocations/:invocation_id/retry",
             post(api::functions::retry_function_invocation),
         );

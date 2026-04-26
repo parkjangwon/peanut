@@ -646,6 +646,69 @@ pub async fn get_function_invocation(
     }
 }
 
+pub async fn list_function_invocation_attempts(
+    State(state): State<crate::AppState>,
+    Extension(claims): Extension<Claims>,
+    Path((name, invocation_id)): Path<(String, String)>,
+) -> Response {
+    if let Some(response) = require_admin(&claims) {
+        return response;
+    }
+
+    let function = match load_function_by_name(&state.pool, &name).await {
+        Ok(function) => function,
+        Err(LoadFunctionError::NotFound) => {
+            return json_error(StatusCode::NOT_FOUND, "function not found")
+        }
+        Err(LoadFunctionError::QueryFailed) => {
+            return json_error(StatusCode::INTERNAL_SERVER_ERROR, "failed to load function")
+        }
+    };
+
+    let root_invocation_id = match find_root_invocation_id(&state.pool, &function.id, &invocation_id).await {
+        Ok(root_invocation_id) => root_invocation_id,
+        Err(LoadInvocationError::NotFound) => {
+            return json_error(StatusCode::NOT_FOUND, "function invocation not found")
+        }
+        Err(LoadInvocationError::QueryFailed) => {
+            return json_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "failed to load function invocation attempts",
+            )
+        }
+    };
+
+    match sqlx::query_as::<_, FunctionInvocation>(
+        r#"
+        WITH RECURSIVE attempt_chain AS (
+            SELECT id, function_id, status, request_json, response_json, error, duration_ms, invoke_mode, function_version_id, retry_count, parent_invocation_id, created_at, finished_at
+            FROM function_invocations
+            WHERE function_id = ? AND id = ?
+            UNION ALL
+            SELECT fi.id, fi.function_id, fi.status, fi.request_json, fi.response_json, fi.error, fi.duration_ms, fi.invoke_mode, fi.function_version_id, fi.retry_count, fi.parent_invocation_id, fi.created_at, fi.finished_at
+            FROM function_invocations fi
+            JOIN attempt_chain ac ON fi.parent_invocation_id = ac.id
+            WHERE fi.function_id = ?
+        )
+        SELECT id, function_id, status, request_json, response_json, error, duration_ms, invoke_mode, function_version_id, retry_count, parent_invocation_id, created_at, finished_at
+        FROM attempt_chain
+        ORDER BY retry_count ASC, created_at ASC
+        "#,
+    )
+    .bind(&function.id)
+    .bind(&root_invocation_id)
+    .bind(&function.id)
+    .fetch_all(&state.pool)
+    .await
+    {
+        Ok(invocations) => (StatusCode::OK, Json(FunctionInvocationsResponse { invocations })).into_response(),
+        Err(_) => json_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "failed to load function invocation attempts",
+        ),
+    }
+}
+
 pub async fn retry_function_invocation(
     State(state): State<crate::AppState>,
     Extension(claims): Extension<Claims>,
@@ -1409,6 +1472,18 @@ async fn load_invocation(
     .ok_or(LoadInvocationError::NotFound)
 }
 
+async fn find_root_invocation_id(
+    pool: &sqlx::SqlitePool,
+    function_id: &str,
+    invocation_id: &str,
+) -> Result<String, LoadInvocationError> {
+    let mut current = load_invocation(pool, function_id, invocation_id).await?;
+    while let Some(parent_id) = current.parent_invocation_id.clone() {
+        current = load_invocation(pool, function_id, &parent_id).await?;
+    }
+    Ok(current.id)
+}
+
 async fn load_function_by_name(
     pool: &sqlx::SqlitePool,
     name: &str,
@@ -1981,7 +2056,7 @@ export default async function handler(ctx) {
     }
 
     #[tokio::test]
-    async fn test_admin_can_read_invocation_detail_and_retry() {
+    async fn test_admin_can_read_invocation_detail_retry_and_attempt_chain() {
         let (state, _dir) = test_support::make_test_state().await;
         let admin = register_admin(state.clone()).await;
         let create_response = create_function(
@@ -2024,14 +2099,48 @@ export default async function handler(ctx) {
         )
         .await;
         assert_eq!(detail.status(), StatusCode::OK);
+        let detail_body: FunctionInvocationResponse = test_support::response_json(detail).await;
+        assert_eq!(detail_body.invocation.retry_count, 0);
+        assert!(detail_body.invocation.parent_invocation_id.is_none());
 
         let retry = retry_function_invocation(
-            State(state),
+            State(state.clone()),
             Extension(claims(&admin.user.id, true)),
-            Path(("detail_fn".to_string(), invoke_body.invocation_id)),
+            Path(("detail_fn".to_string(), invoke_body.invocation_id.clone())),
         )
         .await;
         assert_eq!(retry.status(), StatusCode::OK);
+        let retry_body: InvokeFunctionResponse = test_support::response_json(retry).await;
+
+        let retry_detail = get_function_invocation(
+            State(state.clone()),
+            Extension(claims(&admin.user.id, true)),
+            Path(("detail_fn".to_string(), retry_body.invocation_id.clone())),
+        )
+        .await;
+        assert_eq!(retry_detail.status(), StatusCode::OK);
+        let retry_detail_body: FunctionInvocationResponse = test_support::response_json(retry_detail).await;
+        assert_eq!(retry_detail_body.invocation.retry_count, 1);
+        assert_eq!(
+            retry_detail_body.invocation.parent_invocation_id.as_deref(),
+            Some(invoke_body.invocation_id.as_str())
+        );
+
+        let attempts = list_function_invocation_attempts(
+            State(state),
+            Extension(claims(&admin.user.id, true)),
+            Path(("detail_fn".to_string(), retry_body.invocation_id)),
+        )
+        .await;
+        assert_eq!(attempts.status(), StatusCode::OK);
+        let attempts_body: FunctionInvocationsResponse = test_support::response_json(attempts).await;
+        assert_eq!(attempts_body.invocations.len(), 2);
+        assert_eq!(attempts_body.invocations[0].retry_count, 0);
+        assert_eq!(attempts_body.invocations[1].retry_count, 1);
+        assert_eq!(
+            attempts_body.invocations[1].parent_invocation_id.as_deref(),
+            Some(attempts_body.invocations[0].id.as_str())
+        );
     }
 
     #[tokio::test]

@@ -158,7 +158,7 @@ Current capabilities:
 - admin APIs expose version history through `GET /api/functions/:name/versions`
 - admins can roll back the active runtime through `POST /api/functions/:name/versions/:version_number/rollback`
 - separate Node subprocess execution with a temp working directory and bounded runtime timeout
-- invocation logs stored in SQLite, with queued/running/succeeded/failed lifecycle, `invoke_mode`, `function_version_id`, retry metadata, detail lookup, and retry from the console/API
+- invocation logs stored in SQLite, with queued/running/succeeded/failed lifecycle, `invoke_mode`, `function_version_id`, `retry_count`, `parent_invocation_id`, detail lookup, attempt-chain lookup, and retry from the console/API
 - bounded in-process Peanut host bindings for authenticated functions:
   - `ctx.peanut.storage.list/get/put/delete`
   - `ctx.peanut.push.enqueue`
