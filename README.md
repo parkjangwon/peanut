@@ -82,12 +82,15 @@ What this means for external frontend apps:
 
 ### Storage
 - user-scoped object storage
-- authenticated users can:
+- legacy simple endpoints remain available for authenticated users:
   - list their own keys
   - upload objects
   - fetch objects
   - delete objects
-- storage keys are automatically isolated per authenticated user
+- S3-like path-style endpoints are now also available under `/api/s3/:bucket/*key`
+- S3-like object responses now include content-type, content-length, ETag, and last-modified metadata
+- S3-like bucket listing supports `list-type=2`, `prefix`, `max-keys`, and `continuation-token`
+- storage keys remain automatically isolated per authenticated user
 
 ### Data API (SQLite-backed)
 Peanut now exposes a constrained SQLite-backed data API for Peanut-managed logical tables.
@@ -307,6 +310,13 @@ Response:
   "keys": ["notes/welcome.txt"]
 }
 ```
+
+### S3-like storage endpoints
+- `GET /api/s3/:bucket?list-type=2&prefix=notes/&max-keys=100&continuation-token=...`
+- `HEAD /api/s3/:bucket/*key`
+- `GET /api/s3/:bucket/*key`
+- `PUT /api/s3/:bucket/*key`
+- `DELETE /api/s3/:bucket/*key`
 
 ### `POST /api/push/subscriptions`
 Request:

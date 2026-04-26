@@ -83,12 +83,15 @@ Peanut은 아래 원칙을 지향한다.
 
 ### Storage
 - 유저 단위로 격리된 object storage
-- 인증된 유저는 자신의 키만:
+- 기존 단순 endpoint도 계속 유지한다:
   - 조회
   - 업로드
   - 읽기
   - 삭제
-가능하다
+- `/api/s3/:bucket/*key` 아래에 S3-like path-style endpoint를 추가했다
+- S3-like object 응답은 content-type, content-length, ETag, last-modified 메타데이터를 포함한다
+- S3-like bucket listing은 `list-type=2`, `prefix`, `max-keys`, `continuation-token`을 지원한다
+- storage key는 계속 인증 유저별로 자동 격리된다
 
 ### Data API (SQLite 기반)
 Peanut은 이제 Peanut이 관리하는 logical table용 제한된 SQLite 기반 data API를 제공한다.
@@ -304,6 +307,13 @@ Peanut은 현재 API-first 모드로 동작한다.
   "keys": ["notes/welcome.txt"]
 }
 ```
+
+### S3-like storage endpoints
+- `GET /api/s3/:bucket?list-type=2&prefix=notes/&max-keys=100&continuation-token=...`
+- `HEAD /api/s3/:bucket/*key`
+- `GET /api/s3/:bucket/*key`
+- `PUT /api/s3/:bucket/*key`
+- `DELETE /api/s3/:bucket/*key`
 
 ### `POST /api/push/subscriptions`
 

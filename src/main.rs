@@ -1,7 +1,7 @@
 mod api;
 mod auth;
-mod console;
 mod config;
+mod console;
 mod db;
 mod functions;
 mod i18n;
@@ -16,7 +16,7 @@ rust_i18n::i18n!("locales", fallback = "en");
 
 use axum::{
     extract::DefaultBodyLimit,
-    routing::{delete, get, patch, post, put},
+    routing::{delete, get, head, patch, post, put},
     Router,
 };
 use std::sync::Arc;
@@ -30,7 +30,8 @@ pub struct AppState {
     pub password_reset_delivery: crate::config::PasswordResetDelivery,
     pub auth_allowed_origins: Arc<Vec<String>>,
     pub auth_allowed_client_ids: Arc<Vec<String>>,
-    pub function_event_sender: tokio::sync::broadcast::Sender<crate::api::functions::FunctionRealtimeEvent>,
+    pub function_event_sender:
+        tokio::sync::broadcast::Sender<crate::api::functions::FunctionRealtimeEvent>,
     pub data_event_sender: tokio::sync::broadcast::Sender<crate::api::data::DataRowRealtimeEvent>,
 }
 
@@ -42,13 +43,17 @@ async fn main() {
     let config = crate::config::load_config_from_env()
         .unwrap_or_else(|message| panic!("Invalid Peanut configuration: {message}"));
 
-    tokio::fs::create_dir_all(&config.storage_dir).await.unwrap();
+    tokio::fs::create_dir_all(&config.storage_dir)
+        .await
+        .unwrap();
 
     let pool = db::init_db(&config.database_url)
         .await
         .expect("Failed to initialize DB");
 
-    let storage = Arc::new(crate::storage::local::LocalStorage::new(&config.storage_dir));
+    let storage = Arc::new(crate::storage::local::LocalStorage::new(
+        &config.storage_dir,
+    ));
 
     let state = AppState {
         pool,
@@ -71,6 +76,14 @@ async fn main() {
         .route("/storage/*key", get(api::storage::get_object))
         .route("/storage/*key", put(api::storage::put_object))
         .route("/storage/*key", delete(api::storage::delete_object))
+        .route("/s3/:bucket", get(api::storage::list_bucket_objects))
+        .route("/s3/:bucket/*key", head(api::storage::head_bucket_object))
+        .route("/s3/:bucket/*key", get(api::storage::get_bucket_object))
+        .route("/s3/:bucket/*key", put(api::storage::put_bucket_object))
+        .route(
+            "/s3/:bucket/*key",
+            delete(api::storage::delete_bucket_object),
+        )
         .layer(DefaultBodyLimit::max(config.max_upload_bytes));
 
     let push_routes = Router::new()
@@ -128,8 +141,14 @@ async fn main() {
         .route("/data/tables/:table", get(api::data::get_table))
         .route("/data/tables/:table", patch(api::data::update_table))
         .route("/data/tables/:table", delete(api::data::delete_table))
-        .route("/data/tables/:table/presets", get(api::data::list_query_presets))
-        .route("/data/tables/:table/presets", post(api::data::create_query_preset))
+        .route(
+            "/data/tables/:table/presets",
+            get(api::data::list_query_presets),
+        )
+        .route(
+            "/data/tables/:table/presets",
+            post(api::data::create_query_preset),
+        )
         .route(
             "/data/tables/:table/presets/:preset_id/run",
             get(api::data::run_query_preset),
@@ -239,6 +258,8 @@ async fn main() {
 
     tracing::info!("Listening on {}", config.bind_addr);
 
-    let listener = tokio::net::TcpListener::bind(config.bind_addr).await.unwrap();
+    let listener = tokio::net::TcpListener::bind(config.bind_addr)
+        .await
+        .unwrap();
     axum::serve(listener, app).await.unwrap();
 }
