@@ -92,7 +92,9 @@ What this means for external frontend apps:
 - S3-like object routes now accept either bearer auth, SigV4-style `Authorization` header auth, or SigV4-style query auth from presigned URLs
 - S3-like multipart upload now supports a first-pass contract:
   - `POST /api/s3/:bucket/*key?uploads` to initiate and receive an `UploadId`
+  - `GET /api/s3/:bucket?uploads=1&prefix=...` to list active multipart uploads in a bucket
   - `PUT /api/s3/:bucket/*key?partNumber=N&uploadId=...` to upload parts
+  - `GET /api/s3/:bucket/*key?uploadId=...` to list staged parts for an upload
   - `POST /api/s3/:bucket/*key?uploadId=...` with `CompleteMultipartUpload` XML to assemble the final object
   - `DELETE /api/s3/:bucket/*key?uploadId=...` to abort a staged upload
 - multipart completion currently returns the final assembled object ETag rather than AWS's multipart-composite ETag format

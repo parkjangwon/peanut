@@ -22,10 +22,13 @@ pub struct StorageListResponse {
 pub struct S3ListQuery {
     #[serde(rename = "list-type")]
     pub list_type: Option<u8>,
+    pub uploads: Option<String>,
     pub prefix: Option<String>,
     pub delimiter: Option<String>,
     #[serde(rename = "max-keys")]
     pub max_keys: Option<usize>,
+    #[serde(rename = "max-uploads")]
+    pub max_uploads: Option<usize>,
     #[serde(rename = "continuation-token")]
     pub continuation_token: Option<String>,
 }
@@ -121,6 +124,32 @@ pub async fn list_bucket_objects(
     Path(bucket): Path<String>,
     Query(query): Query<S3ListQuery>,
 ) -> Response {
+    let scoped_bucket = scoped_bucket(&claims.sub, &bucket);
+
+    if query.uploads.is_some() {
+        return match state
+            .storage
+            .list_multipart_uploads(&scoped_bucket, query.prefix.as_deref())
+            .await
+        {
+            Ok(uploads) => s3_list_multipart_uploads_response(&bucket, &query, &uploads),
+            Err(err) if err.kind() == std::io::ErrorKind::InvalidInput => s3_error_response(
+                StatusCode::BAD_REQUEST,
+                "InvalidRequest",
+                &err.to_string(),
+                &format!("/{bucket}"),
+                None,
+            ),
+            Err(_) => s3_error_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "InternalError",
+                "failed to list multipart uploads",
+                &format!("/{bucket}"),
+                None,
+            ),
+        };
+    }
+
     if query.list_type != Some(2) {
         return s3_error_response(
             StatusCode::BAD_REQUEST,
@@ -144,7 +173,6 @@ pub async fn list_bucket_objects(
         }
     };
 
-    let scoped_bucket = scoped_bucket(&claims.sub, &bucket);
     match state
         .storage
         .list_objects_v2(
@@ -210,8 +238,53 @@ pub async fn get_bucket_object(
     State(state): State<crate::AppState>,
     Extension(claims): Extension<Claims>,
     Path((bucket, key)): Path<(String, String)>,
+    RawQuery(raw_query): RawQuery,
 ) -> Response {
     let scoped_bucket = scoped_bucket(&claims.sub, &bucket);
+    let query = match parse_multipart_query(raw_query.as_deref()) {
+        Ok(query) => query,
+        Err(message) => {
+            return s3_error_response(
+                StatusCode::BAD_REQUEST,
+                "InvalidRequest",
+                &message,
+                &format!("/{bucket}/{key}"),
+                Some(&key),
+            )
+        }
+    };
+
+    if let Some(upload_id) = query.upload_id.as_deref() {
+        return match state
+            .storage
+            .list_multipart_parts(&scoped_bucket, &key, upload_id)
+            .await
+        {
+            Ok(parts) => s3_list_parts_response(&bucket, &key, upload_id, &parts),
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => s3_error_response(
+                StatusCode::NOT_FOUND,
+                "NoSuchUpload",
+                "multipart upload not found",
+                &format!("/{bucket}/{key}"),
+                Some(&key),
+            ),
+            Err(err) if err.kind() == std::io::ErrorKind::InvalidInput => s3_error_response(
+                StatusCode::BAD_REQUEST,
+                "InvalidRequest",
+                &err.to_string(),
+                &format!("/{bucket}/{key}"),
+                Some(&key),
+            ),
+            Err(_) => s3_error_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "InternalError",
+                "failed to list multipart parts",
+                &format!("/{bucket}/{key}"),
+                Some(&key),
+            ),
+        };
+    }
+
     match state.storage.get_object(&scoped_bucket, &key).await {
         Ok(object) => {
             build_object_response(StatusCode::OK, &key, object.data, &object.metadata, true)
@@ -680,6 +753,65 @@ fn s3_complete_multipart_response(
         .unwrap()
 }
 
+fn s3_list_multipart_uploads_response(
+    bucket: &str,
+    query: &S3ListQuery,
+    uploads: &[crate::storage::local::MultipartUploadListing],
+) -> Response {
+    let mut body = String::from("<?xml version=\"1.0\" encoding=\"UTF-8\"?>");
+    body.push_str("<ListMultipartUploadsResult xmlns=\"http://s3.amazonaws.com/doc/2006-03-01/\">");
+    body.push_str(&format!("<Bucket>{}</Bucket>", xml_escape(bucket)));
+    body.push_str(&format!(
+        "<Prefix>{}</Prefix>",
+        xml_escape(query.prefix.as_deref().unwrap_or(""))
+    ));
+    body.push_str(&format!(
+        "<MaxUploads>{}</MaxUploads>",
+        query.max_uploads.unwrap_or(1000).min(1000)
+    ));
+    body.push_str("<IsTruncated>false</IsTruncated>");
+    for upload in uploads.iter().take(query.max_uploads.unwrap_or(1000).min(1000)) {
+        body.push_str("<Upload>");
+        body.push_str(&format!("<Key>{}</Key>", xml_escape(&upload.key)));
+        body.push_str(&format!("<UploadId>{}</UploadId>", xml_escape(&upload.upload_id)));
+        body.push_str(&format!("<Initiated>{}</Initiated>", xml_escape(&upload.initiated_at)));
+        body.push_str("</Upload>");
+    }
+    body.push_str("</ListMultipartUploadsResult>");
+
+    apply_s3_response_headers(Response::builder().status(StatusCode::OK))
+        .header(header::CONTENT_TYPE, "application/xml")
+        .body(axum::body::Body::from(body))
+        .unwrap()
+}
+
+fn s3_list_parts_response(
+    bucket: &str,
+    key: &str,
+    upload_id: &str,
+    parts: &[crate::storage::local::MultipartUploadPart],
+) -> Response {
+    let mut body = String::from("<?xml version=\"1.0\" encoding=\"UTF-8\"?>");
+    body.push_str("<ListPartsResult xmlns=\"http://s3.amazonaws.com/doc/2006-03-01/\">");
+    body.push_str(&format!("<Bucket>{}</Bucket>", xml_escape(bucket)));
+    body.push_str(&format!("<Key>{}</Key>", xml_escape(key)));
+    body.push_str(&format!("<UploadId>{}</UploadId>", xml_escape(upload_id)));
+    body.push_str("<IsTruncated>false</IsTruncated>");
+    for part in parts {
+        body.push_str("<Part>");
+        body.push_str(&format!("<PartNumber>{}</PartNumber>", part.part_number));
+        body.push_str(&format!("<ETag>\"{}\"</ETag>", xml_escape(&part.etag)));
+        body.push_str(&format!("<Size>{}</Size>", part.size));
+        body.push_str("</Part>");
+    }
+    body.push_str("</ListPartsResult>");
+
+    apply_s3_response_headers(Response::builder().status(StatusCode::OK))
+        .header(header::CONTENT_TYPE, "application/xml")
+        .body(axum::body::Body::from(body))
+        .unwrap()
+}
+
 fn find_xml_tag_value(xml: &str, tag: &str) -> Option<String> {
     let start_tag = format!("<{tag}>");
     let end_tag = format!("</{tag}>");
@@ -1000,6 +1132,7 @@ mod tests {
             State(state),
             Extension(claims),
             axum::extract::Path(("assets".to_string(), "avatars/me.txt".to_string())),
+            RawQuery(None),
         )
         .await;
         assert_eq!(get_response.status(), StatusCode::OK);
@@ -1044,9 +1177,11 @@ mod tests {
             axum::extract::Path("assets".to_string()),
             Query(S3ListQuery {
                 list_type: Some(2),
+                uploads: None,
                 prefix: Some("notes/".to_string()),
                 delimiter: None,
                 max_keys: Some(1),
+                max_uploads: None,
                 continuation_token: None,
             }),
         )
@@ -1065,9 +1200,11 @@ mod tests {
             axum::extract::Path("assets".to_string()),
             Query(S3ListQuery {
                 list_type: Some(2),
+                uploads: None,
                 prefix: Some("notes/".to_string()),
                 delimiter: None,
                 max_keys: Some(10),
+                max_uploads: None,
                 continuation_token: Some(next_token),
             }),
         )
@@ -1090,9 +1227,11 @@ mod tests {
             axum::extract::Path("assets".to_string()),
             Query(S3ListQuery {
                 list_type: Some(2),
+                uploads: None,
                 prefix: None,
                 delimiter: None,
                 max_keys: Some(10),
+                max_uploads: None,
                 continuation_token: Some("not-a-valid-token".to_string()),
             }),
         )
@@ -1768,6 +1907,273 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_s3_like_list_parts_returns_uploaded_parts() {
+        let (state, _dir) = test_support::make_test_state().await;
+        let user = register_user(state.clone(), "list-parts@example.com").await;
+
+        let app = axum::Router::new()
+            .route(
+                "/api/s3/:bucket/*key",
+                axum::routing::post(post_bucket_object)
+                    .put(put_bucket_object)
+                    .get(get_bucket_object),
+            )
+            .layer(axum::middleware::from_fn_with_state(
+                state.clone(),
+                crate::middleware::s3_auth::s3_auth_middleware,
+            ))
+            .with_state(state.clone());
+
+        let create_signed = crate::middleware::s3_auth::build_signed_header_auth(
+            "POST",
+            "https://example.com/api/s3/assets/videos/parts.txt?uploads=1",
+            &user.user.id,
+            state.jwt_secret.as_str(),
+            None,
+        )
+        .unwrap();
+        let create_response = tower::ServiceExt::oneshot(
+            app.clone(),
+            axum::http::Request::builder()
+                .method("POST")
+                .uri("/api/s3/assets/videos/parts.txt?uploads=1")
+                .header("host", "example.com")
+                .header("authorization", create_signed.authorization)
+                .header("x-amz-date", create_signed.amz_date)
+                .header("x-amz-content-sha256", create_signed.payload_hash)
+                .body(axum::body::Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+        let upload_id = xml_tag_value(&response_text(create_response).await, "UploadId").unwrap();
+
+        for (part_number, body) in [(1, "aa"), (2, "bb")] {
+            let signed = crate::middleware::s3_auth::build_signed_header_auth(
+                "PUT",
+                &format!(
+                    "https://example.com/api/s3/assets/videos/parts.txt?partNumber={part_number}&uploadId={upload_id}"
+                ),
+                &user.user.id,
+                state.jwt_secret.as_str(),
+                None,
+            )
+            .unwrap();
+            let response = tower::ServiceExt::oneshot(
+                app.clone(),
+                axum::http::Request::builder()
+                    .method("PUT")
+                    .uri(format!(
+                        "/api/s3/assets/videos/parts.txt?partNumber={part_number}&uploadId={upload_id}"
+                    ))
+                    .header("host", "example.com")
+                    .header("authorization", signed.authorization)
+                    .header("x-amz-date", signed.amz_date)
+                    .header("x-amz-content-sha256", signed.payload_hash)
+                    .body(axum::body::Body::from(body))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+            assert_eq!(response.status(), StatusCode::OK);
+        }
+
+        let list_signed = crate::middleware::s3_auth::build_signed_header_auth(
+            "GET",
+            &format!("https://example.com/api/s3/assets/videos/parts.txt?uploadId={upload_id}"),
+            &user.user.id,
+            state.jwt_secret.as_str(),
+            None,
+        )
+        .unwrap();
+        let list_response = tower::ServiceExt::oneshot(
+            app,
+            axum::http::Request::builder()
+                .uri(format!("/api/s3/assets/videos/parts.txt?uploadId={upload_id}"))
+                .header("host", "example.com")
+                .header("authorization", list_signed.authorization)
+                .header("x-amz-date", list_signed.amz_date)
+                .header("x-amz-content-sha256", list_signed.payload_hash)
+                .body(axum::body::Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(list_response.status(), StatusCode::OK);
+        let list_xml = response_text(list_response).await;
+        assert!(list_xml.contains("<ListPartsResult"));
+        assert!(list_xml.contains("<PartNumber>1</PartNumber>"));
+        assert!(list_xml.contains("<PartNumber>2</PartNumber>"));
+    }
+
+    #[tokio::test]
+    async fn test_s3_like_list_multipart_uploads_returns_active_uploads() {
+        let (state, _dir) = test_support::make_test_state().await;
+        let user = register_user(state.clone(), "list-uploads@example.com").await;
+
+        let app = axum::Router::new()
+            .route("/api/s3/:bucket", axum::routing::get(list_bucket_objects))
+            .route("/api/s3/:bucket/*key", axum::routing::post(post_bucket_object))
+            .layer(axum::middleware::from_fn_with_state(
+                state.clone(),
+                crate::middleware::s3_auth::s3_auth_middleware,
+            ))
+            .with_state(state.clone());
+
+        for key in ["videos/a.txt", "videos/b.txt"] {
+            let signed = crate::middleware::s3_auth::build_signed_header_auth(
+                "POST",
+                &format!("https://example.com/api/s3/assets/{key}?uploads=1"),
+                &user.user.id,
+                state.jwt_secret.as_str(),
+                None,
+            )
+            .unwrap();
+            let response = tower::ServiceExt::oneshot(
+                app.clone(),
+                axum::http::Request::builder()
+                    .method("POST")
+                    .uri(format!("/api/s3/assets/{key}?uploads=1"))
+                    .header("host", "example.com")
+                    .header("authorization", signed.authorization)
+                    .header("x-amz-date", signed.amz_date)
+                    .header("x-amz-content-sha256", signed.payload_hash)
+                    .body(axum::body::Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+            assert_eq!(response.status(), StatusCode::OK);
+        }
+
+        let list_signed = crate::middleware::s3_auth::build_signed_header_auth(
+            "GET",
+            "https://example.com/api/s3/assets?uploads=1&prefix=videos/",
+            &user.user.id,
+            state.jwt_secret.as_str(),
+            None,
+        )
+        .unwrap();
+        let list_response = tower::ServiceExt::oneshot(
+            app,
+            axum::http::Request::builder()
+                .uri("/api/s3/assets?uploads=1&prefix=videos/")
+                .header("host", "example.com")
+                .header("authorization", list_signed.authorization)
+                .header("x-amz-date", list_signed.amz_date)
+                .header("x-amz-content-sha256", list_signed.payload_hash)
+                .body(axum::body::Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(list_response.status(), StatusCode::OK);
+        let list_xml = response_text(list_response).await;
+        assert!(list_xml.contains("<ListMultipartUploadsResult"));
+        assert!(list_xml.contains("<Key>videos/a.txt</Key>"));
+        assert!(list_xml.contains("<Key>videos/b.txt</Key>"));
+    }
+
+    #[tokio::test]
+    async fn test_sdk_multipart_smoke_interop() {
+        let (state, _dir) = test_support::make_test_state().await;
+        let user = register_user(state.clone(), "sdk-multipart@example.com").await;
+        let secret_access_key = format!("{}:{}", state.jwt_secret.as_str(), user.user.id);
+
+        let app = axum::Router::new()
+            .route(
+                "/api/s3/:bucket/*key",
+                axum::routing::post(post_bucket_object)
+                    .put(put_bucket_object)
+                    .get(get_bucket_object),
+            )
+            .layer(axum::middleware::from_fn_with_state(
+                state.clone(),
+                crate::middleware::s3_auth::s3_auth_middleware,
+            ))
+            .with_state(state.clone());
+
+        let create_signed = crate::middleware::s3_auth::build_signed_header_auth_with_secret(
+            "POST",
+            "https://example.com/api/s3/assets/sdk/multipart.txt?uploads=1",
+            &user.user.id,
+            &secret_access_key,
+            None,
+        )
+        .unwrap();
+        let create_response = tower::ServiceExt::oneshot(
+            app.clone(),
+            axum::http::Request::builder()
+                .method("POST")
+                .uri("/api/s3/assets/sdk/multipart.txt?uploads=1")
+                .header("host", "example.com")
+                .header("authorization", create_signed.authorization)
+                .header("x-amz-date", create_signed.amz_date)
+                .header("x-amz-content-sha256", create_signed.payload_hash)
+                .body(axum::body::Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(create_response.status(), StatusCode::OK);
+        let upload_id = xml_tag_value(&response_text(create_response).await, "UploadId").unwrap();
+
+        for (part_number, body) in [(1, "sdk "), (2, "multipart")] {
+            let signed = crate::middleware::s3_auth::build_signed_header_auth_with_secret(
+                "PUT",
+                &format!(
+                    "https://example.com/api/s3/assets/sdk/multipart.txt?partNumber={part_number}&uploadId={upload_id}"
+                ),
+                &user.user.id,
+                &secret_access_key,
+                None,
+            )
+            .unwrap();
+            let response = tower::ServiceExt::oneshot(
+                app.clone(),
+                axum::http::Request::builder()
+                    .method("PUT")
+                    .uri(format!(
+                        "/api/s3/assets/sdk/multipart.txt?partNumber={part_number}&uploadId={upload_id}"
+                    ))
+                    .header("host", "example.com")
+                    .header("authorization", signed.authorization)
+                    .header("x-amz-date", signed.amz_date)
+                    .header("x-amz-content-sha256", signed.payload_hash)
+                    .body(axum::body::Body::from(body))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+            assert_eq!(response.status(), StatusCode::OK);
+        }
+
+        let list_parts_signed = crate::middleware::s3_auth::build_signed_header_auth_with_secret(
+            "GET",
+            &format!("https://example.com/api/s3/assets/sdk/multipart.txt?uploadId={upload_id}"),
+            &user.user.id,
+            &secret_access_key,
+            None,
+        )
+        .unwrap();
+        let list_parts_response = tower::ServiceExt::oneshot(
+            app,
+            axum::http::Request::builder()
+                .uri(format!("/api/s3/assets/sdk/multipart.txt?uploadId={upload_id}"))
+                .header("host", "example.com")
+                .header("authorization", list_parts_signed.authorization)
+                .header("x-amz-date", list_parts_signed.amz_date)
+                .header("x-amz-content-sha256", list_parts_signed.payload_hash)
+                .body(axum::body::Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(list_parts_response.status(), StatusCode::OK);
+        assert!(response_text(list_parts_response).await.contains("<ListPartsResult"));
+    }
+
+    #[tokio::test]
     async fn test_s3_like_list_objects_v2_supports_delimiter_common_prefixes() {
         let (state, _dir) = test_support::make_test_state().await;
         let user = register_user(state.clone(), "prefixes@example.com").await;
@@ -1792,9 +2198,11 @@ mod tests {
             axum::extract::Path("assets".to_string()),
             Query(S3ListQuery {
                 list_type: Some(2),
+                uploads: None,
                 prefix: Some("photos/".to_string()),
                 delimiter: Some("/".to_string()),
                 max_keys: Some(10),
+                max_uploads: None,
                 continuation_token: None,
             }),
         )
@@ -1816,6 +2224,7 @@ mod tests {
             State(state.clone()),
             Extension(claims.clone()),
             axum::extract::Path(("assets".to_string(), "missing.txt".to_string())),
+            RawQuery(None),
         )
         .await;
         assert_eq!(missing.status(), StatusCode::NOT_FOUND);
@@ -1833,9 +2242,11 @@ mod tests {
             axum::extract::Path("assets".to_string()),
             Query(S3ListQuery {
                 list_type: Some(1),
+                uploads: None,
                 prefix: None,
                 delimiter: None,
                 max_keys: None,
+                max_uploads: None,
                 continuation_token: None,
             }),
         )

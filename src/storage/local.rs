@@ -63,6 +63,13 @@ pub struct MultipartUploadPart {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MultipartUploadListing {
+    pub upload_id: String,
+    pub key: String,
+    pub initiated_at: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CompletedMultipartPart {
     pub part_number: u32,
     pub etag: String,
@@ -334,6 +341,39 @@ impl LocalStorage {
         let upload = self.read_multipart_upload(bucket, key, upload_id).await?;
         let upload_root = self.resolve_multipart_upload_root(bucket, &upload.upload_id)?;
         tokio::fs::remove_dir_all(upload_root).await
+    }
+
+    pub async fn list_multipart_uploads(
+        &self,
+        bucket: &str,
+        prefix: Option<&str>,
+    ) -> io::Result<Vec<MultipartUploadListing>> {
+        let bucket_root = self.multipart_bucket_root(bucket)?;
+        let uploads = tokio::task::spawn_blocking(move || collect_multipart_uploads(&bucket_root))
+            .await
+            .map_err(|err| io::Error::new(io::ErrorKind::Other, err))??;
+        let normalized_prefix = normalize_optional_prefix(prefix)?.unwrap_or_default();
+        let mut uploads = uploads
+            .into_iter()
+            .filter(|upload| upload.key.starts_with(&normalized_prefix))
+            .collect::<Vec<_>>();
+        uploads.sort_by(|left, right| left.key.cmp(&right.key).then(left.upload_id.cmp(&right.upload_id)));
+        Ok(uploads)
+    }
+
+    pub async fn list_multipart_parts(
+        &self,
+        bucket: &str,
+        key: &str,
+        upload_id: &str,
+    ) -> io::Result<Vec<MultipartUploadPart>> {
+        let upload = self.read_multipart_upload(bucket, key, upload_id).await?;
+        let parts_root = self.resolve_multipart_upload_root(bucket, &upload.upload_id)?.join("parts");
+        let mut parts = tokio::task::spawn_blocking(move || collect_multipart_parts(&parts_root))
+            .await
+            .map_err(|err| io::Error::new(io::ErrorKind::Other, err))??;
+        parts.sort_by_key(|part| part.part_number);
+        Ok(parts)
     }
 
     pub fn root(&self) -> &Path {
@@ -666,6 +706,48 @@ fn collect_files(
     }
 
     Ok(())
+}
+
+fn collect_multipart_uploads(bucket_root: &Path) -> io::Result<Vec<MultipartUploadListing>> {
+    let mut uploads = Vec::new();
+    if !bucket_root.exists() {
+        return Ok(uploads);
+    }
+    for entry in std::fs::read_dir(bucket_root)? {
+        let entry = entry?;
+        if !entry.file_type()?.is_dir() {
+            continue;
+        }
+        let upload_root = entry.path();
+        let raw = std::fs::read(upload_root.join("upload.json"))?;
+        let upload: MultipartUpload = serde_json::from_slice(&raw)
+            .map_err(|err| io::Error::new(io::ErrorKind::Other, err.to_string()))?;
+        uploads.push(MultipartUploadListing {
+            upload_id: upload.upload_id,
+            key: upload.key,
+            initiated_at: upload.initiated_at,
+        });
+    }
+    Ok(uploads)
+}
+
+fn collect_multipart_parts(parts_root: &Path) -> io::Result<Vec<MultipartUploadPart>> {
+    let mut parts = Vec::new();
+    if !parts_root.exists() {
+        return Ok(parts);
+    }
+    for entry in std::fs::read_dir(parts_root)? {
+        let entry = entry?;
+        let path = entry.path();
+        if !entry.file_type()?.is_file() || path.extension().and_then(|v| v.to_str()) != Some("json") {
+            continue;
+        }
+        let raw = std::fs::read(path)?;
+        let part: MultipartUploadPart = serde_json::from_slice(&raw)
+            .map_err(|err| io::Error::new(io::ErrorKind::Other, err.to_string()))?;
+        parts.push(part);
+    }
+    Ok(parts)
 }
 
 fn read_metadata_sync(metadata_root: &Path, relative: &Path) -> io::Result<StorageObjectMetadata> {

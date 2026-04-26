@@ -93,7 +93,9 @@ Peanut은 아래 원칙을 지향한다.
 - S3-like object route는 bearer auth, SigV4-style `Authorization` header auth, 또는 presigned URL용 SigV4-style query auth를 받을 수 있다
 - S3-like multipart upload 1차 계약도 추가했다:
   - `POST /api/s3/:bucket/*key?uploads` 로 `UploadId`를 발급받는다
+  - `GET /api/s3/:bucket?uploads=1&prefix=...` 로 bucket의 active multipart upload를 조회한다
   - `PUT /api/s3/:bucket/*key?partNumber=N&uploadId=...` 로 part를 업로드한다
+  - `GET /api/s3/:bucket/*key?uploadId=...` 로 해당 upload의 staged part 목록을 조회한다
   - `POST /api/s3/:bucket/*key?uploadId=...` 에 `CompleteMultipartUpload` XML을 보내 최종 object를 조립한다
   - `DELETE /api/s3/:bucket/*key?uploadId=...` 로 staging upload를 중단한다
 - multipart complete 응답의 ETag는 현재 AWS의 multipart composite ETag가 아니라 최종 조립 object의 ETag를 돌려준다
