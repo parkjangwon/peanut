@@ -145,8 +145,10 @@ pub struct AccessPolicy {
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct ListRowsParams {
     pub limit: Option<usize>,
+    pub offset: Option<usize>,
     pub order_by: Option<String>,
     pub order: Option<String>,
+    pub search: Option<String>,
     pub title_contains: Option<String>,
     pub done: Option<bool>,
     pub filter_field: Option<String>,
@@ -469,6 +471,7 @@ pub async fn list_rows(
     }
 
     let limit = params.limit.unwrap_or(MAX_LIST_ROWS as usize).min(MAX_LIST_ROWS as usize);
+    let offset = params.offset.unwrap_or(0);
     let order_by = params.order_by.as_deref().unwrap_or("created_at");
     let descending = !matches!(params.order.as_deref(), Some("asc"));
 
@@ -505,10 +508,10 @@ pub async fn list_rows(
                 }
             }
 
-            let filtered = apply_row_filters(rows, &params);
+            let filtered = apply_row_filters(rows, &table.schema, &params);
             let mut filtered = filtered;
             sort_rows(&mut filtered, order_by, descending);
-            filtered.truncate(limit);
+            let filtered: Vec<_> = filtered.into_iter().skip(offset).take(limit).collect();
             (StatusCode::OK, Json(DataRowsResponse { rows: filtered })).into_response()
         }
         Err(_) => json_error(StatusCode::INTERNAL_SERVER_ERROR, "failed to list rows"),
@@ -898,6 +901,15 @@ fn validate_list_rows_params(schema: &DataTableSchema, params: &ListRowsParams) 
         }
     }
 
+    if let Some(search) = params.search.as_deref() {
+        if search.trim().is_empty() {
+            return Err("search must not be empty".to_string());
+        }
+        if !schema.fields.values().any(|field| field.field_type == "string") {
+            return Err("search requires at least one declared string field".to_string());
+        }
+    }
+
     if params.done.is_some() && !schema.fields.contains_key("done") {
         return Err("done filter requires a declared done field".to_string());
     }
@@ -913,7 +925,7 @@ fn validate_list_rows_params(schema: &DataTableSchema, params: &ListRowsParams) 
                 return Err("filter_field must be a declared field".to_string());
             };
             let valid = match spec.field_type.as_str() {
-                "string" => matches!(op.as_str(), "eq" | "ne" | "contains"),
+                "string" => matches!(op.as_str(), "eq" | "ne" | "contains" | "starts_with" | "ends_with"),
                 "integer" | "number" | "datetime" => matches!(op.as_str(), "eq" | "ne" | "gt" | "gte" | "lt" | "lte"),
                 "boolean" => matches!(op.as_str(), "eq" | "ne"),
                 "json" => matches!(op.as_str(), "eq" | "ne"),
@@ -929,8 +941,12 @@ fn validate_list_rows_params(schema: &DataTableSchema, params: &ListRowsParams) 
     Ok(())
 }
 
-fn apply_row_filters(rows: Vec<DataRowResponse>, params: &ListRowsParams) -> Vec<DataRowResponse> {
+fn apply_row_filters(rows: Vec<DataRowResponse>, schema: &DataTableSchema, params: &ListRowsParams) -> Vec<DataRowResponse> {
     rows.into_iter()
+        .filter(|row| match params.search.as_deref() {
+            Some(search) => row_matches_search(row, schema, search),
+            None => true,
+        })
         .filter(|row| match &params.title_contains {
             Some(needle) => row
                 .data
@@ -951,6 +967,20 @@ fn apply_row_filters(rows: Vec<DataRowResponse>, params: &ListRowsParams) -> Vec
         .collect()
 }
 
+fn row_matches_search(row: &DataRowResponse, schema: &DataTableSchema, search: &str) -> bool {
+    schema
+        .fields
+        .iter()
+        .filter(|(_, spec)| spec.field_type == "string")
+        .any(|(field_name, _)| {
+            row.data
+                .get(field_name)
+                .and_then(Value::as_str)
+                .map(|value| value.contains(search))
+                .unwrap_or(false)
+        })
+}
+
 fn sort_rows(rows: &mut [DataRowResponse], order_by: &str, descending: bool) {
     rows.sort_by(|left, right| compare_rows(left, right, order_by));
     if descending {
@@ -968,6 +998,8 @@ fn row_matches_generic_filter(row: &DataRowResponse, field: &str, op: &str, valu
             "eq" => text == value,
             "ne" => text != value,
             "contains" => text.contains(value),
+            "starts_with" => text.starts_with(value),
+            "ends_with" => text.ends_with(value),
             _ => false,
         },
         Value::Bool(boolean) => match parse_bool_filter(value) {
@@ -1850,8 +1882,10 @@ mod tests {
             axum::extract::Path("todos".to_string()),
             axum::extract::Query(ListRowsParams {
                 limit: Some(1),
+                offset: None,
                 order_by: Some("title".to_string()),
                 order: Some("asc".to_string()),
+                search: None,
                 title_contains: None,
                 done: None,
                 filter_field: Some("title".to_string()),
@@ -1865,14 +1899,61 @@ mod tests {
         assert_eq!(filtered.rows.len(), 1);
         assert_eq!(filtered.rows[0].data.get("title"), Some(&json!("buy bread")));
 
-        let invalid = list_rows(
-            State(state),
+        let starts_with = list_rows(
+            State(state.clone()),
             Extension(claims(&admin.user.id, true)),
             axum::extract::Path("todos".to_string()),
             axum::extract::Query(ListRowsParams {
                 limit: Some(10),
+                offset: None,
+                order_by: Some("title".to_string()),
+                order: Some("asc".to_string()),
+                search: None,
+                title_contains: None,
+                done: None,
+                filter_field: Some("title".to_string()),
+                filter_op: Some("starts_with".to_string()),
+                filter_value: Some("buy".to_string()),
+            }),
+        )
+        .await;
+        assert_eq!(starts_with.status(), StatusCode::OK);
+        let starts_with: DataRowsResponse = test_support::response_json(starts_with).await;
+        assert_eq!(starts_with.rows.len(), 2);
+
+        let search_with_offset = list_rows(
+            State(state.clone()),
+            Extension(claims(&admin.user.id, true)),
+            axum::extract::Path("todos".to_string()),
+            axum::extract::Query(ListRowsParams {
+                limit: Some(1),
+                offset: Some(1),
+                order_by: Some("title".to_string()),
+                order: Some("asc".to_string()),
+                search: Some("buy".to_string()),
+                title_contains: None,
+                done: None,
+                filter_field: None,
+                filter_op: None,
+                filter_value: None,
+            }),
+        )
+        .await;
+        assert_eq!(search_with_offset.status(), StatusCode::OK);
+        let search_with_offset: DataRowsResponse = test_support::response_json(search_with_offset).await;
+        assert_eq!(search_with_offset.rows.len(), 1);
+        assert_eq!(search_with_offset.rows[0].data.get("title"), Some(&json!("buy milk")));
+
+        let invalid = list_rows(
+            State(state.clone()),
+            Extension(claims(&admin.user.id, true)),
+            axum::extract::Path("todos".to_string()),
+            axum::extract::Query(ListRowsParams {
+                limit: Some(10),
+                offset: None,
                 order_by: Some("owner_user_id".to_string()),
                 order: Some("desc".to_string()),
+                search: None,
                 title_contains: None,
                 done: None,
                 filter_field: None,
@@ -1882,6 +1963,26 @@ mod tests {
         )
         .await;
         assert_eq!(invalid.status(), StatusCode::BAD_REQUEST);
+
+        let invalid_search = list_rows(
+            State(state),
+            Extension(claims(&admin.user.id, true)),
+            axum::extract::Path("todos".to_string()),
+            axum::extract::Query(ListRowsParams {
+                limit: Some(10),
+                offset: None,
+                order_by: None,
+                order: None,
+                search: Some("buy".to_string()),
+                title_contains: None,
+                done: None,
+                filter_field: Some("title".to_string()),
+                filter_op: Some("gt".to_string()),
+                filter_value: Some("buy".to_string()),
+            }),
+        )
+        .await;
+        assert_eq!(invalid_search.status(), StatusCode::BAD_REQUEST);
     }
 
     #[tokio::test]

@@ -381,8 +381,9 @@ Example query:
 ```
 
 What to expect:
-- `title_contains` and generic `filter_field/filter_op/filter_value` can be combined with `order_by`, `order`, and `limit`
-- common console flow uses `contains`, `eq`, `ne`, `gt`, `gte`, `lt`, `lte`
+- `search` scans declared string fields while keeping the query surface bounded
+- `title_contains` and generic `filter_field/filter_op/filter_value` can be combined with `order_by`, `order`, `limit`, and `offset`
+- common console flow uses `contains`, `starts_with`, `ends_with`, `eq`, `ne`, `gt`, `gte`, `lt`, `lte`
 
 ### `GET /api/data/tables/:table/export`
 Admin snapshot export:
@@ -482,13 +483,13 @@ curl -s -X POST "$BASE_URL/api/data/tables" \
 
 # 4) insert a row
 curl -s -X POST "$BASE_URL/api/data/tables/todos/rows" \
-  -H 'authorization: Bearer <ACCESS_TOKEN>' \
-  -H 'content-type: application/json' \
+  -H "content-type: application/json" \
+  -H "authorization: Bearer YOUR_ACCESS_TOKEN" \
   -d '{"title":"buy milk"}'
 
-# 5) query rows with filtering
-curl -s "$BASE_URL/api/data/tables/todos/rows?filter_field=title&filter_op=contains&filter_value=milk&order_by=created_at&order=desc&limit=10" \
-  -H 'authorization: Bearer <ACCESS_TOKEN>'
+# 5) query rows with filtering, search, and offset
+curl -s "$BASE_URL/api/data/tables/todos/rows?search=buy&filter_field=title&filter_op=starts_with&filter_value=buy&order_by=title&order=asc&limit=10&offset=0" \
+  -H "authorization: Bearer YOUR_ACCESS_TOKEN"
 ```
 
 Quick notes:

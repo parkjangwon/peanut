@@ -377,8 +377,9 @@ Peanut은 현재 API-first 모드로 동작한다.
 ```
 
 기대 동작:
-- `title_contains`와 범용 `filter_field/filter_op/filter_value`를 `order_by`, `order`, `limit`과 함께 조합할 수 있다
-- 콘솔 기본 흐름에서는 `contains`, `eq`, `ne`, `gt`, `gte`, `lt`, `lte`를 사용한다
+- `search`는 선언된 string field를 bounded하게 훑는다
+- `title_contains`와 범용 `filter_field/filter_op/filter_value`를 `order_by`, `order`, `limit`, `offset`과 함께 조합할 수 있다
+- 콘솔 기본 흐름에서는 `contains`, `starts_with`, `ends_with`, `eq`, `ne`, `gt`, `gte`, `lt`, `lte`를 사용한다
 
 ### `GET /api/data/tables/:table/export`
 admin snapshot export:
@@ -476,13 +477,13 @@ curl -s -X POST "$BASE_URL/api/data/tables" \
 
 # 4) row 추가
 curl -s -X POST "$BASE_URL/api/data/tables/todos/rows" \
-  -H 'authorization: Bearer <ACCESS_TOKEN>' \
-  -H 'content-type: application/json' \
+  -H "content-type: application/json" \
+  -H "authorization: Bearer YOUR_ACCESS_TOKEN" \
   -d '{"title":"buy milk"}'
 
-# 5) filter로 row 조회
-curl -s "$BASE_URL/api/data/tables/todos/rows?filter_field=title&filter_op=contains&filter_value=milk&order_by=created_at&order=desc&limit=10" \
-  -H 'authorization: Bearer <ACCESS_TOKEN>'
+# 5) filter/search/offset으로 row 조회
+curl -s "$BASE_URL/api/data/tables/todos/rows?search=buy&filter_field=title&filter_op=starts_with&filter_value=buy&order_by=title&order=asc&limit=10&offset=0" \
+  -H "authorization: Bearer YOUR_ACCESS_TOKEN"
 ```
 
 짧은 메모:
