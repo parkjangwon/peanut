@@ -82,6 +82,7 @@ pub struct DataRowResponse {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DataRowRealtimeEvent {
+    pub id: i64,
     pub event: String,
     pub table_name: String,
     pub row_id: String,
@@ -207,6 +208,7 @@ pub struct ListRowEventsParams {
     pub limit: Option<usize>,
     pub row_id: Option<String>,
     pub action: Option<String>,
+    pub since_id: Option<i64>,
 }
 
 #[derive(Debug, Clone, FromRow)]
@@ -639,8 +641,9 @@ pub async fn create_row(
 
     match insert_result {
         Ok(_) => {
-            let _ = record_row_event(&state.pool, &table.id, &row_id, &claims.sub, "insert", Some(&normalized)).await;
-            emit_data_row_event(&state, &table.name, &row_id, &claims.sub, "insert", Some(&normalized));
+            if let Ok(event_id) = record_row_event(&state.pool, &table.id, &row_id, &claims.sub, "insert", Some(&normalized)).await {
+                emit_data_row_event(&state, event_id, &table.name, &row_id, &claims.sub, "insert", Some(&normalized));
+            }
             match load_row(&state.pool, &table.id, &row_id).await {
                 Ok(row) => (StatusCode::CREATED, Json(DataRowResponse::from_record(row))).into_response(),
                 Err(LoadRowError::NotFound) => json_error(StatusCode::INTERNAL_SERVER_ERROR, "created row could not be reloaded"),
@@ -740,15 +743,36 @@ pub async fn list_row_events(
         }
     }
 
-    let records = match sqlx::query_as::<_, DataRowEventRecord>(
-        "SELECT id, row_id, actor_user_id, action, diff_json, created_at FROM data_row_events WHERE table_id = ? ORDER BY id DESC LIMIT 200",
-    )
-    .bind(&table.id)
-    .fetch_all(&state.pool)
-    .await
-    {
-        Ok(records) => records,
-        Err(_) => return json_error(StatusCode::INTERNAL_SERVER_ERROR, "failed to load row events"),
+    if let Some(since_id) = params.since_id {
+        if since_id < 0 {
+            return json_error(StatusCode::BAD_REQUEST, "since_id must be greater than or equal to 0");
+        }
+    }
+
+    let records = if let Some(since_id) = params.since_id {
+        match sqlx::query_as::<_, DataRowEventRecord>(
+            "SELECT id, row_id, actor_user_id, action, diff_json, created_at FROM data_row_events WHERE table_id = ? AND id > ? ORDER BY id ASC LIMIT ?",
+        )
+        .bind(&table.id)
+        .bind(since_id)
+        .bind(limit as i64)
+        .fetch_all(&state.pool)
+        .await
+        {
+            Ok(records) => records,
+            Err(_) => return json_error(StatusCode::INTERNAL_SERVER_ERROR, "failed to load row events"),
+        }
+    } else {
+        match sqlx::query_as::<_, DataRowEventRecord>(
+            "SELECT id, row_id, actor_user_id, action, diff_json, created_at FROM data_row_events WHERE table_id = ? ORDER BY id DESC LIMIT 200",
+        )
+        .bind(&table.id)
+        .fetch_all(&state.pool)
+        .await
+        {
+            Ok(records) => records,
+            Err(_) => return json_error(StatusCode::INTERNAL_SERVER_ERROR, "failed to load row events"),
+        }
     };
 
     let mut events = Vec::new();
@@ -898,8 +922,9 @@ pub async fn update_row(
     .await
     {
         Ok(_) => {
-            let _ = record_row_event(&state.pool, &table.id, &row_id, &claims.sub, "update", Some(&normalized)).await;
-            emit_data_row_event(&state, &table.name, &row_id, &claims.sub, "update", Some(&normalized));
+            if let Ok(event_id) = record_row_event(&state.pool, &table.id, &row_id, &claims.sub, "update", Some(&normalized)).await {
+                emit_data_row_event(&state, event_id, &table.name, &row_id, &claims.sub, "update", Some(&normalized));
+            }
             match load_row(&state.pool, &table.id, &row_id).await {
                 Ok(row) => (StatusCode::OK, Json(DataRowResponse::from_record(row))).into_response(),
                 Err(LoadRowError::NotFound) => json_error(StatusCode::INTERNAL_SERVER_ERROR, "updated row could not be reloaded"),
@@ -941,8 +966,9 @@ pub async fn delete_row(
         Ok(result) if result.rows_affected() == 0 => json_error(StatusCode::NOT_FOUND, "row not found"),
         Ok(_) => {
             let previous = parse_json(&existing.data_json).ok();
-            let _ = record_row_event(&state.pool, &table.id, &row_id, &claims.sub, "delete", previous.as_ref()).await;
-            emit_data_row_event(&state, &table.name, &row_id, &claims.sub, "delete", previous.as_ref());
+            if let Ok(event_id) = record_row_event(&state.pool, &table.id, &row_id, &claims.sub, "delete", previous.as_ref()).await {
+                emit_data_row_event(&state, event_id, &table.name, &row_id, &claims.sub, "delete", previous.as_ref());
+            }
             json_message(StatusCode::OK, format!("deleted row {}", row_id))
         }
         Err(_) => json_error(StatusCode::INTERNAL_SERVER_ERROR, "failed to delete row"),
@@ -1061,8 +1087,9 @@ pub async fn import_rows(
 
         match insert_result {
             Ok(_) => {
-                let _ = record_row_event(&state.pool, &table.id, &row_id, &claims.sub, "insert", Some(&normalized)).await;
-                emit_data_row_event(&state, &table.name, &row_id, &claims.sub, "insert", Some(&normalized));
+                if let Ok(event_id) = record_row_event(&state.pool, &table.id, &row_id, &claims.sub, "insert", Some(&normalized)).await {
+                    emit_data_row_event(&state, event_id, &table.name, &row_id, &claims.sub, "insert", Some(&normalized));
+                }
                 imported_count += 1;
             }
             Err(_) => return json_error(StatusCode::CONFLICT, "import row id already exists"),
@@ -1127,6 +1154,7 @@ async fn restore_table_definition(
 
 fn emit_data_row_event(
     state: &crate::AppState,
+    event_id: i64,
     table_name: &str,
     row_id: &str,
     actor_user_id: &str,
@@ -1134,6 +1162,7 @@ fn emit_data_row_event(
     diff: Option<&Value>,
 ) {
     let _ = state.data_event_sender.send(DataRowRealtimeEvent {
+        id: event_id,
         event: "row.changed".to_string(),
         table_name: table_name.to_string(),
         row_id: row_id.to_string(),
@@ -1642,9 +1671,9 @@ async fn record_row_event(
     actor_user_id: &str,
     action: &str,
     diff_json: Option<&Value>,
-) -> Result<(), sqlx::Error> {
+) -> Result<i64, sqlx::Error> {
     let diff_json = diff_json.and_then(|value| serde_json::to_string(value).ok());
-    sqlx::query(
+    let result = sqlx::query(
         "INSERT INTO data_row_events (table_id, row_id, actor_user_id, action, diff_json) VALUES (?, ?, ?, ?, ?)",
     )
     .bind(table_id)
@@ -1654,7 +1683,7 @@ async fn record_row_event(
     .bind(diff_json)
     .execute(pool)
     .await?;
-    Ok(())
+    Ok(result.last_insert_rowid())
 }
 
 async fn load_table(pool: &sqlx::SqlitePool, table_name: &str) -> Result<LoadedTable, LoadTableError> {
@@ -2420,6 +2449,7 @@ mod tests {
                 limit: Some(10),
                 row_id: Some(created_row.id.clone()),
                 action: None,
+                since_id: None,
             }),
         )
         .await;
@@ -2440,6 +2470,7 @@ mod tests {
                 limit: Some(10),
                 row_id: None,
                 action: Some("update".to_string()),
+                since_id: None,
             }),
         )
         .await;
@@ -2750,7 +2781,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_data_realtime_events_follow_row_mutations() {
+    async fn test_admin_can_replay_row_events_from_since_id_cursor() {
         let (state, _dir) = test_support::make_test_state().await;
         let admin = register_user(state.clone(), "admin@example.com").await;
         let mut events = state.data_event_sender.subscribe();
@@ -2794,20 +2825,46 @@ mod tests {
         .await;
         assert_eq!(delete_row_response.status(), StatusCode::OK);
 
-        let mut actions = Vec::new();
+        let mut live_events = Vec::new();
         for _ in 0..6 {
             let event = tokio::time::timeout(std::time::Duration::from_secs(1), events.recv())
                 .await
                 .expect("timed out waiting for data realtime event")
                 .expect("failed to receive data realtime event");
             if event.table_name == "todos" && event.row_id == created_row.id {
-                actions.push(event.action);
-                if actions.last().map(|s| s.as_str()) == Some("delete") {
+                live_events.push(event);
+                if live_events.last().map(|value| value.action.as_str()) == Some("delete") {
                     break;
                 }
             }
         }
 
-        assert_eq!(actions, vec!["insert", "update", "delete"]);
+        assert_eq!(live_events.len(), 3);
+        assert_eq!(live_events[0].action, "insert");
+        assert_eq!(live_events[1].action, "update");
+        assert_eq!(live_events[2].action, "delete");
+        assert!(live_events[0].id > 0);
+        assert!(live_events[1].id > live_events[0].id);
+        assert!(live_events[2].id > live_events[1].id);
+
+        let replay_response = list_row_events(
+            State(state),
+            Extension(claims(&admin.user.id, true)),
+            axum::extract::Path("todos".to_string()),
+            axum::extract::Query(ListRowEventsParams {
+                limit: Some(10),
+                row_id: Some(created_row.id.clone()),
+                action: None,
+                since_id: Some(live_events[0].id),
+            }),
+        )
+        .await;
+        assert_eq!(replay_response.status(), StatusCode::OK);
+        let replay_body: DataRowEventsResponse = test_support::response_json(replay_response).await;
+        assert_eq!(replay_body.events.len(), 2);
+        assert_eq!(replay_body.events[0].action, "update");
+        assert_eq!(replay_body.events[1].action, "delete");
+        assert!(replay_body.events[0].id > live_events[0].id);
+        assert!(replay_body.events[1].id > replay_body.events[0].id);
     }
 }

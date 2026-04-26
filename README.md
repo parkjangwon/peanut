@@ -116,7 +116,8 @@ Current model:
 - rows are stored in Peanut-managed SQLite tables
 - `owner_private` policy isolates rows per authenticated user
 - row mutations are recorded in an internal event log
-- admin APIs can subscribe to row mutation events through `GET /api/data/tables/:table/events/stream` (SSE)
+- admin APIs can replay row mutations from `GET /api/data/tables/:table/events?since_id=<event_id>` for resume/sync flows
+- admin APIs can subscribe to row mutation events through `GET /api/data/tables/:table/events/stream` (SSE), with event ids included in each payload
 - admin APIs can persist reusable query presets per table for repeated operator workflows
 - table snapshots can be exported and re-imported through bounded admin APIs
 - schema updates now follow safe evolution rules:
@@ -397,10 +398,17 @@ Admin snapshot export:
 - returns table metadata plus normalized rows
 - useful for backups, migration between environments, or fixture generation
 
+### `GET /api/data/tables/:table/events`
+Admin row event log:
+- supports `limit`, `row_id`, `action`, and `since_id`
+- default mode returns latest events first for audit/debugging
+- `since_id` switches to ascending replay order for resume/sync workers
+
 ### `GET /api/data/tables/:table/events/stream`
 Admin row realtime stream:
 - SSE endpoint for row mutation events
 - emits insert, update, delete events as they happen
+- each payload includes the durable event `id` so clients can resume with `since_id`
 - useful for operator dashboards or live sync workers
 
 ### `GET /api/data/tables/:table/presets`
