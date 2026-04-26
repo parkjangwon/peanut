@@ -63,6 +63,12 @@ pub struct DataRowEventsResponse {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DataRowEventCheckpointResponse {
+    pub table_name: String,
+    pub latest_event_id: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DataRowEventResponse {
     pub id: i64,
     pub row_id: String,
@@ -852,6 +858,41 @@ pub async fn list_row_events(
     }
 
     (StatusCode::OK, Json(DataRowEventsResponse { events })).into_response()
+}
+
+pub async fn get_row_event_checkpoint(
+    State(state): State<crate::AppState>,
+    Extension(claims): Extension<Claims>,
+    Path(table): Path<String>,
+) -> Response {
+    if !claims.is_admin {
+        return json_error(StatusCode::FORBIDDEN, "admin access required");
+    }
+
+    let table = match load_table(&state.pool, &table).await {
+        Ok(table) => table,
+        Err(LoadTableError::NotFound) => return json_error(StatusCode::NOT_FOUND, "data table not found"),
+        Err(LoadTableError::Invalid(message)) => return json_error(StatusCode::INTERNAL_SERVER_ERROR, message),
+        Err(LoadTableError::QueryFailed) => return json_error(StatusCode::INTERNAL_SERVER_ERROR, "failed to load data table"),
+    };
+
+    let latest_event_id = match sqlx::query_scalar::<_, Option<i64>>("SELECT MAX(id) FROM data_row_events WHERE table_id = ?")
+        .bind(&table.id)
+        .fetch_one(&state.pool)
+        .await
+    {
+        Ok(value) => value.unwrap_or(0),
+        Err(_) => return json_error(StatusCode::INTERNAL_SERVER_ERROR, "failed to load row event checkpoint"),
+    };
+
+    (
+        StatusCode::OK,
+        Json(DataRowEventCheckpointResponse {
+            table_name: table.name,
+            latest_event_id,
+        }),
+    )
+    .into_response()
 }
 
 pub async fn stream_row_events(
@@ -2551,6 +2592,17 @@ mod tests {
         let filtered_body: DataRowEventsResponse = test_support::response_json(filtered_response).await;
         assert_eq!(filtered_body.events.len(), 1);
         assert_eq!(filtered_body.events[0].action, "update");
+
+        let checkpoint_response = get_row_event_checkpoint(
+            State(state.clone()),
+            Extension(claims(&admin.user.id, true)),
+            axum::extract::Path("todos".to_string()),
+        )
+        .await;
+        assert_eq!(checkpoint_response.status(), StatusCode::OK);
+        let checkpoint_body: DataRowEventCheckpointResponse = test_support::response_json(checkpoint_response).await;
+        assert_eq!(checkpoint_body.table_name, "todos");
+        assert_eq!(checkpoint_body.latest_event_id, events_body.events[0].id);
 
         let forbidden_response = list_row_events(
             State(state),

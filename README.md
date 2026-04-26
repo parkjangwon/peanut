@@ -402,8 +402,10 @@ Admin snapshot export:
 - useful for backups, migration between environments, or fixture generation
 
 ### `GET /api/data/tables/:table/events`
+### `GET /api/data/tables/:table/events/checkpoint`
 Admin row event log:
 - supports `limit`, `row_id`, `action`, and `since_id`
+- `GET /api/data/tables/:table/events/checkpoint` returns the latest durable row-event id for resume checkpoints
 - default mode returns latest events first for audit/debugging
 - `since_id` switches to ascending replay order for resume/sync workers
 

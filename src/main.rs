@@ -151,6 +151,10 @@ async fn main() {
             get(api::data::list_row_events),
         )
         .route(
+            "/data/tables/:table/events/checkpoint",
+            get(api::data::get_row_event_checkpoint),
+        )
+        .route(
             "/data/tables/:table/events/stream",
             get(api::data::stream_row_events),
         )

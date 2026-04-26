@@ -398,8 +398,10 @@ admin snapshot export:
 - 백업, 환경 간 마이그레이션, fixture 생성에 쓸 수 있다
 
 ### `GET /api/data/tables/:table/events`
+### `GET /api/data/tables/:table/events/checkpoint`
 admin row event log:
 - `limit`, `row_id`, `action`, `since_id`를 지원한다
+- `GET /api/data/tables/:table/events/checkpoint`는 resume checkpoint용 최신 durable row-event id를 반환한다
 - 기본 모드는 최신 이벤트부터 반환해서 audit/debugging에 맞춘다
 - `since_id`를 주면 오름차순 replay로 바뀌어 resume/sync worker에 적합하다
 
