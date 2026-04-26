@@ -98,6 +98,10 @@ Peanut은 이제 Peanut이 관리하는 logical table용 제한된 SQLite 기반
 - `POST /api/data/tables`
 - `GET /api/data/tables/:table`
 - `PATCH /api/data/tables/:table`
+- `GET /api/data/tables/:table/presets`
+- `POST /api/data/tables/:table/presets`
+- `PATCH /api/data/tables/:table/presets/:preset_id`
+- `DELETE /api/data/tables/:table/presets/:preset_id`
 - `GET /api/data/tables/:table/export`
 - `POST /api/data/tables/:table/import`
 - `GET /api/data/tables/:table/rows`
@@ -114,6 +118,7 @@ Peanut은 이제 Peanut이 관리하는 logical table용 제한된 SQLite 기반
 - `owner_private` 정책은 인증 유저별 row 격리를 제공한다
 - row 변경은 내부 이벤트 로그에 기록된다
 - admin API로 `GET /api/data/tables/:table/events/stream`에서 row mutation 실시간 이벤트를 SSE로 구독할 수 있다
+- admin API로 table별 reusable query preset을 저장해 반복 조회에 재사용할 수 있다
 - bounded admin API로 table snapshot export/import가 가능하다
 - schema 업데이트는 이제 안전한 진화 규칙을 따른다:
   - 기존 field type은 in-place 변경할 수 없다
@@ -393,6 +398,15 @@ admin row realtime stream:
 - row mutation 이벤트용 SSE endpoint
 - insert, update, delete 이벤트를 실시간으로 흘려준다
 - 운영 대시보드나 live sync worker에 유용하다
+
+### `GET /api/data/tables/:table/presets`
+### `POST /api/data/tables/:table/presets`
+### `PATCH /api/data/tables/:table/presets/:preset_id`
+### `DELETE /api/data/tables/:table/presets/:preset_id`
+admin saved query presets:
+- table별 bounded row-query params를 재사용 가능한 preset으로 저장한다
+- "open items", "recent failures", "buy-* tasks" 같은 반복 조회에 유용하다
+- preset에는 `search`, filters, ordering, limit, offset이 저장된다
 
 ### `POST /api/data/tables/:table/import`
 admin snapshot import:

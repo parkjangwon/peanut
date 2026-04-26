@@ -97,6 +97,10 @@ Current capabilities:
 - `POST /api/data/tables`
 - `GET /api/data/tables/:table`
 - `PATCH /api/data/tables/:table`
+- `GET /api/data/tables/:table/presets`
+- `POST /api/data/tables/:table/presets`
+- `PATCH /api/data/tables/:table/presets/:preset_id`
+- `DELETE /api/data/tables/:table/presets/:preset_id`
 - `GET /api/data/tables/:table/export`
 - `POST /api/data/tables/:table/import`
 - `GET /api/data/tables/:table/rows`
@@ -113,6 +117,7 @@ Current model:
 - `owner_private` policy isolates rows per authenticated user
 - row mutations are recorded in an internal event log
 - admin APIs can subscribe to row mutation events through `GET /api/data/tables/:table/events/stream` (SSE)
+- admin APIs can persist reusable query presets per table for repeated operator workflows
 - table snapshots can be exported and re-imported through bounded admin APIs
 - schema updates now follow safe evolution rules:
   - existing field types cannot change in place
@@ -397,6 +402,15 @@ Admin row realtime stream:
 - SSE endpoint for row mutation events
 - emits insert, update, delete events as they happen
 - useful for operator dashboards or live sync workers
+
+### `GET /api/data/tables/:table/presets`
+### `POST /api/data/tables/:table/presets`
+### `PATCH /api/data/tables/:table/presets/:preset_id`
+### `DELETE /api/data/tables/:table/presets/:preset_id`
+Admin saved query presets:
+- store reusable bounded row-query params per table
+- useful for repeated operator filters like "open items", "recent failures", or "buy-* tasks"
+- presets persist `search`, filters, ordering, limit, and offset
 
 ### `POST /api/data/tables/:table/import`
 Admin snapshot import:

@@ -42,6 +42,7 @@ mod tests {
             "data_tables",
             "data_rows",
             "data_row_events",
+            "data_query_presets",
             "refresh_tokens",
             "password_reset_tokens",
             "auth_events",

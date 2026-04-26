@@ -91,6 +91,21 @@ pub struct DataRowRealtimeEvent {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct QueryPresetsResponse {
+    pub presets: Vec<QueryPresetResponse>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct QueryPresetResponse {
+    pub id: String,
+    pub name: String,
+    pub display_name: String,
+    pub params: ListRowsParams,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TableExportResponse {
     pub table: DataTableDetail,
     pub rows: Vec<DataRowResponse>,
@@ -137,6 +152,13 @@ pub struct UpdateTableRequest {
     pub display_name: Option<String>,
     pub schema: Option<DataTableSchema>,
     pub access_policy: Option<AccessPolicy>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UpsertQueryPresetRequest {
+    pub name: String,
+    pub display_name: String,
+    pub params: ListRowsParams,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -215,6 +237,16 @@ struct DataRowEventRecord {
     action: String,
     diff_json: Option<String>,
     created_at: String,
+}
+
+#[derive(Debug, Clone, FromRow)]
+struct QueryPresetRecord {
+    id: String,
+    name: String,
+    display_name: String,
+    params_json: String,
+    created_at: String,
+    updated_at: String,
 }
 
 pub async fn list_tables(
@@ -317,6 +349,147 @@ pub async fn get_table(
         Err(LoadTableError::NotFound) => json_error(StatusCode::NOT_FOUND, "data table not found"),
         Err(LoadTableError::Invalid(message)) => json_error(StatusCode::INTERNAL_SERVER_ERROR, message),
         Err(LoadTableError::QueryFailed) => json_error(StatusCode::INTERNAL_SERVER_ERROR, "failed to load data table"),
+    }
+}
+
+pub async fn list_query_presets(
+    State(state): State<crate::AppState>,
+    Extension(claims): Extension<Claims>,
+    Path(table): Path<String>,
+) -> Response {
+    if !claims.is_admin {
+        return json_error(StatusCode::FORBIDDEN, "admin access required");
+    }
+    let table = match load_table(&state.pool, &table).await {
+        Ok(table) => table,
+        Err(LoadTableError::NotFound) => return json_error(StatusCode::NOT_FOUND, "data table not found"),
+        Err(LoadTableError::Invalid(message)) => return json_error(StatusCode::INTERNAL_SERVER_ERROR, message),
+        Err(LoadTableError::QueryFailed) => return json_error(StatusCode::INTERNAL_SERVER_ERROR, "failed to load data table"),
+    };
+
+    match load_query_presets(&state.pool, &table.id).await {
+        Ok(presets) => (StatusCode::OK, Json(QueryPresetsResponse { presets })).into_response(),
+        Err(message) => json_error(StatusCode::INTERNAL_SERVER_ERROR, message),
+    }
+}
+
+pub async fn create_query_preset(
+    State(state): State<crate::AppState>,
+    Extension(claims): Extension<Claims>,
+    Path(table): Path<String>,
+    Json(payload): Json<UpsertQueryPresetRequest>,
+) -> Response {
+    if !claims.is_admin {
+        return json_error(StatusCode::FORBIDDEN, "admin access required");
+    }
+    let table = match load_table(&state.pool, &table).await {
+        Ok(table) => table,
+        Err(LoadTableError::NotFound) => return json_error(StatusCode::NOT_FOUND, "data table not found"),
+        Err(LoadTableError::Invalid(message)) => return json_error(StatusCode::INTERNAL_SERVER_ERROR, message),
+        Err(LoadTableError::QueryFailed) => return json_error(StatusCode::INTERNAL_SERVER_ERROR, "failed to load data table"),
+    };
+
+    if let Err(message) = validate_query_preset_payload(&table.schema, &payload) {
+        return json_error(StatusCode::BAD_REQUEST, message);
+    }
+
+    let preset_id = Uuid::new_v4().to_string();
+    let params_json = match serde_json::to_string(&payload.params) {
+        Ok(value) => value,
+        Err(_) => return json_error(StatusCode::INTERNAL_SERVER_ERROR, "failed to encode preset params"),
+    };
+
+    match sqlx::query(
+        "INSERT INTO data_query_presets (id, table_id, name, display_name, params_json, created_by) VALUES (?, ?, ?, ?, ?, ?)",
+    )
+    .bind(&preset_id)
+    .bind(&table.id)
+    .bind(payload.name.trim())
+    .bind(payload.display_name.trim())
+    .bind(params_json)
+    .bind(&claims.sub)
+    .execute(&state.pool)
+    .await
+    {
+        Ok(_) => match load_query_preset(&state.pool, &table.id, &preset_id).await {
+            Ok(preset) => (StatusCode::CREATED, Json(preset)).into_response(),
+            Err(LoadPresetError::NotFound) => json_error(StatusCode::INTERNAL_SERVER_ERROR, "created preset could not be reloaded"),
+            Err(LoadPresetError::Invalid(message)) => json_error(StatusCode::INTERNAL_SERVER_ERROR, message),
+            Err(LoadPresetError::QueryFailed) => json_error(StatusCode::INTERNAL_SERVER_ERROR, "failed to reload preset"),
+        },
+        Err(_) => json_error(StatusCode::CONFLICT, "query preset already exists"),
+    }
+}
+
+pub async fn update_query_preset(
+    State(state): State<crate::AppState>,
+    Extension(claims): Extension<Claims>,
+    Path((table, preset_id)): Path<(String, String)>,
+    Json(payload): Json<UpsertQueryPresetRequest>,
+) -> Response {
+    if !claims.is_admin {
+        return json_error(StatusCode::FORBIDDEN, "admin access required");
+    }
+    let table = match load_table(&state.pool, &table).await {
+        Ok(table) => table,
+        Err(LoadTableError::NotFound) => return json_error(StatusCode::NOT_FOUND, "data table not found"),
+        Err(LoadTableError::Invalid(message)) => return json_error(StatusCode::INTERNAL_SERVER_ERROR, message),
+        Err(LoadTableError::QueryFailed) => return json_error(StatusCode::INTERNAL_SERVER_ERROR, "failed to load data table"),
+    };
+    if let Err(message) = validate_query_preset_payload(&table.schema, &payload) {
+        return json_error(StatusCode::BAD_REQUEST, message);
+    }
+    let params_json = match serde_json::to_string(&payload.params) {
+        Ok(value) => value,
+        Err(_) => return json_error(StatusCode::INTERNAL_SERVER_ERROR, "failed to encode preset params"),
+    };
+
+    match sqlx::query(
+        "UPDATE data_query_presets SET name = ?, display_name = ?, params_json = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND table_id = ?",
+    )
+    .bind(payload.name.trim())
+    .bind(payload.display_name.trim())
+    .bind(params_json)
+    .bind(&preset_id)
+    .bind(&table.id)
+    .execute(&state.pool)
+    .await
+    {
+        Ok(result) if result.rows_affected() == 0 => json_error(StatusCode::NOT_FOUND, "query preset not found"),
+        Ok(_) => match load_query_preset(&state.pool, &table.id, &preset_id).await {
+            Ok(preset) => (StatusCode::OK, Json(preset)).into_response(),
+            Err(LoadPresetError::NotFound) => json_error(StatusCode::INTERNAL_SERVER_ERROR, "updated preset could not be reloaded"),
+            Err(LoadPresetError::Invalid(message)) => json_error(StatusCode::INTERNAL_SERVER_ERROR, message),
+            Err(LoadPresetError::QueryFailed) => json_error(StatusCode::INTERNAL_SERVER_ERROR, "failed to reload preset"),
+        },
+        Err(_) => json_error(StatusCode::CONFLICT, "query preset already exists"),
+    }
+}
+
+pub async fn delete_query_preset(
+    State(state): State<crate::AppState>,
+    Extension(claims): Extension<Claims>,
+    Path((table, preset_id)): Path<(String, String)>,
+) -> Response {
+    if !claims.is_admin {
+        return json_error(StatusCode::FORBIDDEN, "admin access required");
+    }
+    let table = match load_table(&state.pool, &table).await {
+        Ok(table) => table,
+        Err(LoadTableError::NotFound) => return json_error(StatusCode::NOT_FOUND, "data table not found"),
+        Err(LoadTableError::Invalid(message)) => return json_error(StatusCode::INTERNAL_SERVER_ERROR, message),
+        Err(LoadTableError::QueryFailed) => return json_error(StatusCode::INTERNAL_SERVER_ERROR, "failed to load data table"),
+    };
+
+    match sqlx::query("DELETE FROM data_query_presets WHERE id = ? AND table_id = ?")
+        .bind(&preset_id)
+        .bind(&table.id)
+        .execute(&state.pool)
+        .await
+    {
+        Ok(result) if result.rows_affected() == 0 => json_error(StatusCode::NOT_FOUND, "query preset not found"),
+        Ok(_) => json_message(StatusCode::OK, format!("deleted query preset {}", preset_id)),
+        Err(_) => json_error(StatusCode::INTERNAL_SERVER_ERROR, "failed to delete query preset"),
     }
 }
 
@@ -970,6 +1143,65 @@ fn emit_data_row_event(
     });
 }
 
+async fn load_query_presets(pool: &sqlx::SqlitePool, table_id: &str) -> Result<Vec<QueryPresetResponse>, String> {
+    let records = sqlx::query_as::<_, QueryPresetRecord>(
+        "SELECT id, name, display_name, params_json, created_at, updated_at FROM data_query_presets WHERE table_id = ? ORDER BY created_at DESC, name ASC",
+    )
+    .bind(table_id)
+    .fetch_all(pool)
+    .await
+    .map_err(|_| "failed to load query presets".to_string())?;
+
+    let mut presets = Vec::with_capacity(records.len());
+    for record in records {
+        presets.push(query_preset_from_record(record).map_err(|_| "failed to decode stored query preset".to_string())?);
+    }
+    Ok(presets)
+}
+
+async fn load_query_preset(pool: &sqlx::SqlitePool, table_id: &str, preset_id: &str) -> Result<QueryPresetResponse, LoadPresetError> {
+    let record = sqlx::query_as::<_, QueryPresetRecord>(
+        "SELECT id, name, display_name, params_json, created_at, updated_at FROM data_query_presets WHERE table_id = ? AND id = ?",
+    )
+    .bind(table_id)
+    .bind(preset_id)
+    .fetch_optional(pool)
+    .await
+    .map_err(|_| LoadPresetError::QueryFailed)?
+    .ok_or(LoadPresetError::NotFound)?;
+
+    query_preset_from_record(record).map_err(LoadPresetError::Invalid)
+}
+
+fn query_preset_from_record(record: QueryPresetRecord) -> Result<QueryPresetResponse, String> {
+    let params = serde_json::from_str(&record.params_json).map_err(|_| "failed to decode stored query preset".to_string())?;
+    Ok(QueryPresetResponse {
+        id: record.id,
+        name: record.name,
+        display_name: record.display_name,
+        params,
+        created_at: record.created_at,
+        updated_at: record.updated_at,
+    })
+}
+
+fn validate_query_preset_payload(schema: &DataTableSchema, payload: &UpsertQueryPresetRequest) -> Result<(), String> {
+    if payload.name.trim().is_empty() {
+        return Err("name is required".to_string());
+    }
+    if !payload
+        .name
+        .chars()
+        .all(|ch| ch.is_ascii_lowercase() || ch.is_ascii_digit() || ch == '_' || ch == '-')
+    {
+        return Err("preset name may only contain lowercase letters, digits, underscores, and hyphens".to_string());
+    }
+    if payload.display_name.trim().is_empty() {
+        return Err("display_name is required".to_string());
+    }
+    validate_list_rows_params(schema, &payload.params)
+}
+
 fn validate_table_name(name: &str) -> Result<(), String> {
     if name.is_empty() {
         return Err("name is required".to_string());
@@ -1499,6 +1731,13 @@ enum LoadTableError {
 enum RestoreTableError {
     BadRequest(String),
     Internal(String),
+}
+
+#[derive(Debug)]
+enum LoadPresetError {
+    NotFound,
+    Invalid(String),
+    QueryFailed,
 }
 
 #[derive(Debug)]
@@ -2217,6 +2456,104 @@ mod tests {
         )
         .await;
         assert_eq!(forbidden_response.status(), StatusCode::FORBIDDEN);
+    }
+
+    #[tokio::test]
+    async fn test_admin_can_manage_query_presets() {
+        let (state, _dir) = test_support::make_test_state().await;
+        let admin = register_user(state.clone(), "admin@example.com").await;
+
+        let create_table_response = create_table(
+            State(state.clone()),
+            Extension(claims(&admin.user.id, true)),
+            Json(todo_table_request()),
+        )
+        .await;
+        assert_eq!(create_table_response.status(), StatusCode::CREATED);
+
+        let create_preset_response = create_query_preset(
+            State(state.clone()),
+            Extension(claims(&admin.user.id, true)),
+            axum::extract::Path("todos".to_string()),
+            Json(UpsertQueryPresetRequest {
+                name: "open-buy-items".to_string(),
+                display_name: "Open Buy Items".to_string(),
+                params: ListRowsParams {
+                    limit: Some(10),
+                    offset: Some(0),
+                    order_by: Some("title".to_string()),
+                    order: Some("asc".to_string()),
+                    search: Some("buy".to_string()),
+                    title_contains: None,
+                    done: Some(false),
+                    filter_field: Some("title".to_string()),
+                    filter_op: Some("starts_with".to_string()),
+                    filter_value: Some("buy".to_string()),
+                },
+            }),
+        )
+        .await;
+        assert_eq!(create_preset_response.status(), StatusCode::CREATED);
+        let created_preset: QueryPresetResponse = test_support::response_json(create_preset_response).await;
+        assert_eq!(created_preset.name, "open-buy-items");
+        assert_eq!(created_preset.params.search.as_deref(), Some("buy"));
+
+        let list_response = list_query_presets(
+            State(state.clone()),
+            Extension(claims(&admin.user.id, true)),
+            axum::extract::Path("todos".to_string()),
+        )
+        .await;
+        assert_eq!(list_response.status(), StatusCode::OK);
+        let presets_body: QueryPresetsResponse = test_support::response_json(list_response).await;
+        assert_eq!(presets_body.presets.len(), 1);
+        assert_eq!(presets_body.presets[0].id, created_preset.id);
+
+        let update_response = update_query_preset(
+            State(state.clone()),
+            Extension(claims(&admin.user.id, true)),
+            axum::extract::Path(("todos".to_string(), created_preset.id.clone())),
+            Json(UpsertQueryPresetRequest {
+                name: "open-items".to_string(),
+                display_name: "Open Items".to_string(),
+                params: ListRowsParams {
+                    limit: Some(5),
+                    offset: Some(5),
+                    order_by: Some("updated_at".to_string()),
+                    order: Some("desc".to_string()),
+                    search: None,
+                    title_contains: None,
+                    done: Some(false),
+                    filter_field: None,
+                    filter_op: None,
+                    filter_value: None,
+                },
+            }),
+        )
+        .await;
+        assert_eq!(update_response.status(), StatusCode::OK);
+        let updated_preset: QueryPresetResponse = test_support::response_json(update_response).await;
+        assert_eq!(updated_preset.name, "open-items");
+        assert_eq!(updated_preset.params.offset, Some(5));
+        assert_eq!(updated_preset.params.order_by.as_deref(), Some("updated_at"));
+
+        let delete_response = delete_query_preset(
+            State(state.clone()),
+            Extension(claims(&admin.user.id, true)),
+            axum::extract::Path(("todos".to_string(), created_preset.id.clone())),
+        )
+        .await;
+        assert_eq!(delete_response.status(), StatusCode::OK);
+
+        let list_after_delete = list_query_presets(
+            State(state),
+            Extension(claims(&admin.user.id, true)),
+            axum::extract::Path("todos".to_string()),
+        )
+        .await;
+        assert_eq!(list_after_delete.status(), StatusCode::OK);
+        let presets_after_delete: QueryPresetsResponse = test_support::response_json(list_after_delete).await;
+        assert!(presets_after_delete.presets.is_empty());
     }
 
     #[tokio::test]

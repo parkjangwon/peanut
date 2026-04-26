@@ -128,6 +128,16 @@ async fn main() {
         .route("/data/tables/:table", get(api::data::get_table))
         .route("/data/tables/:table", patch(api::data::update_table))
         .route("/data/tables/:table", delete(api::data::delete_table))
+        .route("/data/tables/:table/presets", get(api::data::list_query_presets))
+        .route("/data/tables/:table/presets", post(api::data::create_query_preset))
+        .route(
+            "/data/tables/:table/presets/:preset_id",
+            patch(api::data::update_query_preset),
+        )
+        .route(
+            "/data/tables/:table/presets/:preset_id",
+            delete(api::data::delete_query_preset),
+        )
         .route("/data/tables/:table/export", get(api::data::export_table))
         .route("/data/tables/:table/import", post(api::data::import_rows))
         .route("/data/tables/:table/rows", get(api::data::list_rows))
