@@ -97,6 +97,7 @@ Peanut은 이제 Peanut이 관리하는 logical table용 제한된 SQLite 기반
 - `GET /api/data/tables`
 - `POST /api/data/tables`
 - `GET /api/data/tables/:table`
+- `PATCH /api/data/tables/:table`
 - `GET /api/data/tables/:table/rows`
 - `POST /api/data/tables/:table/rows`
 - `GET /api/data/tables/:table/events`
@@ -109,6 +110,10 @@ Peanut은 이제 Peanut이 관리하는 logical table용 제한된 SQLite 기반
 - row는 Peanut이 관리하는 SQLite 테이블에 저장된다
 - `owner_private` 정책은 인증 유저별 row 격리를 제공한다
 - row 변경은 내부 이벤트 로그에 기록된다
+- schema 업데이트는 이제 안전한 진화 규칙을 따른다:
+  - 기존 field type은 in-place 변경할 수 없다
+  - row가 이미 있는 테이블에서는 기존 field를 제거할 수 없다
+  - row가 이미 있는 테이블에 새 required field를 추가하려면 default가 필요하다
 
 여전히 아닌 것:
 - `POST /api/sql` 같은 raw SQL은 열지 않는다

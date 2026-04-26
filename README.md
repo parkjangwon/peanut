@@ -96,6 +96,7 @@ Current capabilities:
 - `GET /api/data/tables`
 - `POST /api/data/tables`
 - `GET /api/data/tables/:table`
+- `PATCH /api/data/tables/:table`
 - `GET /api/data/tables/:table/rows`
 - `POST /api/data/tables/:table/rows`
 - `GET /api/data/tables/:table/events`
@@ -108,6 +109,10 @@ Current model:
 - rows are stored in Peanut-managed SQLite tables
 - `owner_private` policy isolates rows per authenticated user
 - row mutations are recorded in an internal event log
+- schema updates now follow safe evolution rules:
+  - existing field types cannot change in place
+  - non-empty tables cannot drop existing fields
+  - new required fields on non-empty tables must provide defaults
 
 What this still does not mean:
 - Peanut does not expose raw SQL like `POST /api/sql`

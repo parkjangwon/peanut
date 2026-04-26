@@ -306,6 +306,15 @@ pub async fn update_table(
         return json_error(StatusCode::BAD_REQUEST, message);
     }
 
+    let row_count = match count_table_rows(&state.pool, &existing.id).await {
+        Ok(row_count) => row_count,
+        Err(message) => return json_error(StatusCode::INTERNAL_SERVER_ERROR, message),
+    };
+
+    if let Err(message) = validate_schema_evolution(&existing.schema, &schema, row_count) {
+        return json_error(StatusCode::BAD_REQUEST, message);
+    }
+
     if let Err(message) = validate_rows_against_schema(&state.pool, &existing.id, &schema).await {
         return json_error(StatusCode::BAD_REQUEST, message);
     }
@@ -881,6 +890,44 @@ fn compare_rows(left: &DataRowResponse, right: &DataRowResponse, order_by: &str)
     }
 }
 
+fn validate_schema_evolution(
+    existing: &DataTableSchema,
+    updated: &DataTableSchema,
+    row_count: i64,
+) -> Result<(), String> {
+    for (field_name, existing_field) in &existing.fields {
+        let Some(updated_field) = updated.fields.get(field_name) else {
+            if row_count > 0 {
+                return Err(format!("cannot remove field '{}' after rows have been stored", field_name));
+            }
+            continue;
+        };
+
+        if existing_field.field_type != updated_field.field_type {
+            return Err(format!(
+                "cannot change field '{}' type from {} to {}",
+                field_name, existing_field.field_type, updated_field.field_type
+            ));
+        }
+    }
+
+    if row_count > 0 {
+        for (field_name, updated_field) in &updated.fields {
+            if existing.fields.contains_key(field_name) {
+                continue;
+            }
+            if updated_field.required && updated_field.default.is_none() {
+                return Err(format!(
+                    "new required field '{}' must define a default before it can be added to a table with existing rows",
+                    field_name
+                ));
+            }
+        }
+    }
+
+    Ok(())
+}
+
 fn compare_json_values(left: Option<&Value>, right: Option<&Value>) -> std::cmp::Ordering {
     use std::cmp::Ordering;
 
@@ -918,6 +965,14 @@ async fn validate_rows_against_schema(
     }
 
     Ok(())
+}
+
+async fn count_table_rows(pool: &sqlx::SqlitePool, table_id: &str) -> Result<i64, String> {
+    sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM data_rows WHERE table_id = ?")
+        .bind(table_id)
+        .fetch_one(pool)
+        .await
+        .map_err(|_| "failed to count existing rows for schema validation".to_string())
 }
 
 fn normalize_row_data(schema: &DataTableSchema, data: Value, allow_partial: bool) -> Result<Value, String> {
@@ -1360,6 +1415,179 @@ mod tests {
         )
         .await;
         assert_eq!(missing_response.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn test_schema_evolution_rejects_field_type_changes() {
+        let (state, _dir) = test_support::make_test_state().await;
+        let admin = register_user(state.clone(), "admin@example.com").await;
+
+        let create_response = create_table(
+            State(state.clone()),
+            Extension(claims(&admin.user.id, true)),
+            Json(todo_table_request()),
+        )
+        .await;
+        assert_eq!(create_response.status(), StatusCode::CREATED);
+
+        let update_response = update_table(
+            State(state),
+            Extension(claims(&admin.user.id, true)),
+            axum::extract::Path("todos".to_string()),
+            Json(UpdateTableRequest {
+                display_name: None,
+                schema: Some(DataTableSchema {
+                    fields: BTreeMap::from([
+                        (
+                            "done".to_string(),
+                            DataFieldSpec {
+                                field_type: "boolean".to_string(),
+                                required: false,
+                                max_length: None,
+                                default: Some(Value::Bool(false)),
+                            },
+                        ),
+                        (
+                            "title".to_string(),
+                            DataFieldSpec {
+                                field_type: "integer".to_string(),
+                                required: true,
+                                max_length: None,
+                                default: None,
+                            },
+                        ),
+                    ]),
+                }),
+                access_policy: None,
+            }),
+        )
+        .await;
+        assert_eq!(update_response.status(), StatusCode::BAD_REQUEST);
+        let error: crate::api::common::ApiError = test_support::response_json(update_response).await;
+        assert_eq!(error.error, "cannot change field 'title' type from string to integer");
+    }
+
+    #[tokio::test]
+    async fn test_schema_evolution_rejects_field_removal_after_rows_exist() {
+        let (state, _dir) = test_support::make_test_state().await;
+        let admin = register_user(state.clone(), "admin@example.com").await;
+
+        let create_response = create_table(
+            State(state.clone()),
+            Extension(claims(&admin.user.id, true)),
+            Json(todo_table_request()),
+        )
+        .await;
+        assert_eq!(create_response.status(), StatusCode::CREATED);
+
+        let create_row_response = create_row(
+            State(state.clone()),
+            Extension(claims(&admin.user.id, true)),
+            axum::extract::Path("todos".to_string()),
+            Json(CreateRowRequest {
+                data: json!({ "title": "buy milk" }),
+            }),
+        )
+        .await;
+        assert_eq!(create_row_response.status(), StatusCode::CREATED);
+
+        let update_response = update_table(
+            State(state),
+            Extension(claims(&admin.user.id, true)),
+            axum::extract::Path("todos".to_string()),
+            Json(UpdateTableRequest {
+                display_name: None,
+                schema: Some(DataTableSchema {
+                    fields: BTreeMap::from([(
+                        "title".to_string(),
+                        DataFieldSpec {
+                            field_type: "string".to_string(),
+                            required: true,
+                            max_length: Some(200),
+                            default: None,
+                        },
+                    )]),
+                }),
+                access_policy: None,
+            }),
+        )
+        .await;
+        assert_eq!(update_response.status(), StatusCode::BAD_REQUEST);
+        let error: crate::api::common::ApiError = test_support::response_json(update_response).await;
+        assert_eq!(error.error, "cannot remove field 'done' after rows have been stored");
+    }
+
+    #[tokio::test]
+    async fn test_schema_evolution_requires_defaults_for_new_required_fields_when_rows_exist() {
+        let (state, _dir) = test_support::make_test_state().await;
+        let admin = register_user(state.clone(), "admin@example.com").await;
+
+        let create_response = create_table(
+            State(state.clone()),
+            Extension(claims(&admin.user.id, true)),
+            Json(todo_table_request()),
+        )
+        .await;
+        assert_eq!(create_response.status(), StatusCode::CREATED);
+
+        let create_row_response = create_row(
+            State(state.clone()),
+            Extension(claims(&admin.user.id, true)),
+            axum::extract::Path("todos".to_string()),
+            Json(CreateRowRequest {
+                data: json!({ "title": "buy milk" }),
+            }),
+        )
+        .await;
+        assert_eq!(create_row_response.status(), StatusCode::CREATED);
+
+        let update_response = update_table(
+            State(state),
+            Extension(claims(&admin.user.id, true)),
+            axum::extract::Path("todos".to_string()),
+            Json(UpdateTableRequest {
+                display_name: None,
+                schema: Some(DataTableSchema {
+                    fields: BTreeMap::from([
+                        (
+                            "done".to_string(),
+                            DataFieldSpec {
+                                field_type: "boolean".to_string(),
+                                required: false,
+                                max_length: None,
+                                default: Some(Value::Bool(false)),
+                            },
+                        ),
+                        (
+                            "priority".to_string(),
+                            DataFieldSpec {
+                                field_type: "integer".to_string(),
+                                required: true,
+                                max_length: None,
+                                default: None,
+                            },
+                        ),
+                        (
+                            "title".to_string(),
+                            DataFieldSpec {
+                                field_type: "string".to_string(),
+                                required: true,
+                                max_length: Some(200),
+                                default: None,
+                            },
+                        ),
+                    ]),
+                }),
+                access_policy: None,
+            }),
+        )
+        .await;
+        assert_eq!(update_response.status(), StatusCode::BAD_REQUEST);
+        let error: crate::api::common::ApiError = test_support::response_json(update_response).await;
+        assert_eq!(
+            error.error,
+            "new required field 'priority' must define a default before it can be added to a table with existing rows"
+        );
     }
 
     #[tokio::test]
