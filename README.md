@@ -97,6 +97,8 @@ Current capabilities:
 - `POST /api/data/tables`
 - `GET /api/data/tables/:table`
 - `PATCH /api/data/tables/:table`
+- `GET /api/data/tables/:table/export`
+- `POST /api/data/tables/:table/import`
 - `GET /api/data/tables/:table/rows`
 - `POST /api/data/tables/:table/rows`
 - `GET /api/data/tables/:table/events`
@@ -109,6 +111,7 @@ Current model:
 - rows are stored in Peanut-managed SQLite tables
 - `owner_private` policy isolates rows per authenticated user
 - row mutations are recorded in an internal event log
+- table snapshots can be exported and re-imported through bounded admin APIs
 - schema updates now follow safe evolution rules:
   - existing field types cannot change in place
   - non-empty tables cannot drop existing fields
@@ -380,6 +383,17 @@ Example query:
 What to expect:
 - `title_contains` and generic `filter_field/filter_op/filter_value` can be combined with `order_by`, `order`, and `limit`
 - common console flow uses `contains`, `eq`, `ne`, `gt`, `gte`, `lt`, `lte`
+
+### `GET /api/data/tables/:table/export`
+Admin snapshot export:
+- returns table metadata plus normalized rows
+- useful for backups, migration between environments, or fixture generation
+
+### `POST /api/data/tables/:table/import`
+Admin snapshot import:
+- accepts `{ "mode": "append" | "replace", "rows": [...] }`
+- imported rows are normalized against the current schema before insert
+- owner-private tables require `owner_user_id` per imported row
 
 ## Repository layout
 

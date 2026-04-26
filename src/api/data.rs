@@ -77,6 +77,30 @@ pub struct DataRowResponse {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TableExportResponse {
+    pub table: DataTableDetail,
+    pub rows: Vec<DataRowResponse>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TableImportResponse {
+    pub imported_count: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ImportRowRequest {
+    pub id: Option<String>,
+    pub owner_user_id: Option<String>,
+    pub data: Value,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TableImportRequest {
+    pub mode: Option<String>,
+    pub rows: Vec<ImportRowRequest>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CreateTableRequest {
     pub name: String,
     pub display_name: String,
@@ -694,6 +718,117 @@ pub async fn delete_row(
     }
 }
 
+pub async fn export_table(
+    State(state): State<crate::AppState>,
+    Extension(claims): Extension<Claims>,
+    Path(table): Path<String>,
+) -> Response {
+    if !claims.is_admin {
+        return json_error(StatusCode::FORBIDDEN, "admin access required");
+    }
+
+    let table = match load_table(&state.pool, &table).await {
+        Ok(table) => table,
+        Err(LoadTableError::NotFound) => return json_error(StatusCode::NOT_FOUND, "data table not found"),
+        Err(LoadTableError::Invalid(message)) => return json_error(StatusCode::INTERNAL_SERVER_ERROR, message),
+        Err(LoadTableError::QueryFailed) => return json_error(StatusCode::INTERNAL_SERVER_ERROR, "failed to load data table"),
+    };
+
+    let records = match sqlx::query_as::<_, DataRowRecord>(
+        "SELECT id, owner_user_id, data_json, created_at, updated_at FROM data_rows WHERE table_id = ? ORDER BY created_at ASC, id ASC",
+    )
+    .bind(&table.id)
+    .fetch_all(&state.pool)
+    .await
+    {
+        Ok(records) => records,
+        Err(_) => return json_error(StatusCode::INTERNAL_SERVER_ERROR, "failed to export rows"),
+    };
+
+    let mut rows = Vec::with_capacity(records.len());
+    for record in records {
+        match DataRowResponse::try_from_record(record) {
+            Ok(row) => rows.push(row),
+            Err(message) => return json_error(StatusCode::INTERNAL_SERVER_ERROR, message),
+        }
+    }
+
+    (StatusCode::OK, Json(TableExportResponse { table: table.into(), rows })).into_response()
+}
+
+pub async fn import_rows(
+    State(state): State<crate::AppState>,
+    Extension(claims): Extension<Claims>,
+    Path(table): Path<String>,
+    Json(payload): Json<TableImportRequest>,
+) -> Response {
+    if !claims.is_admin {
+        return json_error(StatusCode::FORBIDDEN, "admin access required");
+    }
+
+    let table = match load_table(&state.pool, &table).await {
+        Ok(table) => table,
+        Err(LoadTableError::NotFound) => return json_error(StatusCode::NOT_FOUND, "data table not found"),
+        Err(LoadTableError::Invalid(message)) => return json_error(StatusCode::INTERNAL_SERVER_ERROR, message),
+        Err(LoadTableError::QueryFailed) => return json_error(StatusCode::INTERNAL_SERVER_ERROR, "failed to load data table"),
+    };
+
+    let mode = payload.mode.as_deref().unwrap_or("append");
+    if mode != "append" && mode != "replace" {
+        return json_error(StatusCode::BAD_REQUEST, "mode must be append or replace");
+    }
+
+    if mode == "replace" {
+        if sqlx::query("DELETE FROM data_rows WHERE table_id = ?")
+            .bind(&table.id)
+            .execute(&state.pool)
+            .await
+            .is_err()
+        {
+            return json_error(StatusCode::INTERNAL_SERVER_ERROR, "failed to clear existing rows before import");
+        }
+    }
+
+    let mut imported_count = 0usize;
+    for row in payload.rows {
+        let normalized = match normalize_row_data(&table.schema, row.data, false) {
+            Ok(data) => data,
+            Err(message) => return json_error(StatusCode::BAD_REQUEST, message),
+        };
+
+        let owner_user_id = match normalize_import_owner_user_id(&table.access_policy, row.owner_user_id) {
+            Ok(owner_user_id) => owner_user_id,
+            Err(message) => return json_error(StatusCode::BAD_REQUEST, message),
+        };
+
+        let row_id = row.id.unwrap_or_else(|| Uuid::new_v4().to_string());
+        let data_json = match serde_json::to_string(&normalized) {
+            Ok(value) => value,
+            Err(_) => return json_error(StatusCode::INTERNAL_SERVER_ERROR, "failed to encode imported row data"),
+        };
+
+        let insert_result = sqlx::query(
+            "INSERT INTO data_rows (id, table_id, owner_user_id, data_json) VALUES (?, ?, ?, ?)",
+        )
+        .bind(&row_id)
+        .bind(&table.id)
+        .bind(&owner_user_id)
+        .bind(&data_json)
+        .execute(&state.pool)
+        .await;
+
+        match insert_result {
+            Ok(_) => {
+                let _ = record_row_event(&state.pool, &table.id, &row_id, &claims.sub, "insert", Some(&normalized)).await;
+                imported_count += 1;
+            }
+            Err(_) => return json_error(StatusCode::CONFLICT, "import row id already exists"),
+        }
+    }
+
+    (StatusCode::CREATED, Json(TableImportResponse { imported_count })).into_response()
+}
+
 fn validate_table_name(name: &str) -> Result<(), String> {
     if name.is_empty() {
         return Err("name is required".to_string());
@@ -1051,6 +1186,21 @@ fn owner_user_id_for_new_row(claims: &Claims, policy: &AccessPolicy) -> Option<S
         POLICY_OWNER_PRIVATE => Some(claims.sub.clone()),
         POLICY_AUTHENTICATED_SHARED_RW => Some(claims.sub.clone()),
         _ => None,
+    }
+}
+
+fn normalize_import_owner_user_id(
+    policy: &AccessPolicy,
+    owner_user_id: Option<String>,
+) -> Result<Option<String>, String> {
+    match policy.mode.as_str() {
+        POLICY_OWNER_PRIVATE => owner_user_id
+            .filter(|value| !value.trim().is_empty())
+            .map(Some)
+            .ok_or_else(|| "owner_user_id is required when importing rows into owner_private tables".to_string()),
+        POLICY_AUTHENTICATED_SHARED_RW => Ok(owner_user_id.filter(|value| !value.trim().is_empty())),
+        POLICY_ADMIN_ONLY => Ok(None),
+        _ => Err("access_policy.mode is invalid".to_string()),
     }
 }
 
@@ -1822,5 +1972,102 @@ mod tests {
         )
         .await;
         assert_eq!(forbidden_response.status(), StatusCode::FORBIDDEN);
+    }
+
+    #[tokio::test]
+    async fn test_admin_can_export_table_snapshot() {
+        let (state, _dir) = test_support::make_test_state().await;
+        let admin = register_user(state.clone(), "admin@example.com").await;
+
+        let create_table_response = create_table(
+            State(state.clone()),
+            Extension(claims(&admin.user.id, true)),
+            Json(todo_table_request()),
+        )
+        .await;
+        assert_eq!(create_table_response.status(), StatusCode::CREATED);
+
+        let create_row_response = create_row(
+            State(state.clone()),
+            Extension(claims(&admin.user.id, true)),
+            axum::extract::Path("todos".to_string()),
+            Json(CreateRowRequest {
+                data: json!({ "title": "buy milk" }),
+            }),
+        )
+        .await;
+        assert_eq!(create_row_response.status(), StatusCode::CREATED);
+        let created_row: DataRowResponse = test_support::response_json(create_row_response).await;
+
+        let export_response = export_table(
+            State(state),
+            Extension(claims(&admin.user.id, true)),
+            axum::extract::Path("todos".to_string()),
+        )
+        .await;
+        assert_eq!(export_response.status(), StatusCode::OK);
+        let export_body: TableExportResponse = test_support::response_json(export_response).await;
+        assert_eq!(export_body.table.name, "todos");
+        assert_eq!(export_body.rows.len(), 1);
+        assert_eq!(export_body.rows[0].id, created_row.id);
+        assert_eq!(export_body.rows[0].data.get("title"), Some(&json!("buy milk")));
+    }
+
+    #[tokio::test]
+    async fn test_admin_can_import_rows_into_table() {
+        let (state, _dir) = test_support::make_test_state().await;
+        let admin = register_user(state.clone(), "admin@example.com").await;
+
+        let create_table_response = create_table(
+            State(state.clone()),
+            Extension(claims(&admin.user.id, true)),
+            Json(todo_table_request()),
+        )
+        .await;
+        assert_eq!(create_table_response.status(), StatusCode::CREATED);
+
+        let import_response = import_rows(
+            State(state.clone()),
+            Extension(claims(&admin.user.id, true)),
+            axum::extract::Path("todos".to_string()),
+            Json(TableImportRequest {
+                mode: Some("replace".to_string()),
+                rows: vec![ImportRowRequest {
+                    id: None,
+                    owner_user_id: Some(admin.user.id.clone()),
+                    data: json!({ "title": "buy milk" }),
+                }],
+            }),
+        )
+        .await;
+        assert_eq!(import_response.status(), StatusCode::CREATED);
+        let import_body: TableImportResponse = test_support::response_json(import_response).await;
+        assert_eq!(import_body.imported_count, 1);
+
+        let rows_response = list_rows(
+            State(state.clone()),
+            Extension(claims(&admin.user.id, true)),
+            axum::extract::Path("todos".to_string()),
+            axum::extract::Query(ListRowsParams::default()),
+        )
+        .await;
+        assert_eq!(rows_response.status(), StatusCode::OK);
+        let rows_body: DataRowsResponse = test_support::response_json(rows_response).await;
+        assert_eq!(rows_body.rows.len(), 1);
+        assert_eq!(rows_body.rows[0].owner_user_id.as_deref(), Some(admin.user.id.as_str()));
+        assert_eq!(rows_body.rows[0].data.get("done"), Some(&json!(false)));
+        assert_eq!(rows_body.rows[0].data.get("title"), Some(&json!("buy milk")));
+
+        let events_response = list_row_events(
+            State(state),
+            Extension(claims(&admin.user.id, true)),
+            axum::extract::Path("todos".to_string()),
+            axum::extract::Query(ListRowEventsParams::default()),
+        )
+        .await;
+        assert_eq!(events_response.status(), StatusCode::OK);
+        let events_body: DataRowEventsResponse = test_support::response_json(events_response).await;
+        assert_eq!(events_body.events.len(), 1);
+        assert_eq!(events_body.events[0].action, "insert");
     }
 }
