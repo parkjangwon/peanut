@@ -90,6 +90,12 @@ What this means for external frontend apps:
 - S3-like path-style endpoints are now also available under `/api/s3/:bucket/*key`
 - authenticated clients can now mint presigned S3-like URLs through `POST /api/s3/:bucket/*key/presign`
 - S3-like object routes now accept either bearer auth, SigV4-style `Authorization` header auth, or SigV4-style query auth from presigned URLs
+- S3-like multipart upload now supports a first-pass contract:
+  - `POST /api/s3/:bucket/*key?uploads` to initiate and receive an `UploadId`
+  - `PUT /api/s3/:bucket/*key?partNumber=N&uploadId=...` to upload parts
+  - `POST /api/s3/:bucket/*key?uploadId=...` with `CompleteMultipartUpload` XML to assemble the final object
+  - `DELETE /api/s3/:bucket/*key?uploadId=...` to abort a staged upload
+- multipart completion currently returns the final assembled object ETag rather than AWS's multipart-composite ETag format
 - S3-like object responses now include content-type, content-length, ETag, and last-modified metadata
 - S3-like success/error responses now also include `x-amz-request-id` headers, and object `Last-Modified` headers are emitted as HTTP-date strings
 - S3-like bucket listing supports `list-type=2`, `prefix`, `delimiter`, `max-keys`, and `continuation-token`

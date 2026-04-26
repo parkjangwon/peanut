@@ -7,6 +7,7 @@ use serde::{Deserialize, Serialize};
 
 const DEFAULT_BUCKET: &str = "default";
 const METADATA_ROOT_DIR: &str = ".peanut_meta";
+const MULTIPART_ROOT_DIR: &str = ".peanut_multipart";
 
 #[derive(Debug)]
 pub struct LocalStorage {
@@ -43,6 +44,28 @@ pub struct StorageListPage {
     pub common_prefixes: Vec<String>,
     pub is_truncated: bool,
     pub next_continuation_token: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct MultipartUpload {
+    pub upload_id: String,
+    pub bucket: String,
+    pub key: String,
+    pub content_type: String,
+    pub initiated_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct MultipartUploadPart {
+    pub part_number: u32,
+    pub etag: String,
+    pub size: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CompletedMultipartPart {
+    pub part_number: u32,
+    pub etag: String,
 }
 
 impl LocalStorage {
@@ -194,6 +217,125 @@ impl LocalStorage {
         })
     }
 
+    pub async fn create_multipart_upload(
+        &self,
+        bucket: &str,
+        key: &str,
+        content_type: Option<&str>,
+    ) -> io::Result<MultipartUpload> {
+        let upload_id = uuid::Uuid::new_v4().to_string();
+        let upload = MultipartUpload {
+            upload_id: upload_id.clone(),
+            bucket: normalize_namespace(bucket, "storage bucket cannot be empty")?
+                .to_string_lossy()
+                .replace('\\', "/"),
+            key: normalize_object_key(key)?.to_string_lossy().replace('\\', "/"),
+            content_type: content_type
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .unwrap_or("application/octet-stream")
+                .to_string(),
+            initiated_at: chrono::Utc::now().to_rfc3339(),
+        };
+        let manifest_path = self.resolve_multipart_manifest_path(bucket, &upload_id)?;
+        if let Some(parent) = manifest_path.parent() {
+            tokio::fs::create_dir_all(parent).await?;
+        }
+        let encoded = serde_json::to_vec(&upload)
+            .map_err(|err| io::Error::new(io::ErrorKind::Other, err.to_string()))?;
+        tokio::fs::write(manifest_path, encoded).await?;
+        Ok(upload)
+    }
+
+    pub async fn put_multipart_part(
+        &self,
+        bucket: &str,
+        key: &str,
+        upload_id: &str,
+        part_number: u32,
+        data: &[u8],
+    ) -> io::Result<MultipartUploadPart> {
+        if part_number == 0 {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "multipart part number must be greater than zero",
+            ));
+        }
+        let upload = self.read_multipart_upload(bucket, key, upload_id).await?;
+        let part_path = self.resolve_multipart_part_path(bucket, &upload.upload_id, part_number)?;
+        let metadata_path = self.resolve_multipart_part_metadata_path(bucket, &upload.upload_id, part_number)?;
+        if let Some(parent) = part_path.parent() {
+            tokio::fs::create_dir_all(parent).await?;
+        }
+        let metadata = MultipartUploadPart {
+            part_number,
+            etag: compute_etag(data),
+            size: data.len() as u64,
+        };
+        tokio::fs::write(&part_path, data).await?;
+        let encoded = serde_json::to_vec(&metadata)
+            .map_err(|err| io::Error::new(io::ErrorKind::Other, err.to_string()))?;
+        tokio::fs::write(metadata_path, encoded).await?;
+        Ok(metadata)
+    }
+
+    pub async fn complete_multipart_upload(
+        &self,
+        bucket: &str,
+        key: &str,
+        upload_id: &str,
+        parts: &[CompletedMultipartPart],
+    ) -> io::Result<StorageObjectMetadata> {
+        if parts.is_empty() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "multipart completion requires at least one part",
+            ));
+        }
+        let upload = self.read_multipart_upload(bucket, key, upload_id).await?;
+        let mut assembled = Vec::new();
+        let mut previous_part_number = 0;
+        for part in parts {
+            if part.part_number == 0 {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "multipart part number must be greater than zero",
+                ));
+            }
+            if part.part_number <= previous_part_number {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "multipart parts must be in ascending order",
+                ));
+            }
+            previous_part_number = part.part_number;
+            let stored_part = self.read_multipart_part(bucket, &upload.upload_id, part.part_number).await?;
+            if stored_part.0.etag != part.etag {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    format!("multipart part {} etag mismatch", part.part_number),
+                ));
+            }
+            assembled.extend_from_slice(&stored_part.1);
+        }
+        let metadata = self
+            .put_object(bucket, &upload.key, &assembled, Some(upload.content_type.as_str()))
+            .await?;
+        self.abort_multipart_upload(bucket, key, upload_id).await?;
+        Ok(metadata)
+    }
+
+    pub async fn abort_multipart_upload(
+        &self,
+        bucket: &str,
+        key: &str,
+        upload_id: &str,
+    ) -> io::Result<()> {
+        let upload = self.read_multipart_upload(bucket, key, upload_id).await?;
+        let upload_root = self.resolve_multipart_upload_root(bucket, &upload.upload_id)?;
+        tokio::fs::remove_dir_all(upload_root).await
+    }
+
     pub fn root(&self) -> &Path {
         &self.root
     }
@@ -236,6 +378,96 @@ impl LocalStorage {
         let raw = tokio::fs::read(metadata_path).await?;
         serde_json::from_slice(&raw)
             .map_err(|err| io::Error::new(io::ErrorKind::Other, err.to_string()))
+    }
+
+    fn multipart_bucket_root(&self, bucket: &str) -> io::Result<PathBuf> {
+        let normalized = normalize_namespace(bucket, "storage bucket cannot be empty")?;
+        Ok(self.root.join(MULTIPART_ROOT_DIR).join(normalized))
+    }
+
+    fn resolve_upload_id(upload_id: &str) -> io::Result<String> {
+        let trimmed = upload_id.trim();
+        if trimmed.is_empty() || trimmed.contains('/') || trimmed.contains("..") {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "invalid multipart upload id",
+            ));
+        }
+        Ok(trimmed.to_string())
+    }
+
+    fn resolve_multipart_upload_root(&self, bucket: &str, upload_id: &str) -> io::Result<PathBuf> {
+        Ok(self
+            .multipart_bucket_root(bucket)?
+            .join(Self::resolve_upload_id(upload_id)?))
+    }
+
+    fn resolve_multipart_manifest_path(&self, bucket: &str, upload_id: &str) -> io::Result<PathBuf> {
+        Ok(self
+            .resolve_multipart_upload_root(bucket, upload_id)?
+            .join("upload.json"))
+    }
+
+    fn resolve_multipart_part_path(
+        &self,
+        bucket: &str,
+        upload_id: &str,
+        part_number: u32,
+    ) -> io::Result<PathBuf> {
+        Ok(self
+            .resolve_multipart_upload_root(bucket, upload_id)?
+            .join("parts")
+            .join(format!("{part_number:05}.part")))
+    }
+
+    fn resolve_multipart_part_metadata_path(
+        &self,
+        bucket: &str,
+        upload_id: &str,
+        part_number: u32,
+    ) -> io::Result<PathBuf> {
+        Ok(self
+            .resolve_multipart_upload_root(bucket, upload_id)?
+            .join("parts")
+            .join(format!("{part_number:05}.json")))
+    }
+
+    async fn read_multipart_upload(
+        &self,
+        bucket: &str,
+        key: &str,
+        upload_id: &str,
+    ) -> io::Result<MultipartUpload> {
+        let manifest_path = self.resolve_multipart_manifest_path(bucket, upload_id)?;
+        let raw = tokio::fs::read(manifest_path).await?;
+        let upload: MultipartUpload = serde_json::from_slice(&raw)
+            .map_err(|err| io::Error::new(io::ErrorKind::Other, err.to_string()))?;
+        let normalized_bucket = normalize_namespace(bucket, "storage bucket cannot be empty")?
+            .to_string_lossy()
+            .replace('\\', "/");
+        let normalized_key = normalize_object_key(key)?.to_string_lossy().replace('\\', "/");
+        if upload.bucket != normalized_bucket || upload.key != normalized_key {
+            return Err(io::Error::new(
+                io::ErrorKind::NotFound,
+                "multipart upload not found for object",
+            ));
+        }
+        Ok(upload)
+    }
+
+    async fn read_multipart_part(
+        &self,
+        bucket: &str,
+        upload_id: &str,
+        part_number: u32,
+    ) -> io::Result<(MultipartUploadPart, Vec<u8>)> {
+        let metadata_path = self.resolve_multipart_part_metadata_path(bucket, upload_id, part_number)?;
+        let part_path = self.resolve_multipart_part_path(bucket, upload_id, part_number)?;
+        let raw = tokio::fs::read(metadata_path).await?;
+        let metadata = serde_json::from_slice(&raw)
+            .map_err(|err| io::Error::new(io::ErrorKind::Other, err.to_string()))?;
+        let data = tokio::fs::read(part_path).await?;
+        Ok((metadata, data))
     }
 }
 

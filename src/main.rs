@@ -86,6 +86,7 @@ async fn main() {
         .route("/s3/:bucket", get(api::storage::list_bucket_objects))
         .route("/s3/:bucket/*key", head(api::storage::head_bucket_object))
         .route("/s3/:bucket/*key", get(api::storage::get_bucket_object))
+        .route("/s3/:bucket/*key", post(api::storage::post_bucket_object))
         .route("/s3/:bucket/*key", put(api::storage::put_bucket_object))
         .route(
             "/s3/:bucket/*key",

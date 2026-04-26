@@ -216,7 +216,7 @@ async fn authenticate_presigned_request(
     host: Option<&str>,
 ) -> Result<crate::auth::jwt::Claims, Response> {
     let method = method.to_uppercase();
-    if !matches!(method.as_str(), "GET" | "PUT" | "HEAD" | "DELETE") {
+    if !matches!(method.as_str(), "GET" | "PUT" | "POST" | "HEAD" | "DELETE") {
         return Err(crate::api::common::json_error(
             StatusCode::UNAUTHORIZED,
             "unsupported s3 auth method",
@@ -325,7 +325,7 @@ async fn authenticate_header_signed_request(
     authorization: &str,
 ) -> Result<crate::auth::jwt::Claims, Response> {
     let method = method.to_uppercase();
-    if !matches!(method.as_str(), "GET" | "PUT" | "HEAD" | "DELETE") {
+    if !matches!(method.as_str(), "GET" | "PUT" | "POST" | "HEAD" | "DELETE") {
         return Err(crate::api::common::json_error(
             StatusCode::UNAUTHORIZED,
             "unsupported s3 auth method",
@@ -403,10 +403,10 @@ async fn load_active_user(
 
 fn normalize_method(method: &str) -> Result<String, String> {
     let method = method.trim().to_uppercase();
-    if matches!(method.as_str(), "GET" | "PUT" | "HEAD" | "DELETE") {
+    if matches!(method.as_str(), "GET" | "PUT" | "POST" | "HEAD" | "DELETE") {
         Ok(method)
     } else {
-        Err("method must be one of GET, PUT, HEAD, DELETE".to_string())
+        Err("method must be one of GET, PUT, POST, HEAD, DELETE".to_string())
     }
 }
 
