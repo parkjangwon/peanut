@@ -19,6 +19,8 @@ pub struct AppConfig {
     pub jwt_secret: String,
     pub max_upload_bytes: usize,
     pub password_reset_delivery: PasswordResetDelivery,
+    pub auth_allowed_origins: Vec<String>,
+    pub auth_allowed_client_ids: Vec<String>,
 }
 
 pub fn load_config_from_env() -> Result<AppConfig, String> {
@@ -87,6 +89,9 @@ fn load_config_from_map(values: &HashMap<String, String>) -> Result<AppConfig, S
         }
     };
 
+    let auth_allowed_origins = parse_origin_policy_list(values, "AUTH_ALLOWED_ORIGINS")?;
+    let auth_allowed_client_ids = parse_client_id_policy_list(values, "AUTH_ALLOWED_CLIENT_IDS")?;
+
     Ok(AppConfig {
         database_url,
         storage_dir,
@@ -94,7 +99,53 @@ fn load_config_from_map(values: &HashMap<String, String>) -> Result<AppConfig, S
         jwt_secret,
         max_upload_bytes,
         password_reset_delivery,
+        auth_allowed_origins,
+        auth_allowed_client_ids,
     })
+}
+
+fn parse_origin_policy_list(
+    values: &HashMap<String, String>,
+    key: &str,
+) -> Result<Vec<String>, String> {
+    let entries = parse_csv_policy_list(values, key);
+    for origin in &entries {
+        if !(origin.starts_with("http://") || origin.starts_with("https://")) {
+            return Err(format!("{key} entries must start with http:// or https://"));
+        }
+    }
+    Ok(entries)
+}
+
+fn parse_client_id_policy_list(
+    values: &HashMap<String, String>,
+    key: &str,
+) -> Result<Vec<String>, String> {
+    let entries = parse_csv_policy_list(values, key);
+    for client_id in &entries {
+        if !client_id
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || ch == '-' || ch == '_')
+        {
+            return Err(format!(
+                "{key} entries may only contain letters, digits, hyphens, and underscores"
+            ));
+        }
+    }
+    Ok(entries)
+}
+
+fn parse_csv_policy_list(values: &HashMap<String, String>, key: &str) -> Vec<String> {
+    values
+        .get(key)
+        .map(|value| {
+            value
+                .split(',')
+                .map(|item| item.trim().to_string())
+                .filter(|item| !item.is_empty())
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 #[cfg(test)]
@@ -121,6 +172,8 @@ mod tests {
         );
         assert_eq!(config.max_upload_bytes, DEFAULT_MAX_UPLOAD_BYTES);
         assert_eq!(config.password_reset_delivery, PasswordResetDelivery::Inline);
+        assert_eq!(config.auth_allowed_origins, Vec::<String>::new());
+        assert_eq!(config.auth_allowed_client_ids, Vec::<String>::new());
         assert_eq!(config.jwt_secret, "test-secret");
     }
 
@@ -175,5 +228,41 @@ mod tests {
 
         let error = load_config_from_map(&values).unwrap_err();
         assert!(error.contains("PASSWORD_RESET_DELIVERY"));
+    }
+
+    #[test]
+    fn test_load_config_from_env_parses_auth_origin_and_client_policy() {
+        let values = config(&[
+            ("JWT_SECRET", "test-secret"),
+            (
+                "AUTH_ALLOWED_ORIGINS",
+                "https://app.example.com, https://admin.example.com",
+            ),
+            ("AUTH_ALLOWED_CLIENT_IDS", "web-app, admin-console"),
+        ]);
+
+        let config = load_config_from_map(&values).unwrap();
+        assert_eq!(
+            config.auth_allowed_origins,
+            vec![
+                "https://app.example.com".to_string(),
+                "https://admin.example.com".to_string(),
+            ]
+        );
+        assert_eq!(
+            config.auth_allowed_client_ids,
+            vec!["web-app".to_string(), "admin-console".to_string()]
+        );
+    }
+
+    #[test]
+    fn test_load_config_from_env_rejects_invalid_auth_origin_policy() {
+        let values = config(&[
+            ("JWT_SECRET", "test-secret"),
+            ("AUTH_ALLOWED_ORIGINS", "app.example.com"),
+        ]);
+
+        let error = load_config_from_map(&values).unwrap_err();
+        assert!(error.contains("AUTH_ALLOWED_ORIGINS"));
     }
 }

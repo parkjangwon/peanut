@@ -28,6 +28,8 @@ pub struct AppState {
     pub storage: Arc<crate::storage::local::LocalStorage>,
     pub jwt_secret: Arc<String>,
     pub password_reset_delivery: crate::config::PasswordResetDelivery,
+    pub auth_allowed_origins: Arc<Vec<String>>,
+    pub auth_allowed_client_ids: Arc<Vec<String>>,
 }
 
 #[tokio::main]
@@ -51,6 +53,8 @@ async fn main() {
         storage,
         jwt_secret: Arc::new(config.jwt_secret.clone()),
         password_reset_delivery: config.password_reset_delivery.clone(),
+        auth_allowed_origins: Arc::new(config.auth_allowed_origins.clone()),
+        auth_allowed_client_ids: Arc::new(config.auth_allowed_client_ids.clone()),
     };
 
     let pool_clone = state.pool.clone();
@@ -116,7 +120,7 @@ async fn main() {
             delete(api::data::delete_row),
         );
 
-    let protected_routes = Router::new()
+    let auth_protected_routes = Router::new()
         .route("/me", get(api::auth::me))
         .route("/auth/change-password", post(api::auth::change_password))
         .route("/auth/sessions", get(api::auth::list_sessions))
@@ -129,6 +133,16 @@ async fn main() {
             "/auth/sessions/:session_id",
             delete(api::auth::revoke_session),
         )
+        .layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            crate::middleware::auth::auth_middleware,
+        ))
+        .layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            crate::middleware::auth_client_policy::auth_client_policy_middleware,
+        ));
+
+    let protected_routes = Router::new()
         .route("/admin/users", get(api::admin::list_users))
         .route(
             "/admin/users/:user_id/activate",
@@ -147,22 +161,27 @@ async fn main() {
             crate::middleware::auth::auth_middleware,
         ));
 
+    let auth_public_routes = Router::new()
+        .route("/register", post(api::auth::register))
+        .route("/login", post(api::auth::login))
+        .route("/auth/refresh", post(api::auth::refresh_session))
+        .route("/auth/logout", post(api::auth::logout))
+        .route("/auth/forgot-password", post(api::auth::forgot_password))
+        .route("/auth/reset-password", post(api::auth::reset_password))
+        .layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            crate::middleware::auth_client_policy::auth_client_policy_middleware,
+        ));
+
     let app = Router::new()
         .route("/api/health", get(api::health::health_check))
         .route("/api/ready", get(api::health::readiness_check))
-        .route("/api/register", post(api::auth::register))
-        .route("/api/login", post(api::auth::login))
-        .route("/api/auth/refresh", post(api::auth::refresh_session))
-        .route("/api/auth/logout", post(api::auth::logout))
-        .route(
-            "/api/auth/forgot-password",
-            post(api::auth::forgot_password),
-        )
-        .route("/api/auth/reset-password", post(api::auth::reset_password))
+        .nest("/api", auth_public_routes)
         .route(
             "/api/functions/endpoints/:endpoint_slug",
             post(api::functions::invoke_function),
         )
+        .nest("/api", auth_protected_routes)
         .nest("/api", protected_routes)
         .fallback(crate::console::static_handler)
         .layer(axum::middleware::from_fn(

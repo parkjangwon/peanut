@@ -70,6 +70,7 @@ Peanut은 아래 원칙을 지향한다.
 - access token은 짧게 유지하고 refresh token으로 장기 세션을 이어갈 수 있다
 - refresh session은 서버에서 추적되며 logout, password change, password reset, admin deactivate 시 revoke된다
 - 앱은 `GET /api/auth/events` 로 최근 auth event를 조회해 login/session/reset 흐름을 디버깅할 수 있다
+- 운영자는 app-facing auth route를 특정 browser origin/client id로 제한할 수 있다
 - 앱은 auth session 목록 조회, 단일 세션 revoke, 전체 세션 revoke까지 Peanut API로 처리할 수 있다
 - 자세한 연동 가이드는 `docs/auth-client.ko.md`, 브라우저 예제는 `examples/auth-client-web/` 참고
 
@@ -404,6 +405,9 @@ Peanut은 현재 API-first 모드로 동작한다.
 - `STORAGE_DIR` (기본값: `data/storage`; 비어 있으면 안 됨)
 - `BIND_ADDR` (기본값: `127.0.0.1:3000`; 유효한 socket address 여야 함)
 - `MAX_UPLOAD_BYTES` (기본값: `5242880`; 0보다 큰 정수여야 함)
+- `PASSWORD_RESET_DELIVERY` (기본값: `inline`; `inline` 또는 `log`)
+- `AUTH_ALLOWED_ORIGINS` (쉼표 구분 origin 목록; 설정하면 auth route에서 일치하는 `Origin` 헤더가 필요함)
+- `AUTH_ALLOWED_CLIENT_IDS` (쉼표 구분 client id 목록; 설정하면 auth route에서 일치하는 `x-peanut-client-id` 헤더가 필요함)
 - `RUST_LOG` (기본값: `info`)
 - `WEB_PUSH_VAPID_PRIVATE_KEY` (Web Push 전송 시에만 필요)
 - `WEB_PUSH_VAPID_SUBJECT` (Web Push 전송 시에만 필요; `mailto:` 또는 `https://`)

@@ -70,6 +70,7 @@ What this means for external frontend apps:
 - access tokens stay short-lived while refresh tokens provide longer-lived sessions
 - refresh sessions are server-tracked and revoked on logout, password change, password reset, or admin deactivation
 - apps can inspect recent auth events through `GET /api/auth/events` to debug login/session/reset activity
+- operators can optionally lock app-facing auth routes to specific browser origins and client ids
 - see `docs/auth-client.md` for the integration guide and `examples/auth-client-web/` for a minimal browser example
 
 ### External auth client guide
@@ -410,6 +411,9 @@ Optional:
 - `STORAGE_DIR` (default: `data/storage`; must not be empty)
 - `BIND_ADDR` (default: `127.0.0.1:3000`; must be a valid socket address)
 - `MAX_UPLOAD_BYTES` (default: `5242880`; must be a positive integer)
+- `PASSWORD_RESET_DELIVERY` (default: `inline`; `inline` or `log`)
+- `AUTH_ALLOWED_ORIGINS` (comma-separated origins; when set, auth routes require a matching `Origin` header)
+- `AUTH_ALLOWED_CLIENT_IDS` (comma-separated client ids; when set, auth routes require a matching `x-peanut-client-id` header)
 - `RUST_LOG` (default: `info`)
 - `WEB_PUSH_VAPID_PRIVATE_KEY` (required only for Web Push delivery)
 - `WEB_PUSH_VAPID_SUBJECT` (required only for Web Push delivery; `mailto:` or `https://`)

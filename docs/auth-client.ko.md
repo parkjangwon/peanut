@@ -35,8 +35,14 @@ Peanut이 현재 제공하는 엔드포인트:
 - `POST /api/auth/refresh` 호출 시 refresh token은 회전한다
 - logout, password change, password reset, admin deactivate 시 refresh session이 revoke된다
 - register/login/refresh/reset/session revoke/admin activation-deactivation 흐름은 auth event로 기록된다
+- 선택적으로 `Origin` 과 `x-peanut-client-id` 기준 auth client/origin policy를 걸 수 있다
 
 ## 2. 권장 프론트 연동 형태
+
+auth client/origin policy를 켠 경우:
+- 브라우저 또는 리버스 프록시에서 `AUTH_ALLOWED_ORIGINS` 중 하나와 정확히 일치하는 `Origin` 헤더를 보내야 한다
+- `AUTH_ALLOWED_CLIENT_IDS` 를 설정했다면 앱 쪽 auth 요청에 `x-peanut-client-id` 헤더를 보내야 한다
+- Peanut은 `/api/register`, `/api/login`, `/api/me`, `/api/auth/*` 에 이 정책을 적용한다
 
 ### 간단한 프로토타입 기본값
 - access token은 메모리에 저장

@@ -522,6 +522,8 @@ async fn run_function_invocation(
             storage: state.storage.clone(),
             jwt_secret: state.jwt_secret.clone(),
             password_reset_delivery: state.password_reset_delivery.clone(),
+            auth_allowed_origins: state.auth_allowed_origins.clone(),
+            auth_allowed_client_ids: state.auth_allowed_client_ids.clone(),
         },
         claims.clone(),
     )

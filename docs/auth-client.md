@@ -35,8 +35,14 @@ Current behavior:
 - refresh tokens rotate on `POST /api/auth/refresh`
 - refresh sessions are revoked on logout, password change, password reset, and admin deactivation
 - auth events are recorded for register, login, refresh, reset, session revoke, and admin activation/deactivation flows
+- optional auth client/origin policy can restrict app-facing auth routes by `Origin` and `x-peanut-client-id`
 
 ## 2. Recommended frontend integration shape
+
+If you enable auth client/origin policy:
+- send an `Origin` header from the browser or reverse proxy that exactly matches one of `AUTH_ALLOWED_ORIGINS`
+- send `x-peanut-client-id` on app-facing auth requests when `AUTH_ALLOWED_CLIENT_IDS` is configured
+- Peanut enforces this on `/api/register`, `/api/login`, `/api/me`, and `/api/auth/*`
 
 ### Good default for a simple prototype
 - keep the access token in memory
