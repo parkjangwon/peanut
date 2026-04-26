@@ -155,6 +155,23 @@ pub fn build_signed_header_auth(
     jwt_secret: &str,
     payload_hash: Option<&str>,
 ) -> Result<SignedHeaderAuth, String> {
+    build_signed_header_auth_with_secret(
+        method,
+        url,
+        access_key,
+        &format!("{}:{}", jwt_secret, access_key),
+        payload_hash,
+    )
+}
+
+#[cfg_attr(not(test), allow(dead_code))]
+pub fn build_signed_header_auth_with_secret(
+    method: &str,
+    url: &str,
+    access_key: &str,
+    secret_access_key: &str,
+    payload_hash: Option<&str>,
+) -> Result<SignedHeaderAuth, String> {
     let method = normalize_method(method)?;
     let payload_hash = payload_hash.unwrap_or("UNSIGNED-PAYLOAD").to_string();
     let (host, canonical_uri, canonical_query) = parse_absolute_request_target(url)?;
@@ -176,7 +193,7 @@ pub fn build_signed_header_auth(
         &signed_headers,
         &payload_hash,
     );
-    let signing_key = signing_key(jwt_secret, access_key, &short_date);
+    let signing_key = signing_key_from_secret(secret_access_key, &short_date);
     let signature = hex_encode(&hmac_sha256(
         &signing_key,
         string_to_sign(&amz_date, &credential_scope, &canonical_request).as_bytes(),
@@ -446,7 +463,10 @@ fn parse_credential(credential: &str) -> Result<(String, String), String> {
 }
 
 fn signing_key(jwt_secret: &str, access_key: &str, short_date: &str) -> Vec<u8> {
-    let secret_access_key = format!("{}:{}", jwt_secret, access_key);
+    signing_key_from_secret(&format!("{}:{}", jwt_secret, access_key), short_date)
+}
+
+fn signing_key_from_secret(secret_access_key: &str, short_date: &str) -> Vec<u8> {
     let k_date = hmac_sha256(format!("AWS4{secret_access_key}").as_bytes(), short_date.as_bytes());
     let k_region = hmac_sha256(&k_date, REGION.as_bytes());
     let k_service = hmac_sha256(&k_region, SERVICE.as_bytes());

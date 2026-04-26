@@ -876,6 +876,129 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_presigned_put_round_trip_uses_sigv4_query_auth() {
+        let (state, _dir) = test_support::make_test_state().await;
+        let user = register_user(state.clone(), "presign-put@example.com").await;
+
+        let request = crate::middleware::s3_auth::PresignRequest {
+            method: "PUT".to_string(),
+            expires_in: Some(300),
+        };
+        let generated = build_presigned_url(
+            "https://example.com",
+            &user.user.id,
+            "assets",
+            "notes/presigned-put.txt",
+            &request,
+            state.jwt_secret.as_str(),
+        )
+        .unwrap();
+
+        let put_app = axum::Router::new()
+            .route("/api/s3/:bucket/*key", axum::routing::put(put_bucket_object))
+            .layer(axum::middleware::from_fn_with_state(
+                state.clone(),
+                crate::middleware::s3_auth::s3_auth_middleware,
+            ))
+            .with_state(state.clone());
+        let put_uri = generated.url.replace("https://example.com", "");
+        let put_response = tower::ServiceExt::oneshot(
+            put_app,
+            axum::http::Request::builder()
+                .method("PUT")
+                .uri(put_uri)
+                .header("host", "example.com")
+                .body(axum::body::Body::from("hello presigned put"))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(put_response.status(), StatusCode::OK);
+
+        let get_app = axum::Router::new()
+            .route("/api/s3/:bucket/*key", axum::routing::get(get_bucket_object))
+            .layer(axum::middleware::from_fn_with_state(
+                state.clone(),
+                crate::middleware::s3_auth::s3_auth_middleware,
+            ))
+            .with_state(state);
+        let signed_get = crate::middleware::s3_auth::build_signed_header_auth(
+            "GET",
+            "https://example.com/api/s3/assets/notes/presigned-put.txt",
+            &user.user.id,
+            "test_secret",
+            None,
+        )
+        .unwrap();
+        let get_response = tower::ServiceExt::oneshot(
+            get_app,
+            axum::http::Request::builder()
+                .uri("/api/s3/assets/notes/presigned-put.txt")
+                .header("host", "example.com")
+                .header("authorization", signed_get.authorization)
+                .header("x-amz-date", signed_get.amz_date)
+                .header("x-amz-content-sha256", signed_get.payload_hash)
+                .body(axum::body::Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(get_response.status(), StatusCode::OK);
+        let body = response_text(get_response).await;
+        assert_eq!(body, "hello presigned put");
+    }
+
+    #[tokio::test]
+    async fn test_sdk_presigned_get_smoke_interop() {
+        let (state, _dir) = test_support::make_test_state().await;
+        let user = register_user(state.clone(), "sdk-smoke@example.com").await;
+        let claims = claims_for(&user.user.id);
+
+        let put_response = put_bucket_object(
+            State(state.clone()),
+            Extension(claims),
+            axum::extract::Path(("assets".to_string(), "notes/sdk.txt".to_string())),
+            HeaderMap::new(),
+            Bytes::from_static(b"hello sdk"),
+        )
+        .await;
+        assert_eq!(put_response.status(), StatusCode::OK);
+
+        let signed = crate::middleware::s3_auth::build_signed_header_auth_with_secret(
+            "GET",
+            "https://example.com/api/s3/assets/notes/sdk.txt",
+            &user.user.id,
+            &format!("{}:{}", state.jwt_secret.as_str(), user.user.id),
+            None,
+        )
+        .unwrap();
+
+        let app = axum::Router::new()
+            .route("/api/s3/:bucket/*key", axum::routing::get(get_bucket_object))
+            .layer(axum::middleware::from_fn_with_state(
+                state.clone(),
+                crate::middleware::s3_auth::s3_auth_middleware,
+            ))
+            .with_state(state);
+        let response = tower::ServiceExt::oneshot(
+            app,
+            axum::http::Request::builder()
+                .uri("/api/s3/assets/notes/sdk.txt")
+                .header("host", "example.com")
+                .header("authorization", signed.authorization)
+                .header("x-amz-date", signed.amz_date)
+                .header("x-amz-content-sha256", signed.payload_hash)
+                .body(axum::body::Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = response_text(response).await;
+        assert_eq!(body, "hello sdk");
+    }
+
+    #[tokio::test]
     async fn test_header_sigv4_get_round_trip_uses_authorization_header() {
         let (state, _dir) = test_support::make_test_state().await;
         let user = register_user(state.clone(), "header-auth@example.com").await;
@@ -922,6 +1045,105 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn test_header_sigv4_put_head_and_delete_round_trip() {
+        let (state, _dir) = test_support::make_test_state().await;
+        let user = register_user(state.clone(), "header-multi@example.com").await;
+
+        let signed_put = crate::middleware::s3_auth::build_signed_header_auth(
+            "PUT",
+            "https://example.com/api/s3/assets/notes/multi.txt",
+            &user.user.id,
+            state.jwt_secret.as_str(),
+            None,
+        )
+        .unwrap();
+        let put_app = axum::Router::new()
+            .route("/api/s3/:bucket/*key", axum::routing::put(put_bucket_object))
+            .layer(axum::middleware::from_fn_with_state(
+                state.clone(),
+                crate::middleware::s3_auth::s3_auth_middleware,
+            ))
+            .with_state(state.clone());
+        let put_response = tower::ServiceExt::oneshot(
+            put_app,
+            axum::http::Request::builder()
+                .method("PUT")
+                .uri("/api/s3/assets/notes/multi.txt")
+                .header("host", "example.com")
+                .header("authorization", signed_put.authorization)
+                .header("x-amz-date", signed_put.amz_date)
+                .header("x-amz-content-sha256", signed_put.payload_hash)
+                .body(axum::body::Body::from("hello multi"))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(put_response.status(), StatusCode::OK);
+
+        let signed_head = crate::middleware::s3_auth::build_signed_header_auth(
+            "HEAD",
+            "https://example.com/api/s3/assets/notes/multi.txt",
+            &user.user.id,
+            state.jwt_secret.as_str(),
+            None,
+        )
+        .unwrap();
+        let head_app = axum::Router::new()
+            .route("/api/s3/:bucket/*key", axum::routing::head(head_bucket_object))
+            .layer(axum::middleware::from_fn_with_state(
+                state.clone(),
+                crate::middleware::s3_auth::s3_auth_middleware,
+            ))
+            .with_state(state.clone());
+        let head_response = tower::ServiceExt::oneshot(
+            head_app,
+            axum::http::Request::builder()
+                .method("HEAD")
+                .uri("/api/s3/assets/notes/multi.txt")
+                .header("host", "example.com")
+                .header("authorization", signed_head.authorization)
+                .header("x-amz-date", signed_head.amz_date)
+                .header("x-amz-content-sha256", signed_head.payload_hash)
+                .body(axum::body::Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(head_response.status(), StatusCode::OK);
+
+        let signed_delete = crate::middleware::s3_auth::build_signed_header_auth(
+            "DELETE",
+            "https://example.com/api/s3/assets/notes/multi.txt",
+            &user.user.id,
+            state.jwt_secret.as_str(),
+            None,
+        )
+        .unwrap();
+        let delete_app = axum::Router::new()
+            .route("/api/s3/:bucket/*key", axum::routing::delete(delete_bucket_object))
+            .layer(axum::middleware::from_fn_with_state(
+                state.clone(),
+                crate::middleware::s3_auth::s3_auth_middleware,
+            ))
+            .with_state(state);
+        let delete_response = tower::ServiceExt::oneshot(
+            delete_app,
+            axum::http::Request::builder()
+                .method("DELETE")
+                .uri("/api/s3/assets/notes/multi.txt")
+                .header("host", "example.com")
+                .header("authorization", signed_delete.authorization)
+                .header("x-amz-date", signed_delete.amz_date)
+                .header("x-amz-content-sha256", signed_delete.payload_hash)
+                .body(axum::body::Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(delete_response.status(), StatusCode::NO_CONTENT);
     }
 
     #[tokio::test]
