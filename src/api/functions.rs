@@ -1,15 +1,19 @@
 use openssl::sha::sha256;
-use std::{collections::BTreeMap, env};
+use std::{collections::BTreeMap, convert::Infallible, env};
 
 use axum::{
     extract::{Path, State},
     http::{HeaderMap, StatusCode},
-    response::{IntoResponse, Response},
+    response::{
+        sse::{Event, KeepAlive, Sse},
+        IntoResponse, Response,
+    },
     Extension, Json,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sqlx::FromRow;
+use tokio_stream::{wrappers::BroadcastStream, StreamExt};
 use uuid::Uuid;
 
 use crate::api::common::{json_error, json_message};
@@ -120,6 +124,17 @@ pub struct FunctionVersionSummary {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FunctionVersionsResponse {
     pub versions: Vec<FunctionVersionSummary>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FunctionRealtimeEvent {
+    pub event: String,
+    pub function_name: String,
+    pub invocation_id: String,
+    pub status: String,
+    pub invoke_mode: String,
+    pub retry_count: i64,
+    pub parent_invocation_id: Option<String>,
 }
 
 #[allow(dead_code)]
@@ -723,6 +738,36 @@ pub async fn list_function_invocation_attempts(
     }
 }
 
+pub async fn stream_function_events(
+    State(state): State<crate::AppState>,
+    Extension(claims): Extension<Claims>,
+    Path(name): Path<String>,
+) -> Response {
+    if let Some(response) = require_admin(&claims) {
+        return response;
+    }
+
+    if let Err(LoadFunctionError::NotFound) = load_function_by_name(&state.pool, &name).await {
+        return json_error(StatusCode::NOT_FOUND, "function not found");
+    }
+
+    let stream = BroadcastStream::new(state.function_event_sender.subscribe()).filter_map(
+        move |message| match message {
+            Ok(event) if event.function_name == name => Some(Ok::<Event, Infallible>(
+                Event::default()
+                    .event("function.invocation")
+                    .json_data(event)
+                    .unwrap_or_else(|_| Event::default().data("{}")),
+            )),
+            _ => None,
+        },
+    );
+
+    Sse::new(stream)
+        .keep_alive(KeepAlive::new().interval(std::time::Duration::from_secs(15)))
+        .into_response()
+}
+
 pub async fn retry_function_invocation(
     State(state): State<crate::AppState>,
     Extension(claims): Extension<Claims>,
@@ -848,6 +893,23 @@ pub async fn invoke_function(
     .await
 }
 
+fn emit_function_event(
+    state: &crate::AppState,
+    function_name: &str,
+    invocation: &InvocationContext,
+    status: &str,
+) {
+    let _ = state.function_event_sender.send(FunctionRealtimeEvent {
+        event: "invocation.status_changed".to_string(),
+        function_name: function_name.to_string(),
+        invocation_id: invocation.invocation_id.clone(),
+        status: status.to_string(),
+        invoke_mode: invocation.invoke_mode.to_string(),
+        retry_count: invocation.retry_count,
+        parent_invocation_id: invocation.parent_invocation_id.clone(),
+    });
+}
+
 async fn run_function_invocation_with_version(
     state: &crate::AppState,
     function: &FunctionDetail,
@@ -897,6 +959,8 @@ async fn run_function_invocation_with_version(
         return json_error(StatusCode::INTERNAL_SERVER_ERROR, "failed to create invocation log");
     }
 
+    emit_function_event(state, &function.name, &invocation, invocation.initial_status);
+
     if async_invoke {
         let state = state.clone();
         let function_name = function.name.clone();
@@ -908,6 +972,7 @@ async fn run_function_invocation_with_version(
                 .bind(&invocation_for_task.invocation_id)
                 .execute(&state.pool)
                 .await;
+            emit_function_event(&state, &function_name, &invocation_for_task, "running");
             let _ = execute_and_finalize_invocation(
                 &state,
                 &function_name,
@@ -1006,6 +1071,7 @@ async fn execute_and_finalize_invocation(
                 .bind(&invocation.invocation_id)
                 .execute(&state.pool)
                 .await;
+            emit_function_event(state, function_name, &invocation, "succeeded");
             Ok((redacted_response, result.duration_ms))
         }
         Err(error) => {
@@ -1017,6 +1083,7 @@ async fn execute_and_finalize_invocation(
                 invocation.function_version.timeout_ms,
             )
             .await;
+            emit_function_event(state, function_name, &invocation, "failed");
             Err(redacted_error)
         }
     }
@@ -2363,6 +2430,66 @@ export default async function handler(ctx) {
         assert_eq!(final_detail.status, "succeeded");
         assert_eq!(final_detail.invoke_mode, "async");
         assert!(final_detail.response_json.unwrap().contains("\"done\":true"));
+    }
+
+    #[tokio::test]
+    async fn test_function_realtime_events_follow_async_invocation_lifecycle() {
+        let (state, _dir) = test_support::make_test_state().await;
+        let admin = register_admin(state.clone()).await;
+        let mut events = state.function_event_sender.subscribe();
+
+        let create_response = create_function(
+            State(state.clone()),
+            Extension(claims(&admin.user.id, true)),
+            Json(UpsertFunctionRequest {
+                name: "stream_fn".to_string(),
+                display_name: "Stream function".to_string(),
+                endpoint_slug: "stream-fn".to_string(),
+                runtime: "javascript".to_string(),
+                source_code: "export default async function handler() { await new Promise((resolve) => setTimeout(resolve, 50)); return { ok: true } }".to_string(),
+                timeout_ms: Some(1500),
+                enabled: Some(true),
+                invoke_policy: Some("authenticated".to_string()),
+                env: None,
+                secrets: None,
+                api_key: None,
+                allowed_origins: None,
+                rate_limit_per_minute: Some(60),
+            }),
+        )
+        .await;
+        assert_eq!(create_response.status(), StatusCode::CREATED);
+
+        let invoke_response = invoke_function(
+            State(state.clone()),
+            Some(Extension(claims(&admin.user.id, true))),
+            HeaderMap::new(),
+            Path("stream-fn".to_string()),
+            Json(InvokeFunctionRequest {
+                input: serde_json::json!({}),
+                api_key: None,
+                async_invoke: Some(true),
+            }),
+        )
+        .await;
+        assert_eq!(invoke_response.status(), StatusCode::ACCEPTED);
+        let invoke_body: InvokeFunctionResponse = test_support::response_json(invoke_response).await;
+
+        let mut statuses = Vec::new();
+        for _ in 0..6 {
+            let event = tokio::time::timeout(std::time::Duration::from_secs(1), events.recv())
+                .await
+                .expect("timed out waiting for realtime event")
+                .expect("failed to receive realtime event");
+            if event.function_name == "stream_fn" && event.invocation_id == invoke_body.invocation_id {
+                statuses.push(event.status);
+                if statuses.last().map(|s| s.as_str()) == Some("succeeded") {
+                    break;
+                }
+            }
+        }
+
+        assert_eq!(statuses, vec!["queued", "running", "succeeded"]);
     }
 
     #[tokio::test]

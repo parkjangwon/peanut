@@ -25,6 +25,7 @@ web-push = "0.10"
 reqwest = { version = "0.11", features = ["json"] }
 openssl = { version = "0.10", features = ["vendored"] }
 base64 = "0.21"
+tokio-stream = { version = "0.1", features = ["sync"] }
 
 [build-dependencies]
 rust-i18n = "3.0"

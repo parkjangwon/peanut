@@ -30,6 +30,7 @@ pub struct AppState {
     pub password_reset_delivery: crate::config::PasswordResetDelivery,
     pub auth_allowed_origins: Arc<Vec<String>>,
     pub auth_allowed_client_ids: Arc<Vec<String>>,
+    pub function_event_sender: tokio::sync::broadcast::Sender<crate::api::functions::FunctionRealtimeEvent>,
 }
 
 #[tokio::main]
@@ -55,6 +56,7 @@ async fn main() {
         password_reset_delivery: config.password_reset_delivery.clone(),
         auth_allowed_origins: Arc::new(config.auth_allowed_origins.clone()),
         auth_allowed_client_ids: Arc::new(config.auth_allowed_client_ids.clone()),
+        function_event_sender: tokio::sync::broadcast::channel(256).0,
     };
 
     let pool_clone = state.pool.clone();
@@ -108,6 +110,10 @@ async fn main() {
         .route(
             "/functions/:name/invocations/:invocation_id/attempts",
             get(api::functions::list_function_invocation_attempts),
+        )
+        .route(
+            "/functions/:name/events",
+            get(api::functions::stream_function_events),
         )
         .route(
             "/functions/:name/invocations/:invocation_id/retry",

@@ -16,6 +16,7 @@ pub async fn make_test_state() -> (crate::AppState, tempfile::TempDir) {
         password_reset_delivery: crate::config::PasswordResetDelivery::Inline,
         auth_allowed_origins: Arc::new(Vec::new()),
         auth_allowed_client_ids: Arc::new(Vec::new()),
+        function_event_sender: tokio::sync::broadcast::channel(256).0,
     };
     (state, dir)
 }
