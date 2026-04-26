@@ -1,12 +1,12 @@
 # Peanut
 
-Peanut is a small self-host backend runtime that ships as a single Rust binary with an embedded web console.
+Peanut is a small self-host backend runtime that ships as a single Rust binary.
 
 It is intentionally narrow:
 - SQLite for persistence
 - local filesystem object storage
 - JWT-based auth with admin approval flow
-- an embedded static Next.js console
+- API-first backend surface for external apps and operator tooling
 - a simple ntfy-based push queue MVP
 
 The goal is not to become a giant backend platform. The goal is to give a solo developer or small team a backend core that is easy to understand, easy to deploy, and easy to operate.
@@ -162,16 +162,12 @@ Current constraints:
 - no direct outbound network access; functions extend Peanut through bounded host bindings instead
 - this is a narrow sandboxed extension layer, not a full Lambda clone
 
-### Console
-The embedded console supports:
-- health monitoring
-- register/login/session inspection
-- admin approval workflow
-- user-scoped storage management
-- ntfy push subscription management
-- push queue inspection
+### Console / operator surface
+Peanut is currently running in API-first mode.
 
-The console is statically exported from Next.js and embedded into the Rust binary during build.
+- the old embedded Next.js console source was removed
+- the backend now serves a small landing page at `/` and keeps the product usable through `/api/...`
+- a new operations console is planned as part of v2 and will be rebuilt separately from the backend core
 
 ## API contract summary
 

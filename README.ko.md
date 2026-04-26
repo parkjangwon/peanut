@@ -1,12 +1,12 @@
 # Peanut
 
-Peanut은 Rust 단일 바이너리 안에 API 서버와 운영 콘솔을 함께 담아 배포하는 작은 self-host 백엔드 런타임이다.
+Peanut은 Rust 단일 바이너리로 배포되는 작은 self-host 백엔드 런타임이다.
 
 핵심 방향은 명확하다.
 - SQLite 기반 영속성
 - 로컬 파일시스템 스토리지
 - JWT 인증 + admin 승인 흐름
-- 내장된 Next.js 콘솔
+- 외부 앱/운영 도구를 위한 API-first 백엔드 표면
 - ntfy 기반 push queue MVP
 
 Peanut은 거대한 범용 플랫폼이 아니라, 작고 이해 가능하며 운영 복잡도가 낮은 백엔드 코어를 목표로 한다.
@@ -163,16 +163,12 @@ Peanut은 이제 작은 백엔드 확장용 함수 런타임을 함께 제공한
 - 외부 네트워크를 직접 여는 대신, Peanut 내부 primitive를 bounded host binding으로만 확장한다
 - 완전한 Lambda clone이 아니라, 좁게 제한된 확장 레이어다
 
-### Console
-내장 콘솔에서 가능한 것:
-- health 확인
-- register / login / session 확인
-- admin 승인 처리
-- user-scoped storage 관리
-- ntfy topic 구독 관리
-- push queue 확인
+### 콘솔 / 운영 표면
+Peanut은 현재 API-first 모드로 동작한다.
 
-콘솔은 Next.js 정적 export 결과물을 Rust 바이너리에 임베드해 함께 배포한다.
+- 기존 내장 Next.js 콘솔 소스는 제거되었다
+- 백엔드는 `/` 에서 간단한 landing page를 제공하고, 실제 기능은 `/api/...` 로 계속 사용할 수 있다
+- 새 운영 콘솔은 v2의 일부로 backend core와 분리해서 다시 설계할 예정이다
 
 ## API 요약
 
