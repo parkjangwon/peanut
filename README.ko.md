@@ -99,6 +99,7 @@ Peanut은 이제 Peanut이 관리하는 logical table용 제한된 SQLite 기반
 - `GET /api/data/tables/:table`
 - `GET /api/data/tables/:table/rows`
 - `POST /api/data/tables/:table/rows`
+- `GET /api/data/tables/:table/events`
 - `GET /api/data/tables/:table/rows/:row_id`
 - `PATCH /api/data/tables/:table/rows/:row_id`
 - `DELETE /api/data/tables/:table/rows/:row_id`

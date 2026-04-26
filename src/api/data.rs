@@ -53,6 +53,21 @@ pub struct DataRowsResponse {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DataRowEventsResponse {
+    pub events: Vec<DataRowEventResponse>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DataRowEventResponse {
+    pub id: i64,
+    pub row_id: String,
+    pub actor_user_id: String,
+    pub action: String,
+    pub diff: Option<Value>,
+    pub created_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DataRowResponse {
     pub id: String,
     pub owner_user_id: Option<String>,
@@ -115,6 +130,13 @@ pub struct ListRowsParams {
     pub filter_value: Option<String>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct ListRowEventsParams {
+    pub limit: Option<usize>,
+    pub row_id: Option<String>,
+    pub action: Option<String>,
+}
+
 #[derive(Debug, Clone, FromRow)]
 struct DataTableRecord {
     id: String,
@@ -133,6 +155,16 @@ struct DataRowRecord {
     data_json: String,
     created_at: String,
     updated_at: String,
+}
+
+#[derive(Debug, Clone, FromRow)]
+struct DataRowEventRecord {
+    id: i64,
+    row_id: String,
+    actor_user_id: String,
+    action: String,
+    diff_json: Option<String>,
+    created_at: String,
 }
 
 pub async fn list_tables(
@@ -448,6 +480,76 @@ pub async fn list_rows(
         }
         Err(_) => json_error(StatusCode::INTERNAL_SERVER_ERROR, "failed to list rows"),
     }
+}
+
+pub async fn list_row_events(
+    State(state): State<crate::AppState>,
+    Extension(claims): Extension<Claims>,
+    Path(table): Path<String>,
+    Query(params): Query<ListRowEventsParams>,
+) -> Response {
+    if !claims.is_admin {
+        return json_error(StatusCode::FORBIDDEN, "admin access required");
+    }
+
+    let table = match load_table(&state.pool, &table).await {
+        Ok(table) => table,
+        Err(LoadTableError::NotFound) => return json_error(StatusCode::NOT_FOUND, "data table not found"),
+        Err(LoadTableError::Invalid(message)) => return json_error(StatusCode::INTERNAL_SERVER_ERROR, message),
+        Err(LoadTableError::QueryFailed) => return json_error(StatusCode::INTERNAL_SERVER_ERROR, "failed to load data table"),
+    };
+
+    let limit = params.limit.unwrap_or(MAX_LIST_ROWS as usize).min(200);
+    if let Some(action) = params.action.as_deref() {
+        if action != "insert" && action != "update" && action != "delete" {
+            return json_error(StatusCode::BAD_REQUEST, "action must be insert, update, or delete");
+        }
+    }
+
+    let records = match sqlx::query_as::<_, DataRowEventRecord>(
+        "SELECT id, row_id, actor_user_id, action, diff_json, created_at FROM data_row_events WHERE table_id = ? ORDER BY id DESC LIMIT 200",
+    )
+    .bind(&table.id)
+    .fetch_all(&state.pool)
+    .await
+    {
+        Ok(records) => records,
+        Err(_) => return json_error(StatusCode::INTERNAL_SERVER_ERROR, "failed to load row events"),
+    };
+
+    let mut events = Vec::new();
+    for record in records {
+        if let Some(row_id) = params.row_id.as_deref() {
+            if record.row_id != row_id {
+                continue;
+            }
+        }
+        if let Some(action) = params.action.as_deref() {
+            if record.action != action {
+                continue;
+            }
+        }
+        let diff = match record.diff_json.as_deref() {
+            Some(raw) => match parse_json(raw) {
+                Ok(value) => Some(value),
+                Err(message) => return json_error(StatusCode::INTERNAL_SERVER_ERROR, message),
+            },
+            None => None,
+        };
+        events.push(DataRowEventResponse {
+            id: record.id,
+            row_id: record.row_id,
+            actor_user_id: record.actor_user_id,
+            action: record.action,
+            diff,
+            created_at: record.created_at,
+        });
+        if events.len() >= limit {
+            break;
+        }
+    }
+
+    (StatusCode::OK, Json(DataRowEventsResponse { events })).into_response()
 }
 
 pub async fn get_row(
@@ -1402,5 +1504,95 @@ mod tests {
         )
         .await;
         assert_eq!(invalid.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn test_admin_can_query_row_events_for_table() {
+        let (state, _dir) = test_support::make_test_state().await;
+        let admin = register_user(state.clone(), "admin@example.com").await;
+
+        let create_table_response = create_table(
+            State(state.clone()),
+            Extension(claims(&admin.user.id, true)),
+            Json(todo_table_request()),
+        )
+        .await;
+        assert_eq!(create_table_response.status(), StatusCode::CREATED);
+
+        let create_row_response = create_row(
+            State(state.clone()),
+            Extension(claims(&admin.user.id, true)),
+            axum::extract::Path("todos".to_string()),
+            Json(CreateRowRequest {
+                data: json!({ "title": "buy milk" }),
+            }),
+        )
+        .await;
+        assert_eq!(create_row_response.status(), StatusCode::CREATED);
+        let created_row: DataRowResponse = test_support::response_json(create_row_response).await;
+
+        let update_row_response = update_row(
+            State(state.clone()),
+            Extension(claims(&admin.user.id, true)),
+            axum::extract::Path(("todos".to_string(), created_row.id.clone())),
+            Json(CreateRowRequest {
+                data: json!({ "done": true }),
+            }),
+        )
+        .await;
+        assert_eq!(update_row_response.status(), StatusCode::OK);
+
+        let delete_row_response = delete_row(
+            State(state.clone()),
+            Extension(claims(&admin.user.id, true)),
+            axum::extract::Path(("todos".to_string(), created_row.id.clone())),
+        )
+        .await;
+        assert_eq!(delete_row_response.status(), StatusCode::OK);
+
+        let events_response = list_row_events(
+            State(state.clone()),
+            Extension(claims(&admin.user.id, true)),
+            axum::extract::Path("todos".to_string()),
+            axum::extract::Query(ListRowEventsParams {
+                limit: Some(10),
+                row_id: Some(created_row.id.clone()),
+                action: None,
+            }),
+        )
+        .await;
+        assert_eq!(events_response.status(), StatusCode::OK);
+        let events_body: DataRowEventsResponse = test_support::response_json(events_response).await;
+        assert_eq!(events_body.events.len(), 3);
+        assert_eq!(events_body.events[0].action, "delete");
+        assert_eq!(events_body.events[1].action, "update");
+        assert_eq!(events_body.events[2].action, "insert");
+        assert_eq!(events_body.events[0].row_id, created_row.id);
+        assert_eq!(events_body.events[2].diff.as_ref().and_then(|value| value.get("title")), Some(&json!("buy milk")));
+
+        let filtered_response = list_row_events(
+            State(state.clone()),
+            Extension(claims(&admin.user.id, true)),
+            axum::extract::Path("todos".to_string()),
+            axum::extract::Query(ListRowEventsParams {
+                limit: Some(10),
+                row_id: None,
+                action: Some("update".to_string()),
+            }),
+        )
+        .await;
+        assert_eq!(filtered_response.status(), StatusCode::OK);
+        let filtered_body: DataRowEventsResponse = test_support::response_json(filtered_response).await;
+        assert_eq!(filtered_body.events.len(), 1);
+        assert_eq!(filtered_body.events[0].action, "update");
+
+        let forbidden_response = list_row_events(
+            State(state),
+            Extension(claims(&admin.user.id, false)),
+            axum::extract::Path("todos".to_string()),
+            axum::extract::Query(ListRowEventsParams::default()),
+        )
+        .await;
+        assert_eq!(forbidden_response.status(), StatusCode::FORBIDDEN);
     }
 }
