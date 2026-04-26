@@ -181,6 +181,19 @@ Peanut은 현재 API-first 모드로 동작한다.
 }
 ```
 
+### `GET /api/ready`
+운영자가 보는 backend readiness 상태를 반환한다.
+
+```json
+{
+  "status": "ready",
+  "checks": [
+    { "name": "database", "ok": true, "message": "database query succeeded" },
+    { "name": "storage", "ok": true, "message": "storage directory is writable", "path": "data/storage" }
+  ]
+}
+```
+
 ### `POST /api/register`
 요청:
 

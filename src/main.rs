@@ -157,6 +157,7 @@ async fn main() {
 
     let app = Router::new()
         .route("/api/health", get(api::health::health_check))
+        .route("/api/ready", get(api::health::readiness_check))
         .route("/api/register", post(api::auth::register))
         .route("/api/login", post(api::auth::login))
         .route("/api/auth/refresh", post(api::auth::refresh_session))

@@ -181,6 +181,19 @@ Returns localized JSON:
 }
 ```
 
+### `GET /api/ready`
+Returns backend readiness state for operators:
+
+```json
+{
+  "status": "ready",
+  "checks": [
+    { "name": "database", "ok": true, "message": "database query succeeded" },
+    { "name": "storage", "ok": true, "message": "storage directory is writable", "path": "data/storage" }
+  ]
+}
+```
+
 ### `POST /api/register`
 Request:
 

@@ -50,6 +50,10 @@ impl LocalStorage {
         .map_err(|err| io::Error::new(io::ErrorKind::Other, err))?
     }
 
+    pub fn root(&self) -> &Path {
+        &self.root
+    }
+
     fn resolve_path(&self, key: &str) -> io::Result<PathBuf> {
         let trimmed = key.trim().trim_start_matches('/');
         if trimmed.is_empty() {
