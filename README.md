@@ -153,6 +153,7 @@ Current capabilities:
 - admin-managed functions stored in SQLite
 - JavaScript or TypeScript source managed from the console/API
 - per-function endpoint slug, invoke policy, env/secrets JSON, allowed origins, rate limit, and timeout
+- secrets are stored per function version, never returned in API payloads, and only exposed as `secret_key_count`
 - authenticated, public, admin-only, or api-key invoke policy through `POST /api/functions/endpoints/:endpoint_slug`
 - same endpoint supports inline sync execution or queued async execution with `async_invoke: true`
 - admin APIs expose version history through `GET /api/functions/:name/versions`

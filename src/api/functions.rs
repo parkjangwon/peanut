@@ -136,6 +136,7 @@ struct LoadedFunctionVersion {
     allowed_origins_json: String,
     rate_limit_per_minute: i64,
     timeout_ms: i64,
+    secret_key_count: i64,
 }
 
 #[derive(Debug, Clone)]
@@ -160,6 +161,7 @@ pub struct UpsertFunctionRequest {
     pub enabled: Option<bool>,
     pub invoke_policy: Option<String>,
     pub env: Option<std::collections::BTreeMap<String, String>>,
+    pub secrets: Option<std::collections::BTreeMap<String, String>>,
     pub api_key: Option<String>,
     pub allowed_origins: Option<Vec<String>>,
     pub rate_limit_per_minute: Option<i64>,
@@ -175,6 +177,7 @@ pub struct UpdateFunctionRequest {
     pub enabled: Option<bool>,
     pub invoke_policy: Option<String>,
     pub env: Option<std::collections::BTreeMap<String, String>>,
+    pub secrets: Option<std::collections::BTreeMap<String, String>>,
     pub api_key: Option<String>,
     pub allowed_origins: Option<Vec<String>>,
     pub rate_limit_per_minute: Option<i64>,
@@ -352,7 +355,7 @@ pub async fn list_function_versions(
             fv.timeout_ms,
             fv.created_by,
             fv.created_at,
-            0 AS secret_key_count,
+            (SELECT COUNT(*) FROM function_version_secrets fvs WHERE fvs.version_id = fv.id) AS secret_key_count,
             CASE WHEN fv.id = f.active_version_id THEN 1 ELSE 0 END AS is_active
         FROM function_versions fv
         JOIN functions f ON f.id = fv.function_id
@@ -413,6 +416,7 @@ pub async fn rollback_function_version(
         source_code: version.source_code.clone(),
         invoke_policy: version.invoke_policy.clone(),
         env_json: version.env_json.clone(),
+        secret_values: load_function_secrets(&state.pool, &version.id).await.unwrap_or_default(),
         api_key_hash: version.api_key_hash.clone(),
         allowed_origins_json: version.allowed_origins_json.clone(),
         rate_limit_per_minute: version.rate_limit_per_minute,
@@ -480,7 +484,17 @@ pub async fn update_function(
         }
     };
 
-    let validated = match validate_update_payload(existing.clone(), payload) {
+    let existing_secret_values = match load_function_secrets(&state.pool, &existing.active_version_id).await {
+        Ok(secrets) => secrets,
+        Err(_) => {
+            return json_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "failed to load function secrets",
+            )
+        }
+    };
+
+    let validated = match validate_update_payload(existing.clone(), existing_secret_values, payload) {
         Ok(validated) => validated,
         Err(message) => return json_error(StatusCode::BAD_REQUEST, message),
     };
@@ -942,8 +956,14 @@ async fn execute_and_finalize_invocation(
         Some(claims) => serde_json::json!({ "user_id": claims.sub, "is_admin": claims.is_admin }),
         None => Value::Null,
     };
-    let env_payload =
-        serde_json::to_value(parse_env_map(&invocation.function_version.env_json)).unwrap_or(Value::Null);
+    let mut runtime_env = parse_env_map(&invocation.function_version.env_json);
+    let secret_values = load_function_secrets(&state.pool, &invocation.function_version.id)
+        .await
+        .map_err(|_| "failed to load function secrets".to_string())?;
+    for (key, value) in &secret_values {
+        runtime_env.insert(key.clone(), value.clone());
+    }
+    let env_payload = serde_json::to_value(runtime_env).unwrap_or(Value::Null);
     let sandbox_state = state.clone();
     let sandbox_result = execute_in_sandbox(
         SandboxExecutionRequest {
@@ -963,7 +983,10 @@ async fn execute_and_finalize_invocation(
 
     match sandbox_result {
         Ok(result) => {
-            let response_json = match serde_json::to_string(&result.response_json) {
+            let redacted_response = redact_json_value(result.response_json.clone(), &secret_values);
+            let redacted_logs = compose_log_text(&result.stdout, &result.stderr)
+                .map(|text| redact_secret_text(text, &secret_values));
+            let response_json = match serde_json::to_string(&redacted_response) {
                 Ok(value) => value,
                 Err(_) => {
                     let _ = mark_invocation_failed(
@@ -978,22 +1001,23 @@ async fn execute_and_finalize_invocation(
             };
             let _ = sqlx::query("UPDATE function_invocations SET status = 'succeeded', response_json = ?, error = ?, duration_ms = ?, finished_at = CURRENT_TIMESTAMP WHERE id = ?")
                 .bind(&response_json)
-                .bind(compose_log_text(&result.stdout, &result.stderr))
+                .bind(redacted_logs)
                 .bind(result.duration_ms)
                 .bind(&invocation.invocation_id)
                 .execute(&state.pool)
                 .await;
-            Ok((result.response_json, result.duration_ms))
+            Ok((redacted_response, result.duration_ms))
         }
         Err(error) => {
+            let redacted_error = redact_secret_text(error.clone(), &secret_values);
             let _ = mark_invocation_failed(
                 &state.pool,
                 &invocation.invocation_id,
-                &error,
+                &redacted_error,
                 invocation.function_version.timeout_ms,
             )
             .await;
-            Err(error)
+            Err(redacted_error)
         }
     }
 }
@@ -1142,6 +1166,7 @@ struct ValidatedFunction {
     source_code: String,
     invoke_policy: String,
     env_json: String,
+    secret_values: BTreeMap<String, String>,
     api_key_hash: Option<String>,
     allowed_origins_json: String,
     rate_limit_per_minute: i64,
@@ -1179,6 +1204,17 @@ async fn insert_function_version(
     .execute(&mut **tx)
     .await?;
 
+    for (secret_key, secret_value) in &validated.secret_values {
+        sqlx::query(
+            "INSERT INTO function_version_secrets (version_id, secret_key, secret_value) VALUES (?, ?, ?)",
+        )
+        .bind(&version_id)
+        .bind(secret_key)
+        .bind(secret_value)
+        .execute(&mut **tx)
+        .await?;
+    }
+
     Ok(LoadedFunctionVersion {
         id: version_id,
         function_id: function_id.to_string(),
@@ -1191,6 +1227,7 @@ async fn insert_function_version(
         allowed_origins_json: validated.allowed_origins_json.clone(),
         rate_limit_per_minute: validated.rate_limit_per_minute,
         timeout_ms: validated.timeout_ms,
+        secret_key_count: validated.secret_values.len() as i64,
     })
 }
 
@@ -1204,7 +1241,7 @@ async fn activate_function_version(
     sqlx::query(
         r#"
         UPDATE functions
-        SET display_name = ?, endpoint_slug = ?, runtime = ?, source_code = ?, invoke_policy = ?, env_json = ?, api_key_hash = ?, allowed_origins_json = ?, rate_limit_per_minute = ?, timeout_ms = ?, enabled = ?, active_version_number = ?, active_version_id = ?, secret_key_count = 0, updated_by = ?, updated_at = CURRENT_TIMESTAMP
+        SET display_name = ?, endpoint_slug = ?, runtime = ?, source_code = ?, invoke_policy = ?, env_json = ?, api_key_hash = ?, allowed_origins_json = ?, rate_limit_per_minute = ?, timeout_ms = ?, enabled = ?, active_version_number = ?, active_version_id = ?, secret_key_count = ?, updated_by = ?, updated_at = CURRENT_TIMESTAMP
         WHERE id = ?
         "#,
     )
@@ -1221,6 +1258,7 @@ async fn activate_function_version(
     .bind(validated.enabled)
     .bind(version.version_number)
     .bind(&version.id)
+    .bind(version.secret_key_count)
     .bind(updated_by)
     .bind(function_id)
     .execute(&mut **tx)
@@ -1237,6 +1275,7 @@ fn validate_create_payload(payload: UpsertFunctionRequest) -> Result<ValidatedFu
     let invoke_policy =
         normalize_invoke_policy(payload.invoke_policy.as_deref().unwrap_or("authenticated"))?;
     let env_json = normalize_env_json(payload.env.unwrap_or_default())?;
+    let secret_values = normalize_secret_values(payload.secrets.unwrap_or_default())?;
     let api_key_hash = payload
         .api_key
         .as_deref()
@@ -1257,6 +1296,7 @@ fn validate_create_payload(payload: UpsertFunctionRequest) -> Result<ValidatedFu
         source_code,
         invoke_policy,
         env_json,
+        secret_values,
         api_key_hash,
         allowed_origins_json,
         rate_limit_per_minute,
@@ -1267,6 +1307,7 @@ fn validate_create_payload(payload: UpsertFunctionRequest) -> Result<ValidatedFu
 
 fn validate_update_payload(
     existing: FunctionDetail,
+    existing_secret_values: BTreeMap<String, String>,
     payload: UpdateFunctionRequest,
 ) -> Result<ValidatedFunction, String> {
     let display_name = normalize_non_empty(
@@ -1301,6 +1342,10 @@ fn validate_update_payload(
         Some(env) => env,
         None => parse_env_map(&existing.env_json),
     })?;
+    let secret_values = match payload.secrets {
+        Some(secrets) => normalize_secret_values(secrets)?,
+        None => existing_secret_values,
+    };
     let api_key_hash = payload
         .api_key
         .as_deref()
@@ -1328,6 +1373,7 @@ fn validate_update_payload(
         source_code,
         invoke_policy,
         env_json,
+        secret_values,
         api_key_hash,
         allowed_origins_json,
         rate_limit_per_minute,
@@ -1398,6 +1444,45 @@ fn normalize_env_json(values: BTreeMap<String, String>) -> Result<String, String
 
 fn parse_env_map(env_json: &str) -> BTreeMap<String, String> {
     serde_json::from_str(env_json).unwrap_or_default()
+}
+
+fn normalize_secret_values(values: BTreeMap<String, String>) -> Result<BTreeMap<String, String>, String> {
+    for (key, value) in &values {
+        if key.is_empty() {
+            return Err("secret keys must not be empty".to_string());
+        }
+        if !key
+            .chars()
+            .all(|ch| ch.is_ascii_uppercase() || ch.is_ascii_digit() || ch == '_')
+        {
+            return Err(
+                "secret keys may only contain uppercase letters, digits, and underscores".to_string(),
+            );
+        }
+        if value.trim().is_empty() {
+            return Err("secret values must not be empty".to_string());
+        }
+    }
+    Ok(values)
+}
+
+fn redact_secret_text(text: String, secrets: &BTreeMap<String, String>) -> String {
+    let mut redacted = text;
+    for value in secrets.values() {
+        if !value.is_empty() {
+            redacted = redacted.replace(value, "***");
+        }
+    }
+    redacted
+}
+
+fn redact_json_value(value: Value, secrets: &BTreeMap<String, String>) -> Value {
+    match value {
+        Value::String(text) => Value::String(redact_secret_text(text, secrets)),
+        Value::Array(items) => Value::Array(items.into_iter().map(|item| redact_json_value(item, secrets)).collect()),
+        Value::Object(map) => Value::Object(map.into_iter().map(|(k, v)| (k, redact_json_value(v, secrets))).collect()),
+        other => other,
+    }
 }
 
 fn normalize_allowed_origins_json(values: Vec<String>) -> Result<String, String> {
@@ -1518,7 +1603,7 @@ async fn load_function_version_by_number(
     version_number: i64,
 ) -> Result<LoadedFunctionVersion, LoadFunctionVersionError> {
     sqlx::query_as::<_, LoadedFunctionVersion>(
-        "SELECT id, function_id, version_number, runtime, source_code, invoke_policy, env_json, api_key_hash, allowed_origins_json, rate_limit_per_minute, timeout_ms FROM function_versions WHERE function_id = ? AND version_number = ?",
+        "SELECT id, function_id, version_number, runtime, source_code, invoke_policy, env_json, api_key_hash, allowed_origins_json, rate_limit_per_minute, timeout_ms, (SELECT COUNT(*) FROM function_version_secrets fvs WHERE fvs.version_id = function_versions.id) AS secret_key_count FROM function_versions WHERE function_id = ? AND version_number = ?",
     )
     .bind(function_id)
     .bind(version_number)
@@ -1533,13 +1618,26 @@ async fn load_function_version_by_id(
     version_id: &str,
 ) -> Result<LoadedFunctionVersion, LoadFunctionVersionError> {
     sqlx::query_as::<_, LoadedFunctionVersion>(
-        "SELECT id, function_id, version_number, runtime, source_code, invoke_policy, env_json, api_key_hash, allowed_origins_json, rate_limit_per_minute, timeout_ms FROM function_versions WHERE id = ?",
+        "SELECT id, function_id, version_number, runtime, source_code, invoke_policy, env_json, api_key_hash, allowed_origins_json, rate_limit_per_minute, timeout_ms, (SELECT COUNT(*) FROM function_version_secrets fvs WHERE fvs.version_id = function_versions.id) AS secret_key_count FROM function_versions WHERE id = ?",
     )
     .bind(version_id)
     .fetch_optional(pool)
     .await
     .map_err(|_| LoadFunctionVersionError::QueryFailed)?
     .ok_or(LoadFunctionVersionError::NotFound)
+}
+
+async fn load_function_secrets(
+    pool: &sqlx::SqlitePool,
+    version_id: &str,
+) -> Result<BTreeMap<String, String>, sqlx::Error> {
+    let rows: Vec<(String, String)> = sqlx::query_as(
+        "SELECT secret_key, secret_value FROM function_version_secrets WHERE version_id = ? ORDER BY secret_key ASC",
+    )
+    .bind(version_id)
+    .fetch_all(pool)
+    .await?;
+    Ok(rows.into_iter().collect())
 }
 
 #[cfg(test)]
@@ -1591,6 +1689,7 @@ mod tests {
                 enabled: Some(true),
                 invoke_policy: Some("authenticated".to_string()),
                 env: None,
+                secrets: None,
                 api_key: None,
                 allowed_origins: None,
                 rate_limit_per_minute: Some(60),
@@ -1653,6 +1752,7 @@ mod tests {
                 enabled: Some(true),
                 invoke_policy: Some("public".to_string()),
                 env: Some(env),
+                secrets: None,
                 api_key: None,
                 allowed_origins: None,
                 rate_limit_per_minute: Some(60),
@@ -1683,6 +1783,55 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_function_secrets_are_redacted_in_api_and_runtime_output() {
+        let (state, _dir) = test_support::make_test_state().await;
+        let admin = register_admin(state.clone()).await;
+        let mut secrets = std::collections::BTreeMap::new();
+        secrets.insert("API_TOKEN".to_string(), "super-secret-token".to_string());
+
+        let create_response = create_function(
+            State(state.clone()),
+            Extension(claims(&admin.user.id, true)),
+            Json(UpsertFunctionRequest {
+                name: "secret_fn".to_string(),
+                display_name: "Secret function".to_string(),
+                endpoint_slug: "secret-fn".to_string(),
+                runtime: "javascript".to_string(),
+                source_code: "export default async function handler(ctx) { return { token: ctx.env.API_TOKEN } }".to_string(),
+                timeout_ms: Some(1500),
+                enabled: Some(true),
+                invoke_policy: Some("authenticated".to_string()),
+                env: None,
+                secrets: Some(secrets),
+                api_key: None,
+                allowed_origins: None,
+                rate_limit_per_minute: Some(60),
+            }),
+        )
+        .await;
+        assert_eq!(create_response.status(), StatusCode::CREATED);
+        let create_body: FunctionResponse = test_support::response_json(create_response).await;
+        assert_eq!(create_body.function.secret_key_count, 1);
+        assert!(!create_body.function.env_json.contains("super-secret-token"));
+
+        let invoke_response = invoke_function(
+            State(state),
+            Some(Extension(claims(&admin.user.id, true))),
+            HeaderMap::new(),
+            Path("secret-fn".to_string()),
+            Json(InvokeFunctionRequest {
+                input: serde_json::json!({}),
+                api_key: None,
+                async_invoke: None,
+            }),
+        )
+        .await;
+        assert_eq!(invoke_response.status(), StatusCode::OK);
+        let invoke_body: InvokeFunctionResponse = test_support::response_json(invoke_response).await;
+        assert_eq!(invoke_body.response, serde_json::json!({ "token": "***" }));
+    }
+
+    #[tokio::test]
     async fn test_authenticated_function_can_use_storage_and_push_bindings() {
         let (state, _dir) = test_support::make_test_state().await;
         let admin = register_admin(state.clone()).await;
@@ -1709,6 +1858,7 @@ export default async function handler(ctx) {
                 enabled: Some(true),
                 invoke_policy: Some("authenticated".to_string()),
                 env: None,
+                secrets: None,
                 api_key: None,
                 allowed_origins: None,
                 rate_limit_per_minute: Some(60),
@@ -1829,6 +1979,7 @@ export default async function handler(ctx) {
                 enabled: Some(true),
                 invoke_policy: Some("authenticated".to_string()),
                 env: None,
+                secrets: None,
                 api_key: None,
                 allowed_origins: None,
                 rate_limit_per_minute: Some(60),
@@ -1902,6 +2053,7 @@ export default async function handler(ctx) {
                 enabled: Some(true),
                 invoke_policy: Some("admin_only".to_string()),
                 env: None,
+                secrets: None,
                 api_key: None,
                 allowed_origins: None,
                 rate_limit_per_minute: Some(60),
@@ -1944,6 +2096,7 @@ export default async function handler(ctx) {
                 enabled: Some(true),
                 invoke_policy: Some("api_key".to_string()),
                 env: None,
+                secrets: None,
                 api_key: Some("super-secret-key".to_string()),
                 allowed_origins: None,
                 rate_limit_per_minute: Some(60),
@@ -2000,6 +2153,7 @@ export default async function handler(ctx) {
                 enabled: Some(true),
                 invoke_policy: Some("public".to_string()),
                 env: None,
+                secrets: None,
                 api_key: None,
                 allowed_origins: Some(vec!["https://app.example.com".to_string()]),
                 rate_limit_per_minute: Some(1),
@@ -2072,6 +2226,7 @@ export default async function handler(ctx) {
                 enabled: Some(true),
                 invoke_policy: Some("authenticated".to_string()),
                 env: None,
+                secrets: None,
                 api_key: None,
                 allowed_origins: None,
                 rate_limit_per_minute: Some(60),
@@ -2161,6 +2316,7 @@ export default async function handler(ctx) {
                 enabled: Some(true),
                 invoke_policy: Some("authenticated".to_string()),
                 env: None,
+                secrets: None,
                 api_key: None,
                 allowed_origins: None,
                 rate_limit_per_minute: Some(60),
@@ -2245,6 +2401,7 @@ export default async function handler(ctx) {
                 enabled: Some(true),
                 invoke_policy: Some("authenticated".to_string()),
                 env: None,
+                secrets: None,
                 api_key: None,
                 allowed_origins: None,
                 rate_limit_per_minute: Some(60),
@@ -2272,6 +2429,7 @@ export default async function handler(ctx) {
                 enabled: Some(false),
                 invoke_policy: Some("authenticated".to_string()),
                 env: None,
+                secrets: None,
                 api_key: None,
                 allowed_origins: None,
                 rate_limit_per_minute: Some(60),
@@ -2316,6 +2474,7 @@ export default async function handler(ctx) {
                 enabled: Some(true),
                 invoke_policy: Some("authenticated".to_string()),
                 env: None,
+                secrets: None,
                 api_key: None,
                 allowed_origins: None,
                 rate_limit_per_minute: Some(60),
@@ -2342,6 +2501,7 @@ export default async function handler(ctx) {
                 enabled: None,
                 invoke_policy: None,
                 env: None,
+                secrets: None,
                 api_key: None,
                 allowed_origins: None,
                 rate_limit_per_minute: None,

@@ -154,6 +154,7 @@ Peanut은 이제 작은 백엔드 확장용 함수 런타임을 함께 제공한
 - admin이 SQLite에 function 메타데이터와 소스 저장
 - JavaScript / TypeScript 함수 코드를 콘솔/API에서 관리
 - function별 endpoint slug, invoke policy, env/secrets JSON, allowed origins, rate limit, timeout 설정
+- secret은 함수 버전별로 별도 저장되며 API 응답에는 값이 노출되지 않고 `secret_key_count`만 제공된다
 - `POST /api/functions/endpoints/:endpoint_slug`로 authenticated / public / admin_only / api_key 정책 호출
 - 같은 endpoint에서 `async_invoke: true`로 inline sync 실행 또는 queued async 실행 선택 가능
 - admin API로 `GET /api/functions/:name/versions`에서 함수 버전 이력을 조회 가능
