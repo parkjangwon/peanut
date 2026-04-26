@@ -152,8 +152,9 @@ Current capabilities:
 - JavaScript or TypeScript source managed from the console/API
 - per-function endpoint slug, invoke policy, env/secrets JSON, allowed origins, rate limit, and timeout
 - authenticated, public, admin-only, or api-key invoke policy through `POST /api/functions/endpoints/:endpoint_slug`
+- same endpoint supports inline sync execution or queued async execution with `async_invoke: true`
 - separate Node subprocess execution with a temp working directory and bounded runtime timeout
-- invocation logs stored in SQLite, with detail lookup and retry from the console/API
+- invocation logs stored in SQLite, with queued/running/succeeded/failed lifecycle, `invoke_mode`, detail lookup, and retry from the console/API
 - bounded in-process Peanut host bindings for authenticated functions:
   - `ctx.peanut.storage.list/get/put/delete`
   - `ctx.peanut.push.enqueue`

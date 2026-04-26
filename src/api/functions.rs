@@ -62,6 +62,7 @@ pub struct FunctionInvocation {
     pub response_json: Option<String>,
     pub error: Option<String>,
     pub duration_ms: Option<i64>,
+    pub invoke_mode: String,
     pub created_at: String,
     pub finished_at: Option<String>,
 }
@@ -130,6 +131,7 @@ pub struct InvokeFunctionRequest {
     #[serde(default)]
     pub input: Value,
     pub api_key: Option<String>,
+    pub async_invoke: Option<bool>,
 }
 
 pub async fn list_functions(
@@ -349,7 +351,7 @@ pub async fn list_function_invocations(
     };
 
     match sqlx::query_as::<_, FunctionInvocation>(
-        "SELECT id, function_id, status, request_json, response_json, error, duration_ms, created_at, finished_at FROM function_invocations WHERE function_id = ? ORDER BY created_at DESC LIMIT 20",
+        "SELECT id, function_id, status, request_json, response_json, error, duration_ms, invoke_mode, created_at, finished_at FROM function_invocations WHERE function_id = ? ORDER BY created_at DESC LIMIT 20",
     )
     .bind(&function.id)
     .fetch_all(&state.pool)
@@ -431,7 +433,7 @@ pub async fn retry_function_invocation(
         .as_deref()
         .map(|raw| serde_json::from_str(raw).unwrap_or(Value::Null))
         .unwrap_or(Value::Null);
-    run_function_invocation(&state, &function, Some(claims), input).await
+    run_function_invocation(&state, &function, Some(claims), input, false).await
 }
 
 pub async fn invoke_function(
@@ -468,7 +470,14 @@ pub async fn invoke_function(
     }
 
     let auth_claims = claims.map(|Extension(claims)| claims);
-    run_function_invocation(&state, &function, auth_claims, payload.input).await
+    run_function_invocation(
+        &state,
+        &function,
+        auth_claims,
+        payload.input,
+        payload.async_invoke.unwrap_or(false),
+    )
+    .await
 }
 
 async fn run_function_invocation(
@@ -476,8 +485,8 @@ async fn run_function_invocation(
     function: &FunctionDetail,
     claims: Option<Claims>,
     input: Value,
+    async_invoke: bool,
 ) -> Response {
-    let pool = &state.pool;
     let invocation_id = Uuid::new_v4().to_string();
     let request_json = match serde_json::to_string(&input) {
         Ok(value) => value,
@@ -489,23 +498,85 @@ async fn run_function_invocation(
         }
     };
 
-    if sqlx::query("INSERT INTO function_invocations (id, function_id, status, request_json) VALUES (?, ?, 'running', ?)")
-        .bind(&invocation_id)
-        .bind(&function.id)
-        .bind(&request_json)
-        .execute(pool)
-        .await
-        .is_err()
+    let initial_status = if async_invoke { "queued" } else { "running" };
+    let invoke_mode = if async_invoke { "async" } else { "sync" };
+
+    if sqlx::query(
+        "INSERT INTO function_invocations (id, function_id, status, request_json, invoke_mode) VALUES (?, ?, ?, ?, ?)",
+    )
+    .bind(&invocation_id)
+    .bind(&function.id)
+    .bind(initial_status)
+    .bind(&request_json)
+    .bind(invoke_mode)
+    .execute(&state.pool)
+    .await
+    .is_err()
     {
         return json_error(StatusCode::INTERNAL_SERVER_ERROR, "failed to create invocation log");
     }
 
+    if async_invoke {
+        let state = state.clone();
+        let function = function.clone();
+        let claims = claims.clone();
+        let invocation_id_for_task = invocation_id.clone();
+        tokio::spawn(async move {
+            let _ = sqlx::query("UPDATE function_invocations SET status = 'running' WHERE id = ?")
+                .bind(&invocation_id_for_task)
+                .execute(&state.pool)
+                .await;
+            let _ = execute_and_finalize_invocation(
+                &state,
+                &function,
+                claims,
+                input,
+                &invocation_id_for_task,
+            )
+            .await;
+        });
+
+        return (
+            StatusCode::ACCEPTED,
+            Json(InvokeFunctionResponse {
+                invocation_id,
+                status: "queued".to_string(),
+                response: Value::Null,
+                duration_ms: 0,
+            }),
+        )
+            .into_response();
+    }
+
+    match execute_and_finalize_invocation(state, function, claims, input, &invocation_id).await {
+        Ok((response, duration_ms)) => (
+            StatusCode::OK,
+            Json(InvokeFunctionResponse {
+                invocation_id,
+                status: "succeeded".to_string(),
+                response,
+                duration_ms,
+            }),
+        )
+            .into_response(),
+        Err(error) => json_error(StatusCode::INTERNAL_SERVER_ERROR, error),
+    }
+}
+
+async fn execute_and_finalize_invocation(
+    state: &crate::AppState,
+    function: &FunctionDetail,
+    claims: Option<Claims>,
+    input: Value,
+    invocation_id: &str,
+) -> Result<(Value, i64), String> {
     let auth_payload = match claims.as_ref() {
         Some(claims) => serde_json::json!({ "user_id": claims.sub, "is_admin": claims.is_admin }),
         None => Value::Null,
     };
     let env_payload =
         serde_json::to_value(parse_env_map(&function.env_json)).unwrap_or(Value::Null);
+    let sandbox_state = state.clone();
     let sandbox_result = execute_in_sandbox(
         SandboxExecutionRequest {
             runtime: &function.runtime,
@@ -517,14 +588,7 @@ async fn run_function_invocation(
             timeout_ms: function.timeout_ms,
         },
         &env::temp_dir(),
-        &crate::AppState {
-            pool: pool.clone(),
-            storage: state.storage.clone(),
-            jwt_secret: state.jwt_secret.clone(),
-            password_reset_delivery: state.password_reset_delivery.clone(),
-            auth_allowed_origins: state.auth_allowed_origins.clone(),
-            auth_allowed_client_ids: state.auth_allowed_client_ids.clone(),
-        },
+        &sandbox_state,
         claims.clone(),
     )
     .await;
@@ -535,39 +599,33 @@ async fn run_function_invocation(
                 Ok(value) => value,
                 Err(_) => {
                     let _ = mark_invocation_failed(
-                        pool,
-                        &invocation_id,
+                        &state.pool,
+                        invocation_id,
                         "function returned non-serializable data",
                         result.duration_ms,
                     )
                     .await;
-                    return json_error(
-                        StatusCode::INTERNAL_SERVER_ERROR,
-                        "function returned non-serializable data",
-                    );
+                    return Err("function returned non-serializable data".to_string());
                 }
             };
             let _ = sqlx::query("UPDATE function_invocations SET status = 'succeeded', response_json = ?, error = ?, duration_ms = ?, finished_at = CURRENT_TIMESTAMP WHERE id = ?")
                 .bind(&response_json)
                 .bind(compose_log_text(&result.stdout, &result.stderr))
                 .bind(result.duration_ms)
-                .bind(&invocation_id)
-                .execute(pool)
+                .bind(invocation_id)
+                .execute(&state.pool)
                 .await;
-            (
-                StatusCode::OK,
-                Json(InvokeFunctionResponse {
-                    invocation_id,
-                    status: "succeeded".to_string(),
-                    response: result.response_json,
-                    duration_ms: result.duration_ms,
-                }),
-            )
-                .into_response()
+            Ok((result.response_json, result.duration_ms))
         }
         Err(error) => {
-            let _ = mark_invocation_failed(pool, &invocation_id, &error, function.timeout_ms).await;
-            json_error(StatusCode::INTERNAL_SERVER_ERROR, error)
+            let _ = mark_invocation_failed(
+                &state.pool,
+                invocation_id,
+                &error,
+                function.timeout_ms,
+            )
+            .await;
+            Err(error)
         }
     }
 }
@@ -952,7 +1010,7 @@ async fn load_invocation(
     invocation_id: &str,
 ) -> Result<FunctionInvocation, LoadInvocationError> {
     sqlx::query_as::<_, FunctionInvocation>(
-        "SELECT id, function_id, status, request_json, response_json, error, duration_ms, created_at, finished_at FROM function_invocations WHERE function_id = ? AND id = ?"
+        "SELECT id, function_id, status, request_json, response_json, error, duration_ms, invoke_mode, created_at, finished_at FROM function_invocations WHERE function_id = ? AND id = ?"
     )
     .bind(function_id)
     .bind(invocation_id)
@@ -1055,6 +1113,7 @@ mod tests {
             Json(InvokeFunctionRequest {
                 input: serde_json::json!({ "name": "jangwon" }),
                 api_key: None,
+                async_invoke: None,
             }),
         )
         .await;
@@ -1116,6 +1175,7 @@ mod tests {
             Json(InvokeFunctionRequest {
                 input: serde_json::json!({}),
                 api_key: None,
+                async_invoke: None,
             }),
         )
         .await;
@@ -1171,6 +1231,7 @@ export default async function handler(ctx) {
             Json(InvokeFunctionRequest {
                 input: serde_json::json!({}),
                 api_key: None,
+                async_invoke: None,
             }),
         )
         .await;
@@ -1290,6 +1351,7 @@ export default async function handler(ctx) {
             Json(InvokeFunctionRequest {
                 input: serde_json::json!({ "title": "buy milk" }),
                 api_key: None,
+                async_invoke: None,
             }),
         )
         .await;
@@ -1362,6 +1424,7 @@ export default async function handler(ctx) {
             Json(InvokeFunctionRequest {
                 input: serde_json::json!({}),
                 api_key: None,
+                async_invoke: None,
             }),
         )
         .await;
@@ -1403,6 +1466,7 @@ export default async function handler(ctx) {
             Json(InvokeFunctionRequest {
                 input: serde_json::json!({}),
                 api_key: None,
+                async_invoke: None,
             }),
         )
         .await;
@@ -1416,6 +1480,7 @@ export default async function handler(ctx) {
             Json(InvokeFunctionRequest {
                 input: serde_json::json!({}),
                 api_key: Some("super-secret-key".to_string()),
+                async_invoke: None,
             }),
         )
         .await;
@@ -1459,6 +1524,7 @@ export default async function handler(ctx) {
             Json(InvokeFunctionRequest {
                 input: serde_json::json!({}),
                 api_key: None,
+                async_invoke: None,
             }),
         )
         .await;
@@ -1474,6 +1540,7 @@ export default async function handler(ctx) {
             Json(InvokeFunctionRequest {
                 input: serde_json::json!({}),
                 api_key: None,
+                async_invoke: None,
             }),
         )
         .await;
@@ -1487,6 +1554,7 @@ export default async function handler(ctx) {
             Json(InvokeFunctionRequest {
                 input: serde_json::json!({}),
                 api_key: None,
+                async_invoke: None,
             }),
         )
         .await;
@@ -1524,6 +1592,7 @@ export default async function handler(ctx) {
             Json(InvokeFunctionRequest {
                 input: serde_json::json!({"x":1}),
                 api_key: None,
+                async_invoke: None,
             }),
         )
         .await;
@@ -1544,6 +1613,72 @@ export default async function handler(ctx) {
         )
         .await;
         assert_eq!(retry.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn test_function_supports_async_invocation_lifecycle() {
+        let (state, _dir) = test_support::make_test_state().await;
+        let admin = register_admin(state.clone()).await;
+
+        let create_response = create_function(
+            State(state.clone()),
+            Extension(claims(&admin.user.id, true)),
+            Json(UpsertFunctionRequest {
+                name: "async_fn".to_string(),
+                display_name: "Async function".to_string(),
+                endpoint_slug: "async-fn".to_string(),
+                runtime: "javascript".to_string(),
+                source_code: "export default async function handler(ctx) { await new Promise((resolve) => setTimeout(resolve, 50)); return { done: true, input: ctx.request.input } }".to_string(),
+                timeout_ms: Some(1500),
+                enabled: Some(true),
+                invoke_policy: Some("authenticated".to_string()),
+                env: None,
+                api_key: None,
+                allowed_origins: None,
+                rate_limit_per_minute: Some(60),
+            }),
+        )
+        .await;
+        assert_eq!(create_response.status(), StatusCode::CREATED);
+
+        let invoke_response = invoke_function(
+            State(state.clone()),
+            Some(Extension(claims(&admin.user.id, true))),
+            HeaderMap::new(),
+            Path("async-fn".to_string()),
+            Json(InvokeFunctionRequest {
+                input: serde_json::json!({ "job": "heavy" }),
+                api_key: None,
+                async_invoke: Some(true),
+            }),
+        )
+        .await;
+        assert_eq!(invoke_response.status(), StatusCode::ACCEPTED);
+        let invoke_body: InvokeFunctionResponse = test_support::response_json(invoke_response).await;
+        assert_eq!(invoke_body.status, "queued");
+        assert_eq!(invoke_body.response, Value::Null);
+
+        let mut final_detail: Option<FunctionInvocation> = None;
+        for _ in 0..20 {
+            let detail = get_function_invocation(
+                State(state.clone()),
+                Extension(claims(&admin.user.id, true)),
+                Path(("async_fn".to_string(), invoke_body.invocation_id.clone())),
+            )
+            .await;
+            assert_eq!(detail.status(), StatusCode::OK);
+            let detail_body: FunctionInvocationResponse = test_support::response_json(detail).await;
+            if detail_body.invocation.status == "succeeded" {
+                final_detail = Some(detail_body.invocation);
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+        }
+
+        let final_detail = final_detail.expect("async invocation did not complete in time");
+        assert_eq!(final_detail.status, "succeeded");
+        assert_eq!(final_detail.invoke_mode, "async");
+        assert!(final_detail.response_json.unwrap().contains("\"done\":true"));
     }
 
     #[tokio::test]
@@ -1625,6 +1760,7 @@ export default async function handler(ctx) {
             Json(InvokeFunctionRequest {
                 input: serde_json::json!({}),
                 api_key: None,
+                async_invoke: None,
             }),
         )
         .await;
