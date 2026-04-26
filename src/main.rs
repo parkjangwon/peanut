@@ -1,6 +1,7 @@
 mod api;
 mod auth;
 mod console;
+mod config;
 mod db;
 mod functions;
 mod i18n;
@@ -18,13 +19,8 @@ use axum::{
     routing::{delete, get, patch, post, put},
     Router,
 };
-use std::{env, net::SocketAddr, sync::Arc};
+use std::sync::Arc;
 use tracing_subscriber;
-
-const DEFAULT_DATABASE_URL: &str = "sqlite://peanut.db";
-const DEFAULT_STORAGE_DIR: &str = "data/storage";
-const DEFAULT_BIND_ADDR: &str = "127.0.0.1:3000";
-const DEFAULT_MAX_UPLOAD_BYTES: usize = 5 * 1024 * 1024;
 
 #[derive(Clone)]
 pub struct AppState {
@@ -38,28 +34,21 @@ async fn main() {
     tracing_subscriber::fmt::init();
     dotenvy::dotenv().ok();
 
-    let database_url =
-        env::var("DATABASE_URL").unwrap_or_else(|_| DEFAULT_DATABASE_URL.to_string());
-    let storage_dir = env::var("STORAGE_DIR").unwrap_or_else(|_| DEFAULT_STORAGE_DIR.to_string());
-    let bind_addr = env::var("BIND_ADDR").unwrap_or_else(|_| DEFAULT_BIND_ADDR.to_string());
-    let jwt_secret = env::var("JWT_SECRET").expect("JWT_SECRET must be set before starting Peanut");
-    let max_upload_bytes = env::var("MAX_UPLOAD_BYTES")
-        .ok()
-        .and_then(|value| value.parse::<usize>().ok())
-        .unwrap_or(DEFAULT_MAX_UPLOAD_BYTES);
+    let config = crate::config::load_config_from_env()
+        .unwrap_or_else(|message| panic!("Invalid Peanut configuration: {message}"));
 
-    tokio::fs::create_dir_all(&storage_dir).await.unwrap();
+    tokio::fs::create_dir_all(&config.storage_dir).await.unwrap();
 
-    let pool = db::init_db(&database_url)
+    let pool = db::init_db(&config.database_url)
         .await
         .expect("Failed to initialize DB");
 
-    let storage = Arc::new(crate::storage::local::LocalStorage::new(&storage_dir));
+    let storage = Arc::new(crate::storage::local::LocalStorage::new(&config.storage_dir));
 
     let state = AppState {
         pool,
         storage,
-        jwt_secret: Arc::new(jwt_secret),
+        jwt_secret: Arc::new(config.jwt_secret.clone()),
     };
 
     let pool_clone = state.pool.clone();
@@ -72,7 +61,7 @@ async fn main() {
         .route("/storage/*key", get(api::storage::get_object))
         .route("/storage/*key", put(api::storage::put_object))
         .route("/storage/*key", delete(api::storage::delete_object))
-        .layer(DefaultBodyLimit::max(max_upload_bytes));
+        .layer(DefaultBodyLimit::max(config.max_upload_bytes));
 
     let push_routes = Router::new()
         .route("/push/subscriptions", get(api::push::list_subscriptions))
@@ -175,9 +164,8 @@ async fn main() {
         .fallback(crate::console::static_handler)
         .with_state(state);
 
-    let addr: SocketAddr = bind_addr.parse().expect("Invalid BIND_ADDR");
-    tracing::info!("Listening on {}", addr);
+    tracing::info!("Listening on {}", config.bind_addr);
 
-    let listener = tokio::net::TcpListener::bind(addr).await.unwrap();
+    let listener = tokio::net::TcpListener::bind(config.bind_addr).await.unwrap();
     axum::serve(listener, app).await.unwrap();
 }

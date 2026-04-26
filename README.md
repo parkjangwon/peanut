@@ -387,10 +387,10 @@ Required:
 - `JWT_SECRET`
 
 Optional:
-- `DATABASE_URL` (default: `sqlite://peanut.db`)
-- `STORAGE_DIR` (default: `data/storage`)
-- `BIND_ADDR` (default: `127.0.0.1:3000`)
-- `MAX_UPLOAD_BYTES` (default: `5242880`)
+- `DATABASE_URL` (default: `sqlite://peanut.db`; must use `sqlite:`)
+- `STORAGE_DIR` (default: `data/storage`; must not be empty)
+- `BIND_ADDR` (default: `127.0.0.1:3000`; must be a valid socket address)
+- `MAX_UPLOAD_BYTES` (default: `5242880`; must be a positive integer)
 - `RUST_LOG` (default: `info`)
 - `WEB_PUSH_VAPID_PRIVATE_KEY` (required only for Web Push delivery)
 - `WEB_PUSH_VAPID_SUBJECT` (required only for Web Push delivery; `mailto:` or `https://`)

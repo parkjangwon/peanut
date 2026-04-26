@@ -381,10 +381,10 @@ Peanut은 현재 API-first 모드로 동작한다.
 - `JWT_SECRET`
 
 선택:
-- `DATABASE_URL` (기본값: `sqlite://peanut.db`)
-- `STORAGE_DIR` (기본값: `data/storage`)
-- `BIND_ADDR` (기본값: `127.0.0.1:3000`)
-- `MAX_UPLOAD_BYTES` (기본값: `5242880`)
+- `DATABASE_URL` (기본값: `sqlite://peanut.db`; `sqlite:` URL 이어야 함)
+- `STORAGE_DIR` (기본값: `data/storage`; 비어 있으면 안 됨)
+- `BIND_ADDR` (기본값: `127.0.0.1:3000`; 유효한 socket address 여야 함)
+- `MAX_UPLOAD_BYTES` (기본값: `5242880`; 0보다 큰 정수여야 함)
 - `RUST_LOG` (기본값: `info`)
 - `WEB_PUSH_VAPID_PRIVATE_KEY` (Web Push 전송 시에만 필요)
 - `WEB_PUSH_VAPID_SUBJECT` (Web Push 전송 시에만 필요; `mailto:` 또는 `https://`)
