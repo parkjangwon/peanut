@@ -71,11 +71,18 @@ async fn main() {
         crate::push::worker::start_push_worker(pool_clone).await;
     });
 
-    let storage_routes = Router::new()
+    let legacy_storage_routes = Router::new()
         .route("/storage", get(api::storage::list_objects))
         .route("/storage/*key", get(api::storage::get_object))
         .route("/storage/*key", put(api::storage::put_object))
         .route("/storage/*key", delete(api::storage::delete_object))
+        .route(
+            "/s3/:bucket/*key/presign",
+            post(api::storage::create_presigned_url),
+        )
+        .layer(DefaultBodyLimit::max(config.max_upload_bytes));
+
+    let s3_routes = Router::new()
         .route("/s3/:bucket", get(api::storage::list_bucket_objects))
         .route("/s3/:bucket/*key", head(api::storage::head_bucket_object))
         .route("/s3/:bucket/*key", get(api::storage::get_bucket_object))
@@ -84,7 +91,11 @@ async fn main() {
             "/s3/:bucket/*key",
             delete(api::storage::delete_bucket_object),
         )
-        .layer(DefaultBodyLimit::max(config.max_upload_bytes));
+        .layer(DefaultBodyLimit::max(config.max_upload_bytes))
+        .layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            crate::middleware::s3_auth::s3_auth_middleware,
+        ));
 
     let push_routes = Router::new()
         .route("/push/subscriptions", get(api::push::list_subscriptions))
@@ -219,7 +230,7 @@ async fn main() {
             "/admin/users/:user_id/deactivate",
             put(api::admin::deactivate_user),
         )
-        .merge(storage_routes)
+        .merge(legacy_storage_routes)
         .merge(push_routes)
         .merge(function_routes)
         .merge(data_routes)
@@ -244,6 +255,7 @@ async fn main() {
         .route("/api/health", get(api::health::health_check))
         .route("/api/ready", get(api::health::readiness_check))
         .nest("/api", auth_public_routes)
+        .nest("/api", s3_routes)
         .route(
             "/api/functions/endpoints/:endpoint_slug",
             post(api::functions::invoke_function),

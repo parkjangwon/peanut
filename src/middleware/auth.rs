@@ -21,6 +21,16 @@ pub async fn auth_middleware(
         .get("Authorization")
         .and_then(|h| h.to_str().ok());
 
+    let claims = authenticate_bearer_token(&state, auth_header).await?;
+    req.extensions_mut().insert(claims);
+
+    Ok(next.run(req).await)
+}
+
+pub async fn authenticate_bearer_token(
+    state: &crate::AppState,
+    auth_header: Option<&str>,
+) -> Result<crate::auth::jwt::Claims, Response> {
     let token = auth_header
         .and_then(|h| h.strip_prefix("Bearer "))
         .ok_or_else(|| json_error(StatusCode::UNAUTHORIZED, "missing bearer token"))?;
@@ -46,11 +56,9 @@ pub async fn auth_middleware(
         return Err(json_error(StatusCode::UNAUTHORIZED, "user is not active"));
     }
 
-    req.extensions_mut().insert(crate::auth::jwt::Claims {
+    Ok(crate::auth::jwt::Claims {
         sub: user.id,
         exp: token_claims.exp,
         is_admin: user.is_admin,
-    });
-
-    Ok(next.run(req).await)
+    })
 }

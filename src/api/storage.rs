@@ -307,8 +307,61 @@ pub async fn delete_bucket_object(
     }
 }
 
+pub async fn create_presigned_url(
+    Extension(claims): Extension<Claims>,
+    Path((bucket, key)): Path<(String, String)>,
+    headers: HeaderMap,
+    State(state): State<crate::AppState>,
+    Json(payload): Json<crate::middleware::s3_auth::PresignRequest>,
+) -> Response {
+    let base_url = request_base_url(&headers);
+    match build_presigned_url(
+        &base_url,
+        &claims.sub,
+        &bucket,
+        &key,
+        &payload,
+        state.jwt_secret.as_str(),
+    ) {
+        Ok(response) => (StatusCode::OK, Json(response)).into_response(),
+        Err(message) => json_error(StatusCode::BAD_REQUEST, message),
+    }
+}
+
 fn scoped_bucket(user_id: &str, bucket: &str) -> String {
     format!("{}/{}", user_id, bucket.trim().trim_matches('/'))
+}
+
+fn request_base_url(headers: &HeaderMap) -> String {
+    let scheme = headers
+        .get("x-forwarded-proto")
+        .and_then(|value| value.to_str().ok())
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or("http");
+    let host = headers
+        .get(header::HOST)
+        .and_then(|value| value.to_str().ok())
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or("localhost");
+    format!("{scheme}://{host}")
+}
+
+fn build_presigned_url(
+    base_url: &str,
+    access_key: &str,
+    bucket: &str,
+    key: &str,
+    payload: &crate::middleware::s3_auth::PresignRequest,
+    jwt_secret: &str,
+) -> Result<crate::middleware::s3_auth::PresignResponse, String> {
+    crate::middleware::s3_auth::build_presigned_url(
+        base_url,
+        access_key,
+        bucket,
+        key,
+        payload,
+        jwt_secret,
+    )
 }
 
 fn decode_continuation_token(token: Option<&str>) -> Result<Option<String>, String> {
@@ -721,6 +774,105 @@ mod tests {
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
         let xml = response_text(response).await;
         assert!(xml.contains("<Code>InvalidArgument</Code>"));
+    }
+
+    #[test]
+    fn test_presign_generates_sigv4_query_params() {
+        let request = crate::middleware::s3_auth::PresignRequest {
+            method: "GET".to_string(),
+            expires_in: Some(300),
+        };
+        let generated = build_presigned_url(
+            "https://example.com",
+            "user-123",
+            "assets",
+            "notes/file.txt",
+            &request,
+            "test-secret",
+        );
+        assert!(generated.is_ok());
+        let generated = generated.unwrap();
+        assert!(generated.url.contains("X-Amz-Algorithm=AWS4-HMAC-SHA256"));
+        assert!(generated.url.contains("X-Amz-Credential="));
+        assert!(generated.url.contains("X-Amz-Signature="));
+    }
+
+    #[tokio::test]
+    async fn test_presigned_get_round_trip_uses_sigv4_query_auth() {
+        let (state, _dir) = test_support::make_test_state().await;
+        let user = register_user(state.clone(), "presign@example.com").await;
+        let claims = claims_for(&user.user.id);
+
+        let put_response = put_bucket_object(
+            State(state.clone()),
+            Extension(claims.clone()),
+            axum::extract::Path(("assets".to_string(), "notes/file.txt".to_string())),
+            HeaderMap::new(),
+            Bytes::from_static(b"hello presign"),
+        )
+        .await;
+        assert_eq!(put_response.status(), StatusCode::OK);
+
+        let request = crate::middleware::s3_auth::PresignRequest {
+            method: "GET".to_string(),
+            expires_in: Some(300),
+        };
+        let generated = build_presigned_url(
+            "https://example.com",
+            &user.user.id,
+            "assets",
+            "notes/file.txt",
+            &request,
+            state.jwt_secret.as_str(),
+        )
+        .unwrap();
+
+        let app = axum::Router::new()
+            .route("/api/s3/:bucket/*key", axum::routing::get(get_bucket_object))
+            .layer(axum::middleware::from_fn_with_state(
+                state.clone(),
+                crate::middleware::s3_auth::s3_auth_middleware,
+            ))
+            .with_state(state);
+
+        let uri = generated
+            .url
+            .replace("https://example.com", "");
+        let response = tower::ServiceExt::oneshot(
+            app,
+            axum::http::Request::builder()
+                .uri(uri)
+                .header("host", "example.com")
+                .body(axum::body::Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn test_create_presigned_url_returns_json_payload() {
+        let (state, _dir) = test_support::make_test_state().await;
+        let user = register_user(state.clone(), "presign-json@example.com").await;
+        let claims = claims_for(&user.user.id);
+
+        let response = create_presigned_url(
+            Extension(claims),
+            axum::extract::Path(("assets".to_string(), "notes/file.txt".to_string())),
+            HeaderMap::new(),
+            State(state),
+            Json(crate::middleware::s3_auth::PresignRequest {
+                method: "GET".to_string(),
+                expires_in: Some(300),
+            }),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let payload: crate::middleware::s3_auth::PresignResponse =
+            test_support::response_json(response).await;
+        assert_eq!(payload.method, "GET");
+        assert!(payload.url.contains("X-Amz-Signature="));
     }
 
     #[tokio::test]
