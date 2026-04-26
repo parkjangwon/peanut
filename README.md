@@ -1,5 +1,7 @@
 # Peanut
 
+<img width="1376" height="768" alt="1777174518806" src="https://github.com/user-attachments/assets/d4a00c2e-8b5d-46a4-86e6-38220cb6e3fd" />
+
 Peanut is a small self-host backend runtime that ships as a single Rust binary.
 
 It is intentionally narrow:
