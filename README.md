@@ -49,6 +49,8 @@ Peanut is built around a few constraints:
   - revokes existing refresh sessions for that user after success
 - `GET /api/auth/sessions`
   - returns the current user's tracked auth sessions
+- `GET /api/auth/events`
+  - returns the current user's latest auth events for audit/debug visibility
 - `DELETE /api/auth/sessions/:session_id`
   - revokes a single tracked auth session
 - `POST /api/auth/sessions/revoke-all`
@@ -67,6 +69,7 @@ What this means for external frontend apps:
 - Peanut can now act as the app's auth backend for signup, login, session refresh, logout, password change, and password reset
 - access tokens stay short-lived while refresh tokens provide longer-lived sessions
 - refresh sessions are server-tracked and revoked on logout, password change, password reset, or admin deactivation
+- apps can inspect recent auth events through `GET /api/auth/events` to debug login/session/reset activity
 - see `docs/auth-client.md` for the integration guide and `examples/auth-client-web/` for a minimal browser example
 
 ### External auth client guide

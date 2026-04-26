@@ -25,6 +25,7 @@ Peanut이 현재 제공하는 엔드포인트:
 - `POST /api/auth/forgot-password`
 - `POST /api/auth/reset-password`
 - `GET /api/auth/sessions`
+- `GET /api/auth/events`
 - `DELETE /api/auth/sessions/:session_id`
 - `POST /api/auth/sessions/revoke-all`
 
@@ -33,6 +34,7 @@ Peanut이 현재 제공하는 엔드포인트:
 - refresh token은 서버가 추적하는 opaque token이다
 - `POST /api/auth/refresh` 호출 시 refresh token은 회전한다
 - logout, password change, password reset, admin deactivate 시 refresh session이 revoke된다
+- register/login/refresh/reset/session revoke/admin activation-deactivation 흐름은 auth event로 기록된다
 
 ## 2. 권장 프론트 연동 형태
 
@@ -128,21 +130,43 @@ content-type: application/json
 }
 ```
 
-### 세션 관리
+### 세션 관리와 auth event
 
 ```http
 GET /api/auth/sessions
-authorization: Bearer <access_token>
+authorization: Bearer ***
+```
+
+```http
+GET /api/auth/events
+authorization: Bearer ***
+```
+
+대표 event 응답:
+
+```json
+{
+  "events": [
+    {
+      "id": "uuid",
+      "user_id": "uuid",
+      "actor_user_id": "uuid",
+      "action": "user_deactivated",
+      "metadata": null,
+      "created_at": "2026-04-26 12:00:00"
+    }
+  ]
+}
 ```
 
 ```http
 DELETE /api/auth/sessions/<session_id>
-authorization: Bearer <access_token>
+authorization: Bearer ***
 ```
 
 ```http
 POST /api/auth/sessions/revoke-all
-authorization: Bearer <access_token>
+authorization: Bearer ***
 ```
 
 ## 4. 비밀번호 흐름

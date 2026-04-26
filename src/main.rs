@@ -120,6 +120,7 @@ async fn main() {
         .route("/me", get(api::auth::me))
         .route("/auth/change-password", post(api::auth::change_password))
         .route("/auth/sessions", get(api::auth::list_sessions))
+        .route("/auth/events", get(api::auth::list_auth_events))
         .route(
             "/auth/sessions/revoke-all",
             post(api::auth::revoke_all_sessions),

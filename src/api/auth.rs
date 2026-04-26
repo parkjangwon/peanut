@@ -9,6 +9,7 @@ use chrono::{DateTime, Duration, Utc};
 use openssl::sha::sha256;
 use rand::RngCore;
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use sqlx::FromRow;
 use uuid::Uuid;
 
@@ -102,6 +103,21 @@ pub struct SessionsResponse {
     pub sessions: Vec<AuthSessionSummary>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AuthEvent {
+    pub id: String,
+    pub user_id: String,
+    pub actor_user_id: Option<String>,
+    pub action: String,
+    pub metadata: Option<Value>,
+    pub created_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AuthEventsResponse {
+    pub events: Vec<AuthEvent>,
+}
+
 pub async fn register(
     State(state): State<crate::AppState>,
     Json(payload): Json<RegisterRequest>,
@@ -140,23 +156,33 @@ pub async fn register(
     .await;
 
     match result {
-        Ok(_) => (
-            StatusCode::CREATED,
-            Json(RegisterResponse {
-                message: if is_admin {
-                    "First user registered as active admin.".to_string()
-                } else {
-                    "User registered. Wait for admin approval.".to_string()
-                },
-                user: UserSummary {
-                    id,
-                    email: payload.email.trim().to_lowercase(),
-                    is_active,
-                    is_admin,
-                },
-            }),
-        )
-            .into_response(),
+        Ok(_) => {
+            let _ = record_auth_event(
+                pool,
+                &id,
+                Some(&id),
+                "user_registered",
+                None,
+            )
+            .await;
+            (
+                StatusCode::CREATED,
+                Json(RegisterResponse {
+                    message: if is_admin {
+                        "First user registered as active admin.".to_string()
+                    } else {
+                        "User registered. Wait for admin approval.".to_string()
+                    },
+                    user: UserSummary {
+                        id,
+                        email: payload.email.trim().to_lowercase(),
+                        is_active,
+                        is_admin,
+                    },
+                }),
+            )
+                .into_response()
+        }
         Err(_) => json_error(StatusCode::CONFLICT, "email already exists"),
     }
 }
@@ -184,7 +210,17 @@ pub async fn login(
     }
 
     match issue_login_response(&state, user.summary()).await {
-        Ok(response) => (StatusCode::OK, Json(response)).into_response(),
+        Ok(response) => {
+            let _ = record_auth_event(
+                &state.pool,
+                &user.id,
+                Some(&user.id),
+                "login_succeeded",
+                Some(serde_json::json!({ "session_id": response.refresh_token.clone() })),
+            )
+            .await;
+            (StatusCode::OK, Json(response)).into_response()
+        }
         Err(message) => json_error(StatusCode::INTERNAL_SERVER_ERROR, message),
     }
 }
@@ -220,6 +256,14 @@ pub async fn refresh_session(
                 state.jwt_secret.as_str(),
                 expires_at,
             );
+            let _ = record_auth_event(
+                &state.pool,
+                &user.id,
+                Some(&user.id),
+                "session_refreshed",
+                Some(serde_json::json!({ "session_id": stored_token.session_id.clone() })),
+            )
+            .await;
             (
                 StatusCode::OK,
                 Json(LoginResponse {
@@ -240,7 +284,23 @@ pub async fn logout(
     State(state): State<crate::AppState>,
     Json(payload): Json<RefreshTokenRequest>,
 ) -> Response {
+    let stored_token = load_active_refresh_token(&state.pool, &payload.refresh_token)
+        .await
+        .unwrap_or(None);
+
     let _ = revoke_refresh_token(&state.pool, &payload.refresh_token).await;
+
+    if let Some(stored_token) = stored_token {
+        let _ = record_auth_event(
+            &state.pool,
+            &stored_token.user_id,
+            Some(&stored_token.user_id),
+            "logged_out",
+            Some(serde_json::json!({ "session_id": stored_token.session_id })),
+        )
+        .await;
+    }
+
     json_message(StatusCode::OK, "logged out")
 }
 
@@ -282,6 +342,14 @@ pub async fn change_password(
     }
 
     let _ = revoke_all_refresh_tokens_for_user(&state.pool, &user.id).await;
+    let _ = record_auth_event(
+        &state.pool,
+        &user.id,
+        Some(&user.id),
+        "password_changed",
+        None,
+    )
+    .await;
     json_message(StatusCode::OK, "password updated")
 }
 
@@ -314,6 +382,16 @@ pub async fn forgot_password(
                 &user.email,
                 &reset_token,
             );
+            let _ = record_auth_event(
+                &state.pool,
+                &user.id,
+                Some(&user.id),
+                "password_reset_requested",
+                Some(serde_json::json!({
+                    "delivery": password_reset_delivery_label(&state.password_reset_delivery),
+                })),
+            )
+            .await;
             (
                 StatusCode::OK,
                 Json(ForgotPasswordResponse {
@@ -364,6 +442,14 @@ pub async fn reset_password(
 
     let _ = consume_password_reset_token_hash(&state.pool, &reset_record.token).await;
     let _ = revoke_all_refresh_tokens_for_user(&state.pool, &reset_record.user_id).await;
+    let _ = record_auth_event(
+        &state.pool,
+        &reset_record.user_id,
+        Some(&reset_record.user_id),
+        "password_reset_completed",
+        None,
+    )
+    .await;
     json_message(StatusCode::OK, "password reset complete")
 }
 
@@ -398,6 +484,19 @@ pub async fn list_sessions(
     }
 }
 
+pub async fn list_auth_events(
+    State(state): State<crate::AppState>,
+    Extension(claims): Extension<crate::auth::jwt::Claims>,
+) -> Response {
+    match load_auth_events_for_user(&state.pool, &claims.sub).await {
+        Ok(events) => (StatusCode::OK, Json(AuthEventsResponse { events })).into_response(),
+        Err(_) => json_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "failed to load auth events",
+        ),
+    }
+}
+
 pub async fn revoke_session(
     State(state): State<crate::AppState>,
     Extension(claims): Extension<crate::auth::jwt::Claims>,
@@ -405,7 +504,17 @@ pub async fn revoke_session(
 ) -> Response {
     match revoke_session_for_user(&state.pool, &claims.sub, &session_id).await {
         Ok(0) => json_error(StatusCode::NOT_FOUND, "auth session not found"),
-        Ok(_) => json_message(StatusCode::OK, "auth session revoked"),
+        Ok(_) => {
+            let _ = record_auth_event(
+                &state.pool,
+                &claims.sub,
+                Some(&claims.sub),
+                "auth_session_revoked",
+                Some(serde_json::json!({ "session_id": session_id })),
+            )
+            .await;
+            json_message(StatusCode::OK, "auth session revoked")
+        }
         Err(_) => json_error(
             StatusCode::INTERNAL_SERVER_ERROR,
             "failed to revoke auth session",
@@ -418,7 +527,17 @@ pub async fn revoke_all_sessions(
     Extension(claims): Extension<crate::auth::jwt::Claims>,
 ) -> Response {
     match revoke_all_refresh_tokens_for_user(&state.pool, &claims.sub).await {
-        Ok(_) => json_message(StatusCode::OK, "all auth sessions revoked"),
+        Ok(_) => {
+            let _ = record_auth_event(
+                &state.pool,
+                &claims.sub,
+                Some(&claims.sub),
+                "all_auth_sessions_revoked",
+                None,
+            )
+            .await;
+            json_message(StatusCode::OK, "all auth sessions revoked")
+        }
         Err(_) => json_error(
             StatusCode::INTERNAL_SERVER_ERROR,
             "failed to revoke auth sessions",
@@ -606,6 +725,59 @@ async fn load_sessions_for_user(
     .await
 }
 
+pub(crate) async fn record_auth_event(
+    pool: &sqlx::SqlitePool,
+    user_id: &str,
+    actor_user_id: Option<&str>,
+    action: &str,
+    metadata: Option<Value>,
+) -> Result<(), sqlx::Error> {
+    let metadata_json = metadata.map(|value| value.to_string());
+    sqlx::query(
+        "INSERT INTO auth_events (id, user_id, actor_user_id, action, metadata_json, created_at) VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)",
+    )
+    .bind(Uuid::new_v4().to_string())
+    .bind(user_id)
+    .bind(actor_user_id)
+    .bind(action)
+    .bind(metadata_json)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+async fn load_auth_events_for_user(
+    pool: &sqlx::SqlitePool,
+    user_id: &str,
+) -> Result<Vec<AuthEvent>, sqlx::Error> {
+    let rows = sqlx::query_as::<_, StoredAuthEvent>(
+        r#"
+        SELECT id, user_id, actor_user_id, action, metadata_json, created_at
+        FROM auth_events
+        WHERE user_id = ?
+        ORDER BY created_at DESC, id DESC
+        LIMIT 100
+        "#,
+    )
+    .bind(user_id)
+    .fetch_all(pool)
+    .await?;
+
+    Ok(rows
+        .into_iter()
+        .map(|row| AuthEvent {
+            id: row.id,
+            user_id: row.user_id,
+            actor_user_id: row.actor_user_id,
+            action: row.action,
+            metadata: row
+                .metadata_json
+                .and_then(|value| serde_json::from_str::<Value>(&value).ok()),
+            created_at: row.created_at,
+        })
+        .collect())
+}
+
 fn password_reset_delivery_label(delivery: &crate::config::PasswordResetDelivery) -> &'static str {
     match delivery {
         crate::config::PasswordResetDelivery::Inline => "inline",
@@ -786,6 +958,16 @@ struct StoredRefreshToken {
 struct StoredPasswordResetToken {
     token: String,
     user_id: String,
+}
+
+#[derive(Debug, Clone, FromRow)]
+struct StoredAuthEvent {
+    id: String,
+    user_id: String,
+    actor_user_id: Option<String>,
+    action: String,
+    metadata_json: Option<String>,
+    created_at: String,
 }
 
 #[cfg(test)]
@@ -1176,6 +1358,129 @@ mod tests {
             .sessions
             .iter()
             .all(|session| !session.is_active));
+    }
+
+    #[tokio::test]
+    async fn test_auth_events_capture_user_and_admin_flows() {
+        let (state, _dir) = test_support::make_test_state().await;
+
+        let admin_register = register(
+            State(state.clone()),
+            Json(RegisterRequest {
+                email: "admin@example.com".to_string(),
+                password: "secret123".to_string(),
+            }),
+        )
+        .await;
+        let admin_body: RegisterResponse = test_support::response_json(admin_register).await;
+
+        let member_register = register(
+            State(state.clone()),
+            Json(RegisterRequest {
+                email: "member@example.com".to_string(),
+                password: "secret123".to_string(),
+            }),
+        )
+        .await;
+        let member_body: RegisterResponse = test_support::response_json(member_register).await;
+
+        let activate_response = crate::api::admin::activate_user(
+            State(state.clone()),
+            Extension(crate::auth::jwt::Claims {
+                sub: admin_body.user.id.clone(),
+                exp: 9999999999,
+                is_admin: true,
+            }),
+            axum::extract::Path(member_body.user.id.clone()),
+        )
+        .await;
+        assert_eq!(activate_response.status(), StatusCode::OK);
+
+        let login_response = login(
+            State(state.clone()),
+            Json(LoginRequest {
+                email: "member@example.com".to_string(),
+                password: "secret123".to_string(),
+            }),
+        )
+        .await;
+        let login_body: LoginResponse = test_support::response_json(login_response).await;
+
+        let forgot_response = forgot_password(
+            State(state.clone()),
+            Json(ForgotPasswordRequest {
+                email: "member@example.com".to_string(),
+            }),
+        )
+        .await;
+        let forgot_body: ForgotPasswordResponse = test_support::response_json(forgot_response).await;
+
+        let reset_response = reset_password(
+            State(state.clone()),
+            Json(ResetPasswordRequest {
+                reset_token: forgot_body.reset_token,
+                new_password: "reset-secret-123".to_string(),
+            }),
+        )
+        .await;
+        assert_eq!(reset_response.status(), StatusCode::OK);
+
+        let deactivate_response = crate::api::admin::deactivate_user(
+            State(state.clone()),
+            Extension(crate::auth::jwt::Claims {
+                sub: admin_body.user.id.clone(),
+                exp: 9999999999,
+                is_admin: true,
+            }),
+            axum::extract::Path(member_body.user.id.clone()),
+        )
+        .await;
+        assert_eq!(deactivate_response.status(), StatusCode::OK);
+
+        let events_response = list_auth_events(
+            State(state),
+            Extension(crate::auth::jwt::Claims {
+                sub: member_body.user.id,
+                exp: 9999999999,
+                is_admin: false,
+            }),
+        )
+        .await;
+        assert_eq!(events_response.status(), StatusCode::OK);
+        let events_body: AuthEventsResponse = test_support::response_json(events_response).await;
+        let actions: Vec<&str> = events_body.events.iter().map(|event| event.action.as_str()).collect();
+        assert!(actions.contains(&"user_registered"));
+        assert!(actions.contains(&"user_activated"));
+        assert!(actions.contains(&"login_succeeded"));
+        assert!(actions.contains(&"password_reset_requested"));
+        assert!(actions.contains(&"password_reset_completed"));
+        assert!(actions.contains(&"user_deactivated"));
+
+        let deactivate_event = events_body
+            .events
+            .iter()
+            .find(|event| event.action == "user_deactivated")
+            .unwrap();
+        assert_eq!(
+            deactivate_event.actor_user_id.as_deref(),
+            Some(admin_body.user.id.as_str())
+        );
+
+        let reset_event = events_body
+            .events
+            .iter()
+            .find(|event| event.action == "password_reset_requested")
+            .unwrap();
+        assert_eq!(
+            reset_event
+                .metadata
+                .as_ref()
+                .and_then(|metadata| metadata.get("delivery"))
+                .and_then(|value| value.as_str()),
+            Some("inline")
+        );
+
+        assert_ne!(login_body.refresh_token, "");
     }
 
     #[tokio::test]

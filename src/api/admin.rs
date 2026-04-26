@@ -52,7 +52,7 @@ pub async fn activate_user(
         return json_error(StatusCode::FORBIDDEN, "admin access required");
     }
 
-    set_user_active(&state.pool, &user_id, true, "activate").await
+    set_user_active(&state.pool, &claims.sub, &user_id, true, "activate", "user_activated").await
 }
 
 pub async fn deactivate_user(
@@ -64,14 +64,24 @@ pub async fn deactivate_user(
         return json_error(StatusCode::FORBIDDEN, "admin access required");
     }
 
-    set_user_active(&state.pool, &user_id, false, "deactivate").await
+    set_user_active(
+        &state.pool,
+        &claims.sub,
+        &user_id,
+        false,
+        "deactivate",
+        "user_deactivated",
+    )
+    .await
 }
 
 async fn set_user_active(
     pool: &sqlx::SqlitePool,
+    actor_user_id: &str,
     user_id: &str,
     is_active: bool,
     action: &str,
+    event_action: &str,
 ) -> Response {
     match sqlx::query("UPDATE users SET is_active = ? WHERE id = ?")
         .bind(is_active)
@@ -82,7 +92,17 @@ async fn set_user_active(
         Ok(result) if result.rows_affected() == 0 => {
             json_error(StatusCode::NOT_FOUND, "user not found")
         }
-        Ok(_) => json_message(StatusCode::OK, format!("{}d user {}", action, user_id)),
+        Ok(_) => {
+            let _ = crate::api::auth::record_auth_event(
+                pool,
+                user_id,
+                Some(actor_user_id),
+                event_action,
+                None,
+            )
+            .await;
+            json_message(StatusCode::OK, format!("{}d user {}", action, user_id))
+        }
         Err(_) => json_error(
             StatusCode::INTERNAL_SERVER_ERROR,
             format!("failed to {} user", action),

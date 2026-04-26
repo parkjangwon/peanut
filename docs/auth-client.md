@@ -25,6 +25,7 @@ Peanut currently provides:
 - `POST /api/auth/forgot-password`
 - `POST /api/auth/reset-password`
 - `GET /api/auth/sessions`
+- `GET /api/auth/events`
 - `DELETE /api/auth/sessions/:session_id`
 - `POST /api/auth/sessions/revoke-all`
 
@@ -33,6 +34,7 @@ Current behavior:
 - refresh tokens are server-tracked opaque tokens
 - refresh tokens rotate on `POST /api/auth/refresh`
 - refresh sessions are revoked on logout, password change, password reset, and admin deactivation
+- auth events are recorded for register, login, refresh, reset, session revoke, and admin activation/deactivation flows
 
 ## 2. Recommended frontend integration shape
 
@@ -128,21 +130,43 @@ content-type: application/json
 }
 ```
 
-### Sessions
+### Sessions and auth events
 
 ```http
 GET /api/auth/sessions
-authorization: Bearer <access_token>
+authorization: Bearer ***
+```
+
+```http
+GET /api/auth/events
+authorization: Bearer ***
+```
+
+Typical event response:
+
+```json
+{
+  "events": [
+    {
+      "id": "uuid",
+      "user_id": "uuid",
+      "actor_user_id": "uuid",
+      "action": "user_deactivated",
+      "metadata": null,
+      "created_at": "2026-04-26 12:00:00"
+    }
+  ]
+}
 ```
 
 ```http
 DELETE /api/auth/sessions/<session_id>
-authorization: Bearer <access_token>
+authorization: Bearer ***
 ```
 
 ```http
 POST /api/auth/sessions/revoke-all
-authorization: Bearer <access_token>
+authorization: Bearer ***
 ```
 
 ## 4. Password flows
