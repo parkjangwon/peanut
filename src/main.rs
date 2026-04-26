@@ -31,6 +31,7 @@ pub struct AppState {
     pub auth_allowed_origins: Arc<Vec<String>>,
     pub auth_allowed_client_ids: Arc<Vec<String>>,
     pub function_event_sender: tokio::sync::broadcast::Sender<crate::api::functions::FunctionRealtimeEvent>,
+    pub data_event_sender: tokio::sync::broadcast::Sender<crate::api::data::DataRowRealtimeEvent>,
 }
 
 #[tokio::main]
@@ -57,6 +58,7 @@ async fn main() {
         auth_allowed_origins: Arc::new(config.auth_allowed_origins.clone()),
         auth_allowed_client_ids: Arc::new(config.auth_allowed_client_ids.clone()),
         function_event_sender: tokio::sync::broadcast::channel(256).0,
+        data_event_sender: tokio::sync::broadcast::channel(256).0,
     };
 
     let pool_clone = state.pool.clone();
@@ -133,6 +135,10 @@ async fn main() {
         .route(
             "/data/tables/:table/events",
             get(api::data::list_row_events),
+        )
+        .route(
+            "/data/tables/:table/events/stream",
+            get(api::data::stream_row_events),
         )
         .route("/data/tables/:table/rows/:row_id", get(api::data::get_row))
         .route(

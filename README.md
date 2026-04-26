@@ -102,6 +102,7 @@ Current capabilities:
 - `GET /api/data/tables/:table/rows`
 - `POST /api/data/tables/:table/rows`
 - `GET /api/data/tables/:table/events`
+- `GET /api/data/tables/:table/events/stream`
 - `GET /api/data/tables/:table/rows/:row_id`
 - `PATCH /api/data/tables/:table/rows/:row_id`
 - `DELETE /api/data/tables/:table/rows/:row_id`
@@ -111,6 +112,7 @@ Current model:
 - rows are stored in Peanut-managed SQLite tables
 - `owner_private` policy isolates rows per authenticated user
 - row mutations are recorded in an internal event log
+- admin APIs can subscribe to row mutation events through `GET /api/data/tables/:table/events/stream` (SSE)
 - table snapshots can be exported and re-imported through bounded admin APIs
 - schema updates now follow safe evolution rules:
   - existing field types cannot change in place
@@ -389,6 +391,12 @@ What to expect:
 Admin snapshot export:
 - returns table metadata plus normalized rows
 - useful for backups, migration between environments, or fixture generation
+
+### `GET /api/data/tables/:table/events/stream`
+Admin row realtime stream:
+- SSE endpoint for row mutation events
+- emits insert, update, delete events as they happen
+- useful for operator dashboards or live sync workers
 
 ### `POST /api/data/tables/:table/import`
 Admin snapshot import:

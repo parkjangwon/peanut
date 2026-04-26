@@ -103,6 +103,7 @@ Peanut은 이제 Peanut이 관리하는 logical table용 제한된 SQLite 기반
 - `GET /api/data/tables/:table/rows`
 - `POST /api/data/tables/:table/rows`
 - `GET /api/data/tables/:table/events`
+- `GET /api/data/tables/:table/events/stream`
 - `GET /api/data/tables/:table/rows/:row_id`
 - `PATCH /api/data/tables/:table/rows/:row_id`
 - `DELETE /api/data/tables/:table/rows/:row_id`
@@ -112,6 +113,7 @@ Peanut은 이제 Peanut이 관리하는 logical table용 제한된 SQLite 기반
 - row는 Peanut이 관리하는 SQLite 테이블에 저장된다
 - `owner_private` 정책은 인증 유저별 row 격리를 제공한다
 - row 변경은 내부 이벤트 로그에 기록된다
+- admin API로 `GET /api/data/tables/:table/events/stream`에서 row mutation 실시간 이벤트를 SSE로 구독할 수 있다
 - bounded admin API로 table snapshot export/import가 가능하다
 - schema 업데이트는 이제 안전한 진화 규칙을 따른다:
   - 기존 field type은 in-place 변경할 수 없다
@@ -385,6 +387,12 @@ Peanut은 현재 API-first 모드로 동작한다.
 admin snapshot export:
 - table 메타데이터와 정규화된 row를 함께 반환한다
 - 백업, 환경 간 마이그레이션, fixture 생성에 쓸 수 있다
+
+### `GET /api/data/tables/:table/events/stream`
+admin row realtime stream:
+- row mutation 이벤트용 SSE endpoint
+- insert, update, delete 이벤트를 실시간으로 흘려준다
+- 운영 대시보드나 live sync worker에 유용하다
 
 ### `POST /api/data/tables/:table/import`
 admin snapshot import:

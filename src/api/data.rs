@@ -1,14 +1,18 @@
-use std::collections::BTreeMap;
+use std::{collections::BTreeMap, convert::Infallible};
 
 use axum::{
     extract::{Path, Query, State},
     http::StatusCode,
-    response::{IntoResponse, Response},
+    response::{
+        sse::{Event, KeepAlive, Sse},
+        IntoResponse, Response,
+    },
     Extension, Json,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use sqlx::FromRow;
+use tokio_stream::{wrappers::BroadcastStream, StreamExt};
 use uuid::Uuid;
 
 use crate::api::common::{json_error, json_message};
@@ -74,6 +78,16 @@ pub struct DataRowResponse {
     pub data: Value,
     pub created_at: String,
     pub updated_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DataRowRealtimeEvent {
+    pub event: String,
+    pub table_name: String,
+    pub row_id: String,
+    pub actor_user_id: String,
+    pub action: String,
+    pub diff: Option<Value>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -443,6 +457,7 @@ pub async fn create_row(
     match insert_result {
         Ok(_) => {
             let _ = record_row_event(&state.pool, &table.id, &row_id, &claims.sub, "insert", Some(&normalized)).await;
+            emit_data_row_event(&state, &table.name, &row_id, &claims.sub, "insert", Some(&normalized));
             match load_row(&state.pool, &table.id, &row_id).await {
                 Ok(row) => (StatusCode::CREATED, Json(DataRowResponse::from_record(row))).into_response(),
                 Err(LoadRowError::NotFound) => json_error(StatusCode::INTERNAL_SERVER_ERROR, "created row could not be reloaded"),
@@ -588,6 +603,34 @@ pub async fn list_row_events(
     (StatusCode::OK, Json(DataRowEventsResponse { events })).into_response()
 }
 
+pub async fn stream_row_events(
+    State(state): State<crate::AppState>,
+    Extension(claims): Extension<Claims>,
+    Path(table): Path<String>,
+) -> Response {
+    if !claims.is_admin {
+        return json_error(StatusCode::FORBIDDEN, "admin access required");
+    }
+
+    if let Err(LoadTableError::NotFound) = load_table(&state.pool, &table).await {
+        return json_error(StatusCode::NOT_FOUND, "data table not found");
+    }
+
+    let stream = BroadcastStream::new(state.data_event_sender.subscribe()).filter_map(move |message| match message {
+        Ok(event) if event.table_name == table => Some(Ok::<Event, Infallible>(
+            Event::default()
+                .event("data.row_changed")
+                .json_data(event)
+                .unwrap_or_else(|_| Event::default().data("{}")),
+        )),
+        _ => None,
+    });
+
+    Sse::new(stream)
+        .keep_alive(KeepAlive::new().interval(std::time::Duration::from_secs(15)))
+        .into_response()
+}
+
 pub async fn get_row(
     State(state): State<crate::AppState>,
     Extension(claims): Extension<Claims>,
@@ -673,6 +716,7 @@ pub async fn update_row(
     {
         Ok(_) => {
             let _ = record_row_event(&state.pool, &table.id, &row_id, &claims.sub, "update", Some(&normalized)).await;
+            emit_data_row_event(&state, &table.name, &row_id, &claims.sub, "update", Some(&normalized));
             match load_row(&state.pool, &table.id, &row_id).await {
                 Ok(row) => (StatusCode::OK, Json(DataRowResponse::from_record(row))).into_response(),
                 Err(LoadRowError::NotFound) => json_error(StatusCode::INTERNAL_SERVER_ERROR, "updated row could not be reloaded"),
@@ -715,6 +759,7 @@ pub async fn delete_row(
         Ok(_) => {
             let previous = parse_json(&existing.data_json).ok();
             let _ = record_row_event(&state.pool, &table.id, &row_id, &claims.sub, "delete", previous.as_ref()).await;
+            emit_data_row_event(&state, &table.name, &row_id, &claims.sub, "delete", previous.as_ref());
             json_message(StatusCode::OK, format!("deleted row {}", row_id))
         }
         Err(_) => json_error(StatusCode::INTERNAL_SERVER_ERROR, "failed to delete row"),
@@ -823,6 +868,7 @@ pub async fn import_rows(
         match insert_result {
             Ok(_) => {
                 let _ = record_row_event(&state.pool, &table.id, &row_id, &claims.sub, "insert", Some(&normalized)).await;
+                emit_data_row_event(&state, &table.name, &row_id, &claims.sub, "insert", Some(&normalized));
                 imported_count += 1;
             }
             Err(_) => return json_error(StatusCode::CONFLICT, "import row id already exists"),
@@ -830,6 +876,24 @@ pub async fn import_rows(
     }
 
     (StatusCode::CREATED, Json(TableImportResponse { imported_count })).into_response()
+}
+
+fn emit_data_row_event(
+    state: &crate::AppState,
+    table_name: &str,
+    row_id: &str,
+    actor_user_id: &str,
+    action: &str,
+    diff: Option<&Value>,
+) {
+    let _ = state.data_event_sender.send(DataRowRealtimeEvent {
+        event: "row.changed".to_string(),
+        table_name: table_name.to_string(),
+        row_id: row_id.to_string(),
+        actor_user_id: actor_user_id.to_string(),
+        action: action.to_string(),
+        diff: diff.cloned(),
+    });
 }
 
 fn validate_table_name(name: &str) -> Result<(), String> {
@@ -2170,5 +2234,67 @@ mod tests {
         let events_body: DataRowEventsResponse = test_support::response_json(events_response).await;
         assert_eq!(events_body.events.len(), 1);
         assert_eq!(events_body.events[0].action, "insert");
+    }
+
+    #[tokio::test]
+    async fn test_data_realtime_events_follow_row_mutations() {
+        let (state, _dir) = test_support::make_test_state().await;
+        let admin = register_user(state.clone(), "admin@example.com").await;
+        let mut events = state.data_event_sender.subscribe();
+
+        let create_table_response = create_table(
+            State(state.clone()),
+            Extension(claims(&admin.user.id, true)),
+            Json(todo_table_request()),
+        )
+        .await;
+        assert_eq!(create_table_response.status(), StatusCode::CREATED);
+
+        let create_row_response = create_row(
+            State(state.clone()),
+            Extension(claims(&admin.user.id, true)),
+            axum::extract::Path("todos".to_string()),
+            Json(CreateRowRequest {
+                data: json!({ "title": "buy milk" }),
+            }),
+        )
+        .await;
+        assert_eq!(create_row_response.status(), StatusCode::CREATED);
+        let created_row: DataRowResponse = test_support::response_json(create_row_response).await;
+
+        let update_row_response = update_row(
+            State(state.clone()),
+            Extension(claims(&admin.user.id, true)),
+            axum::extract::Path(("todos".to_string(), created_row.id.clone())),
+            Json(CreateRowRequest {
+                data: json!({ "done": true }),
+            }),
+        )
+        .await;
+        assert_eq!(update_row_response.status(), StatusCode::OK);
+
+        let delete_row_response = delete_row(
+            State(state.clone()),
+            Extension(claims(&admin.user.id, true)),
+            axum::extract::Path(("todos".to_string(), created_row.id.clone())),
+        )
+        .await;
+        assert_eq!(delete_row_response.status(), StatusCode::OK);
+
+        let mut actions = Vec::new();
+        for _ in 0..6 {
+            let event = tokio::time::timeout(std::time::Duration::from_secs(1), events.recv())
+                .await
+                .expect("timed out waiting for data realtime event")
+                .expect("failed to receive data realtime event");
+            if event.table_name == "todos" && event.row_id == created_row.id {
+                actions.push(event.action);
+                if actions.last().map(|s| s.as_str()) == Some("delete") {
+                    break;
+                }
+            }
+        }
+
+        assert_eq!(actions, vec!["insert", "update", "delete"]);
     }
 }
