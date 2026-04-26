@@ -156,8 +156,10 @@ Peanut은 이제 작은 백엔드 확장용 함수 런타임을 함께 제공한
 - function별 endpoint slug, invoke policy, env/secrets JSON, allowed origins, rate limit, timeout 설정
 - `POST /api/functions/endpoints/:endpoint_slug`로 authenticated / public / admin_only / api_key 정책 호출
 - 같은 endpoint에서 `async_invoke: true`로 inline sync 실행 또는 queued async 실행 선택 가능
+- admin API로 `GET /api/functions/:name/versions`에서 함수 버전 이력을 조회 가능
+- admin API로 `POST /api/functions/:name/versions/:version_number/rollback`에서 active 버전을 롤백 가능
 - temp working directory + timeout 제한을 둔 별도 Node subprocess 실행
-- invocation 로그를 SQLite에 저장하고, queued/running/succeeded/failed lifecycle, `invoke_mode`, 상세 조회/재실행까지 콘솔/API에서 가능
+- invocation 로그를 SQLite에 저장하고, queued/running/succeeded/failed lifecycle, `invoke_mode`, `function_version_id`, retry metadata, 상세 조회/재실행까지 콘솔/API에서 가능
 - authenticated function 안에서 사용할 수 있는 bounded Peanut host binding 제공:
   - `ctx.peanut.storage.list/get/put/delete`
   - `ctx.peanut.push.enqueue`

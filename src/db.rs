@@ -45,6 +45,8 @@ mod tests {
             "refresh_tokens",
             "password_reset_tokens",
             "auth_events",
+            "function_versions",
+            "function_version_secrets",
         ] {
             let exists: (i64,) = sqlx::query_as(
                 "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = ?",

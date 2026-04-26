@@ -90,6 +90,14 @@ async fn main() {
         .route("/functions/:name", patch(api::functions::update_function))
         .route("/functions/:name", delete(api::functions::delete_function))
         .route(
+            "/functions/:name/versions",
+            get(api::functions::list_function_versions),
+        )
+        .route(
+            "/functions/:name/versions/:version_number/rollback",
+            post(api::functions::rollback_function_version),
+        )
+        .route(
             "/functions/:name/invocations",
             get(api::functions::list_function_invocations),
         )

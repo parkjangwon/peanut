@@ -28,6 +28,8 @@ pub struct FunctionSummary {
     pub api_key_present: bool,
     pub timeout_ms: i64,
     pub enabled: bool,
+    pub active_version_number: i64,
+    pub secret_key_count: i64,
     pub updated_at: String,
 }
 
@@ -47,6 +49,9 @@ pub struct FunctionDetail {
     pub api_key_present: bool,
     pub timeout_ms: i64,
     pub enabled: bool,
+    pub active_version_number: i64,
+    pub active_version_id: String,
+    pub secret_key_count: i64,
     pub created_by: String,
     pub updated_by: String,
     pub created_at: String,
@@ -63,6 +68,9 @@ pub struct FunctionInvocation {
     pub error: Option<String>,
     pub duration_ms: Option<i64>,
     pub invoke_mode: String,
+    pub function_version_id: Option<String>,
+    pub retry_count: i64,
+    pub parent_invocation_id: Option<String>,
     pub created_at: String,
     pub finished_at: Option<String>,
 }
@@ -93,6 +101,52 @@ pub struct InvokeFunctionResponse {
     pub status: String,
     pub response: Value,
     pub duration_ms: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
+pub struct FunctionVersionSummary {
+    pub id: String,
+    pub function_id: String,
+    pub version_number: i64,
+    pub runtime: String,
+    pub invoke_policy: String,
+    pub timeout_ms: i64,
+    pub created_by: String,
+    pub created_at: String,
+    pub secret_key_count: i64,
+    pub is_active: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FunctionVersionsResponse {
+    pub versions: Vec<FunctionVersionSummary>,
+}
+
+#[allow(dead_code)]
+#[derive(Debug, Clone, FromRow)]
+struct LoadedFunctionVersion {
+    id: String,
+    function_id: String,
+    version_number: i64,
+    runtime: String,
+    source_code: String,
+    invoke_policy: String,
+    env_json: String,
+    api_key_hash: Option<String>,
+    allowed_origins_json: String,
+    rate_limit_per_minute: i64,
+    timeout_ms: i64,
+}
+
+#[derive(Debug, Clone)]
+struct InvocationContext {
+    invocation_id: String,
+    request_json: String,
+    invoke_mode: &'static str,
+    initial_status: &'static str,
+    function_version: LoadedFunctionVersion,
+    retry_count: i64,
+    parent_invocation_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -143,7 +197,7 @@ pub async fn list_functions(
     }
 
     match sqlx::query_as::<_, FunctionSummary>(
-        "SELECT id, name, display_name, endpoint_slug, runtime, invoke_policy, rate_limit_per_minute, CASE WHEN api_key_hash IS NULL OR api_key_hash = '' THEN 0 ELSE 1 END AS api_key_present, timeout_ms, enabled, updated_at FROM functions ORDER BY updated_at DESC, name ASC",
+        "SELECT id, name, display_name, endpoint_slug, runtime, invoke_policy, rate_limit_per_minute, CASE WHEN api_key_hash IS NULL OR api_key_hash = '' THEN 0 ELSE 1 END AS api_key_present, timeout_ms, enabled, active_version_number, secret_key_count, updated_at FROM functions ORDER BY updated_at DESC, name ASC",
     )
     .fetch_all(&state.pool)
     .await
@@ -168,11 +222,21 @@ pub async fn create_function(
     };
 
     let function_id = Uuid::new_v4().to_string();
+    let mut tx = match state.pool.begin().await {
+        Ok(tx) => tx,
+        Err(_) => {
+            return json_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "failed to start function transaction",
+            )
+        }
+    };
+
     let result = sqlx::query(
         r#"
         INSERT INTO functions (
-            id, name, display_name, endpoint_slug, runtime, source_code, invoke_policy, env_json, api_key_hash, allowed_origins_json, rate_limit_per_minute, timeout_ms, enabled, created_by, updated_by
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            id, name, display_name, endpoint_slug, runtime, source_code, invoke_policy, env_json, api_key_hash, allowed_origins_json, rate_limit_per_minute, timeout_ms, enabled, active_version_number, active_version_id, secret_key_count, created_by, updated_by
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, '', 0, ?, ?)
         "#,
     )
     .bind(&function_id)
@@ -190,26 +254,52 @@ pub async fn create_function(
     .bind(validated.enabled)
     .bind(&claims.sub)
     .bind(&claims.sub)
-    .execute(&state.pool)
+    .execute(&mut *tx)
     .await;
 
-    match result {
-        Ok(_) => match load_function_by_name(&state.pool, &validated.name).await {
-            Ok(function) => {
-                (StatusCode::CREATED, Json(FunctionResponse { function })).into_response()
-            }
-            Err(LoadFunctionError::NotFound) => json_error(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "created function could not be reloaded",
-            ),
-            Err(LoadFunctionError::QueryFailed) => json_error(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "failed to load created function",
-            ),
-        },
-        Err(_) => json_error(
+    if result.is_err() {
+        return json_error(
             StatusCode::CONFLICT,
             "function name or endpoint already exists",
+        );
+    }
+
+    let version = match insert_function_version(&mut tx, &function_id, 1, &validated, &claims.sub).await {
+        Ok(version) => version,
+        Err(_) => {
+            return json_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "failed to persist function version",
+            )
+        }
+    };
+
+    if activate_function_version(&mut tx, &function_id, &validated, &version, &claims.sub)
+        .await
+        .is_err()
+    {
+        return json_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "failed to activate function version",
+        );
+    }
+
+    if tx.commit().await.is_err() {
+        return json_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "failed to commit function create",
+        );
+    }
+
+    match load_function_by_name(&state.pool, &validated.name).await {
+        Ok(function) => (StatusCode::CREATED, Json(FunctionResponse { function })).into_response(),
+        Err(LoadFunctionError::NotFound) => json_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "created function could not be reloaded",
+        ),
+        Err(LoadFunctionError::QueryFailed) => json_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "failed to load created function",
         ),
     }
 }
@@ -229,6 +319,144 @@ pub async fn get_function(
         Err(LoadFunctionError::QueryFailed) => {
             json_error(StatusCode::INTERNAL_SERVER_ERROR, "failed to load function")
         }
+    }
+}
+
+pub async fn list_function_versions(
+    State(state): State<crate::AppState>,
+    Extension(claims): Extension<Claims>,
+    Path(name): Path<String>,
+) -> Response {
+    if let Some(response) = require_admin(&claims) {
+        return response;
+    }
+
+    let function = match load_function_by_name(&state.pool, &name).await {
+        Ok(function) => function,
+        Err(LoadFunctionError::NotFound) => {
+            return json_error(StatusCode::NOT_FOUND, "function not found")
+        }
+        Err(LoadFunctionError::QueryFailed) => {
+            return json_error(StatusCode::INTERNAL_SERVER_ERROR, "failed to load function")
+        }
+    };
+
+    match sqlx::query_as::<_, FunctionVersionSummary>(
+        r#"
+        SELECT
+            fv.id,
+            fv.function_id,
+            fv.version_number,
+            fv.runtime,
+            fv.invoke_policy,
+            fv.timeout_ms,
+            fv.created_by,
+            fv.created_at,
+            0 AS secret_key_count,
+            CASE WHEN fv.id = f.active_version_id THEN 1 ELSE 0 END AS is_active
+        FROM function_versions fv
+        JOIN functions f ON f.id = fv.function_id
+        WHERE fv.function_id = ?
+        ORDER BY fv.version_number DESC
+        "#,
+    )
+    .bind(&function.id)
+    .fetch_all(&state.pool)
+    .await
+    {
+        Ok(versions) => (StatusCode::OK, Json(FunctionVersionsResponse { versions })).into_response(),
+        Err(_) => json_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "failed to load function versions",
+        ),
+    }
+}
+
+pub async fn rollback_function_version(
+    State(state): State<crate::AppState>,
+    Extension(claims): Extension<Claims>,
+    Path((name, version_number)): Path<(String, i64)>,
+) -> Response {
+    if let Some(response) = require_admin(&claims) {
+        return response;
+    }
+
+    let function = match load_function_by_name(&state.pool, &name).await {
+        Ok(function) => function,
+        Err(LoadFunctionError::NotFound) => {
+            return json_error(StatusCode::NOT_FOUND, "function not found")
+        }
+        Err(LoadFunctionError::QueryFailed) => {
+            return json_error(StatusCode::INTERNAL_SERVER_ERROR, "failed to load function")
+        }
+    };
+
+    let version = match load_function_version_by_number(&state.pool, &function.id, version_number).await {
+        Ok(version) => version,
+        Err(LoadFunctionVersionError::NotFound) => {
+            return json_error(StatusCode::NOT_FOUND, "function version not found")
+        }
+        Err(LoadFunctionVersionError::QueryFailed) => {
+            return json_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "failed to load function version",
+            )
+        }
+    };
+
+    let validated = ValidatedFunction {
+        id: function.id.clone(),
+        name: function.name.clone(),
+        display_name: function.display_name.clone(),
+        endpoint_slug: function.endpoint_slug.clone(),
+        runtime: version.runtime.clone(),
+        source_code: version.source_code.clone(),
+        invoke_policy: version.invoke_policy.clone(),
+        env_json: version.env_json.clone(),
+        api_key_hash: version.api_key_hash.clone(),
+        allowed_origins_json: version.allowed_origins_json.clone(),
+        rate_limit_per_minute: version.rate_limit_per_minute,
+        timeout_ms: version.timeout_ms,
+        enabled: function.enabled,
+    };
+
+    let mut tx = match state.pool.begin().await {
+        Ok(tx) => tx,
+        Err(_) => {
+            return json_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "failed to start function transaction",
+            )
+        }
+    };
+
+    if activate_function_version(&mut tx, &function.id, &validated, &version, &claims.sub)
+        .await
+        .is_err()
+    {
+        return json_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "failed to activate function version",
+        );
+    }
+
+    if tx.commit().await.is_err() {
+        return json_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "failed to commit function rollback",
+        );
+    }
+
+    match load_function_by_name(&state.pool, &function.name).await {
+        Ok(function) => (StatusCode::OK, Json(FunctionResponse { function })).into_response(),
+        Err(LoadFunctionError::NotFound) => json_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "rolled back function could not be reloaded",
+        ),
+        Err(LoadFunctionError::QueryFailed) => json_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "failed to load rolled back function",
+        ),
     }
 }
 
@@ -252,44 +480,65 @@ pub async fn update_function(
         }
     };
 
-    let validated = match validate_update_payload(existing, payload) {
+    let validated = match validate_update_payload(existing.clone(), payload) {
         Ok(validated) => validated,
         Err(message) => return json_error(StatusCode::BAD_REQUEST, message),
     };
 
-    match sqlx::query(
-        r#"
-        UPDATE functions
-        SET display_name = ?, endpoint_slug = ?, runtime = ?, source_code = ?, invoke_policy = ?, env_json = ?, api_key_hash = ?, allowed_origins_json = ?, rate_limit_per_minute = ?, timeout_ms = ?, enabled = ?, updated_by = ?, updated_at = CURRENT_TIMESTAMP
-        WHERE id = ?
-        "#,
+    let next_version_number = existing.active_version_number + 1;
+    let mut tx = match state.pool.begin().await {
+        Ok(tx) => tx,
+        Err(_) => {
+            return json_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "failed to start function transaction",
+            )
+        }
+    };
+
+    let version = match insert_function_version(
+        &mut tx,
+        &validated.id,
+        next_version_number,
+        &validated,
+        &claims.sub,
     )
-    .bind(&validated.display_name)
-    .bind(&validated.endpoint_slug)
-    .bind(&validated.runtime)
-    .bind(&validated.source_code)
-    .bind(&validated.invoke_policy)
-    .bind(&validated.env_json)
-    .bind(validated.api_key_hash.as_deref())
-    .bind(&validated.allowed_origins_json)
-    .bind(validated.rate_limit_per_minute)
-    .bind(validated.timeout_ms)
-    .bind(validated.enabled)
-    .bind(&claims.sub)
-    .bind(&validated.id)
-    .execute(&state.pool)
     .await
     {
-        Ok(_) => match load_function_by_name(&state.pool, &validated.name).await {
-            Ok(function) => (StatusCode::OK, Json(FunctionResponse { function })).into_response(),
-            Err(LoadFunctionError::NotFound) => {
-                json_error(StatusCode::INTERNAL_SERVER_ERROR, "updated function could not be reloaded")
-            }
-            Err(LoadFunctionError::QueryFailed) => {
-                json_error(StatusCode::INTERNAL_SERVER_ERROR, "failed to load updated function")
-            }
-        },
-        Err(_) => json_error(StatusCode::CONFLICT, "function name or endpoint already exists"),
+        Ok(version) => version,
+        Err(_) => {
+            return json_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "failed to persist function version",
+            )
+        }
+    };
+
+    if activate_function_version(&mut tx, &validated.id, &validated, &version, &claims.sub)
+        .await
+        .is_err()
+    {
+        return json_error(
+            StatusCode::CONFLICT,
+            "function name or endpoint already exists",
+        );
+    }
+
+    if tx.commit().await.is_err() {
+        return json_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "failed to commit function update",
+        );
+    }
+
+    match load_function_by_name(&state.pool, &validated.name).await {
+        Ok(function) => (StatusCode::OK, Json(FunctionResponse { function })).into_response(),
+        Err(LoadFunctionError::NotFound) => {
+            json_error(StatusCode::INTERNAL_SERVER_ERROR, "updated function could not be reloaded")
+        }
+        Err(LoadFunctionError::QueryFailed) => {
+            json_error(StatusCode::INTERNAL_SERVER_ERROR, "failed to load updated function")
+        }
     }
 }
 
@@ -351,7 +600,7 @@ pub async fn list_function_invocations(
     };
 
     match sqlx::query_as::<_, FunctionInvocation>(
-        "SELECT id, function_id, status, request_json, response_json, error, duration_ms, invoke_mode, created_at, finished_at FROM function_invocations WHERE function_id = ? ORDER BY created_at DESC LIMIT 20",
+        "SELECT id, function_id, status, request_json, response_json, error, duration_ms, invoke_mode, function_version_id, retry_count, parent_invocation_id, created_at, finished_at FROM function_invocations WHERE function_id = ? ORDER BY created_at DESC LIMIT 20",
     )
     .bind(&function.id)
     .fetch_all(&state.pool)
@@ -433,7 +682,37 @@ pub async fn retry_function_invocation(
         .as_deref()
         .map(|raw| serde_json::from_str(raw).unwrap_or(Value::Null))
         .unwrap_or(Value::Null);
-    run_function_invocation(&state, &function, Some(claims), input, false).await
+    let function_version = match invocation.function_version_id.as_deref() {
+        Some(version_id) => match load_function_version_by_id(&state.pool, version_id).await {
+            Ok(version) => version,
+            Err(_) => {
+                return json_error(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "failed to load function version",
+                )
+            }
+        },
+        None => match load_function_version_by_id(&state.pool, &function.active_version_id).await {
+            Ok(version) => version,
+            Err(_) => {
+                return json_error(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "failed to load active function version",
+                )
+            }
+        },
+    };
+    run_function_invocation_with_version(
+        &state,
+        &function,
+        function_version,
+        Some(claims),
+        input,
+        false,
+        invocation.retry_count + 1,
+        Some(invocation.id),
+    )
+    .await
 }
 
 pub async fn invoke_function(
@@ -470,22 +749,37 @@ pub async fn invoke_function(
     }
 
     let auth_claims = claims.map(|Extension(claims)| claims);
-    run_function_invocation(
+    let function_version = match load_function_version_by_id(&state.pool, &function.active_version_id).await {
+        Ok(version) => version,
+        Err(_) => {
+            return json_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "failed to load active function version",
+            )
+        }
+    };
+    run_function_invocation_with_version(
         &state,
         &function,
+        function_version,
         auth_claims,
         payload.input,
         payload.async_invoke.unwrap_or(false),
+        0,
+        None,
     )
     .await
 }
 
-async fn run_function_invocation(
+async fn run_function_invocation_with_version(
     state: &crate::AppState,
     function: &FunctionDetail,
+    function_version: LoadedFunctionVersion,
     claims: Option<Claims>,
     input: Value,
     async_invoke: bool,
+    retry_count: i64,
+    parent_invocation_id: Option<String>,
 ) -> Response {
     let invocation_id = Uuid::new_v4().to_string();
     let request_json = match serde_json::to_string(&input) {
@@ -498,17 +792,27 @@ async fn run_function_invocation(
         }
     };
 
-    let initial_status = if async_invoke { "queued" } else { "running" };
-    let invoke_mode = if async_invoke { "async" } else { "sync" };
+    let invocation = InvocationContext {
+        invocation_id: invocation_id.clone(),
+        request_json,
+        invoke_mode: if async_invoke { "async" } else { "sync" },
+        initial_status: if async_invoke { "queued" } else { "running" },
+        function_version,
+        retry_count,
+        parent_invocation_id,
+    };
 
     if sqlx::query(
-        "INSERT INTO function_invocations (id, function_id, status, request_json, invoke_mode) VALUES (?, ?, ?, ?, ?)",
+        "INSERT INTO function_invocations (id, function_id, status, request_json, invoke_mode, function_version_id, retry_count, parent_invocation_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
     )
-    .bind(&invocation_id)
+    .bind(&invocation.invocation_id)
     .bind(&function.id)
-    .bind(initial_status)
-    .bind(&request_json)
-    .bind(invoke_mode)
+    .bind(invocation.initial_status)
+    .bind(&invocation.request_json)
+    .bind(invocation.invoke_mode)
+    .bind(&invocation.function_version.id)
+    .bind(invocation.retry_count)
+    .bind(invocation.parent_invocation_id.as_deref())
     .execute(&state.pool)
     .await
     .is_err()
@@ -518,20 +822,21 @@ async fn run_function_invocation(
 
     if async_invoke {
         let state = state.clone();
-        let function = function.clone();
+        let function_name = function.name.clone();
         let claims = claims.clone();
-        let invocation_id_for_task = invocation_id.clone();
+        let invocation_for_task = invocation.clone();
+        let input_for_task = input.clone();
         tokio::spawn(async move {
             let _ = sqlx::query("UPDATE function_invocations SET status = 'running' WHERE id = ?")
-                .bind(&invocation_id_for_task)
+                .bind(&invocation_for_task.invocation_id)
                 .execute(&state.pool)
                 .await;
             let _ = execute_and_finalize_invocation(
                 &state,
-                &function,
+                &function_name,
+                invocation_for_task,
                 claims,
-                input,
-                &invocation_id_for_task,
+                input_for_task,
             )
             .await;
         });
@@ -545,10 +850,10 @@ async fn run_function_invocation(
                 duration_ms: 0,
             }),
         )
-            .into_response();
+        .into_response();
     }
 
-    match execute_and_finalize_invocation(state, function, claims, input, &invocation_id).await {
+    match execute_and_finalize_invocation(state, &function.name, invocation, claims, input).await {
         Ok((response, duration_ms)) => (
             StatusCode::OK,
             Json(InvokeFunctionResponse {
@@ -558,34 +863,34 @@ async fn run_function_invocation(
                 duration_ms,
             }),
         )
-            .into_response(),
+        .into_response(),
         Err(error) => json_error(StatusCode::INTERNAL_SERVER_ERROR, error),
     }
 }
 
 async fn execute_and_finalize_invocation(
     state: &crate::AppState,
-    function: &FunctionDetail,
+    function_name: &str,
+    invocation: InvocationContext,
     claims: Option<Claims>,
     input: Value,
-    invocation_id: &str,
 ) -> Result<(Value, i64), String> {
     let auth_payload = match claims.as_ref() {
         Some(claims) => serde_json::json!({ "user_id": claims.sub, "is_admin": claims.is_admin }),
         None => Value::Null,
     };
     let env_payload =
-        serde_json::to_value(parse_env_map(&function.env_json)).unwrap_or(Value::Null);
+        serde_json::to_value(parse_env_map(&invocation.function_version.env_json)).unwrap_or(Value::Null);
     let sandbox_state = state.clone();
     let sandbox_result = execute_in_sandbox(
         SandboxExecutionRequest {
-            runtime: &function.runtime,
-            source_code: &function.source_code,
-            function_name: &function.name,
+            runtime: &invocation.function_version.runtime,
+            source_code: &invocation.function_version.source_code,
+            function_name,
             request_payload: input,
             auth_payload,
             env_payload,
-            timeout_ms: function.timeout_ms,
+            timeout_ms: invocation.function_version.timeout_ms,
         },
         &env::temp_dir(),
         &sandbox_state,
@@ -600,7 +905,7 @@ async fn execute_and_finalize_invocation(
                 Err(_) => {
                     let _ = mark_invocation_failed(
                         &state.pool,
-                        invocation_id,
+                        &invocation.invocation_id,
                         "function returned non-serializable data",
                         result.duration_ms,
                     )
@@ -612,7 +917,7 @@ async fn execute_and_finalize_invocation(
                 .bind(&response_json)
                 .bind(compose_log_text(&result.stdout, &result.stderr))
                 .bind(result.duration_ms)
-                .bind(invocation_id)
+                .bind(&invocation.invocation_id)
                 .execute(&state.pool)
                 .await;
             Ok((result.response_json, result.duration_ms))
@@ -620,9 +925,9 @@ async fn execute_and_finalize_invocation(
         Err(error) => {
             let _ = mark_invocation_failed(
                 &state.pool,
-                invocation_id,
+                &invocation.invocation_id,
                 &error,
-                function.timeout_ms,
+                invocation.function_version.timeout_ms,
             )
             .await;
             Err(error)
@@ -779,6 +1084,85 @@ struct ValidatedFunction {
     rate_limit_per_minute: i64,
     timeout_ms: i64,
     enabled: bool,
+}
+
+async fn insert_function_version(
+    tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+    function_id: &str,
+    version_number: i64,
+    validated: &ValidatedFunction,
+    created_by: &str,
+) -> Result<LoadedFunctionVersion, sqlx::Error> {
+    let version_id = Uuid::new_v4().to_string();
+    sqlx::query(
+        r#"
+        INSERT INTO function_versions (
+            id, function_id, version_number, runtime, source_code, invoke_policy, env_json, api_key_hash, allowed_origins_json, rate_limit_per_minute, timeout_ms, created_by
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        "#,
+    )
+    .bind(&version_id)
+    .bind(function_id)
+    .bind(version_number)
+    .bind(&validated.runtime)
+    .bind(&validated.source_code)
+    .bind(&validated.invoke_policy)
+    .bind(&validated.env_json)
+    .bind(validated.api_key_hash.as_deref())
+    .bind(&validated.allowed_origins_json)
+    .bind(validated.rate_limit_per_minute)
+    .bind(validated.timeout_ms)
+    .bind(created_by)
+    .execute(&mut **tx)
+    .await?;
+
+    Ok(LoadedFunctionVersion {
+        id: version_id,
+        function_id: function_id.to_string(),
+        version_number,
+        runtime: validated.runtime.clone(),
+        source_code: validated.source_code.clone(),
+        invoke_policy: validated.invoke_policy.clone(),
+        env_json: validated.env_json.clone(),
+        api_key_hash: validated.api_key_hash.clone(),
+        allowed_origins_json: validated.allowed_origins_json.clone(),
+        rate_limit_per_minute: validated.rate_limit_per_minute,
+        timeout_ms: validated.timeout_ms,
+    })
+}
+
+async fn activate_function_version(
+    tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+    function_id: &str,
+    validated: &ValidatedFunction,
+    version: &LoadedFunctionVersion,
+    updated_by: &str,
+) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        r#"
+        UPDATE functions
+        SET display_name = ?, endpoint_slug = ?, runtime = ?, source_code = ?, invoke_policy = ?, env_json = ?, api_key_hash = ?, allowed_origins_json = ?, rate_limit_per_minute = ?, timeout_ms = ?, enabled = ?, active_version_number = ?, active_version_id = ?, secret_key_count = 0, updated_by = ?, updated_at = CURRENT_TIMESTAMP
+        WHERE id = ?
+        "#,
+    )
+    .bind(&validated.display_name)
+    .bind(&validated.endpoint_slug)
+    .bind(&validated.runtime)
+    .bind(&validated.source_code)
+    .bind(&validated.invoke_policy)
+    .bind(&validated.env_json)
+    .bind(validated.api_key_hash.as_deref())
+    .bind(&validated.allowed_origins_json)
+    .bind(validated.rate_limit_per_minute)
+    .bind(validated.timeout_ms)
+    .bind(validated.enabled)
+    .bind(version.version_number)
+    .bind(&version.id)
+    .bind(updated_by)
+    .bind(function_id)
+    .execute(&mut **tx)
+    .await?;
+    Ok(())
 }
 
 fn validate_create_payload(payload: UpsertFunctionRequest) -> Result<ValidatedFunction, String> {
@@ -1004,13 +1388,18 @@ enum LoadInvocationError {
     QueryFailed,
 }
 
+enum LoadFunctionVersionError {
+    NotFound,
+    QueryFailed,
+}
+
 async fn load_invocation(
     pool: &sqlx::SqlitePool,
     function_id: &str,
     invocation_id: &str,
 ) -> Result<FunctionInvocation, LoadInvocationError> {
     sqlx::query_as::<_, FunctionInvocation>(
-        "SELECT id, function_id, status, request_json, response_json, error, duration_ms, invoke_mode, created_at, finished_at FROM function_invocations WHERE function_id = ? AND id = ?"
+        "SELECT id, function_id, status, request_json, response_json, error, duration_ms, invoke_mode, function_version_id, retry_count, parent_invocation_id, created_at, finished_at FROM function_invocations WHERE function_id = ? AND id = ?"
     )
     .bind(function_id)
     .bind(invocation_id)
@@ -1025,7 +1414,7 @@ async fn load_function_by_name(
     name: &str,
 ) -> Result<FunctionDetail, LoadFunctionError> {
     sqlx::query_as::<_, FunctionDetail>(
-        "SELECT id, name, display_name, endpoint_slug, runtime, source_code, invoke_policy, env_json, api_key_hash, allowed_origins_json, rate_limit_per_minute, CASE WHEN api_key_hash IS NULL OR api_key_hash = '' THEN 0 ELSE 1 END AS api_key_present, timeout_ms, enabled, created_by, updated_by, created_at, updated_at FROM functions WHERE name = ?",
+        "SELECT id, name, display_name, endpoint_slug, runtime, source_code, invoke_policy, env_json, api_key_hash, allowed_origins_json, rate_limit_per_minute, CASE WHEN api_key_hash IS NULL OR api_key_hash = '' THEN 0 ELSE 1 END AS api_key_present, timeout_ms, enabled, active_version_number, active_version_id, secret_key_count, created_by, updated_by, created_at, updated_at FROM functions WHERE name = ?",
     )
     .bind(name)
     .fetch_optional(pool)
@@ -1039,13 +1428,43 @@ async fn load_function_by_endpoint(
     endpoint_slug: &str,
 ) -> Result<FunctionDetail, LoadFunctionError> {
     sqlx::query_as::<_, FunctionDetail>(
-        "SELECT id, name, display_name, endpoint_slug, runtime, source_code, invoke_policy, env_json, api_key_hash, allowed_origins_json, rate_limit_per_minute, CASE WHEN api_key_hash IS NULL OR api_key_hash = '' THEN 0 ELSE 1 END AS api_key_present, timeout_ms, enabled, created_by, updated_by, created_at, updated_at FROM functions WHERE endpoint_slug = ?",
+        "SELECT id, name, display_name, endpoint_slug, runtime, source_code, invoke_policy, env_json, api_key_hash, allowed_origins_json, rate_limit_per_minute, CASE WHEN api_key_hash IS NULL OR api_key_hash = '' THEN 0 ELSE 1 END AS api_key_present, timeout_ms, enabled, active_version_number, active_version_id, secret_key_count, created_by, updated_by, created_at, updated_at FROM functions WHERE endpoint_slug = ?",
     )
     .bind(endpoint_slug)
     .fetch_optional(pool)
     .await
     .map_err(|_| LoadFunctionError::QueryFailed)?
     .ok_or(LoadFunctionError::NotFound)
+}
+
+async fn load_function_version_by_number(
+    pool: &sqlx::SqlitePool,
+    function_id: &str,
+    version_number: i64,
+) -> Result<LoadedFunctionVersion, LoadFunctionVersionError> {
+    sqlx::query_as::<_, LoadedFunctionVersion>(
+        "SELECT id, function_id, version_number, runtime, source_code, invoke_policy, env_json, api_key_hash, allowed_origins_json, rate_limit_per_minute, timeout_ms FROM function_versions WHERE function_id = ? AND version_number = ?",
+    )
+    .bind(function_id)
+    .bind(version_number)
+    .fetch_optional(pool)
+    .await
+    .map_err(|_| LoadFunctionVersionError::QueryFailed)?
+    .ok_or(LoadFunctionVersionError::NotFound)
+}
+
+async fn load_function_version_by_id(
+    pool: &sqlx::SqlitePool,
+    version_id: &str,
+) -> Result<LoadedFunctionVersion, LoadFunctionVersionError> {
+    sqlx::query_as::<_, LoadedFunctionVersion>(
+        "SELECT id, function_id, version_number, runtime, source_code, invoke_policy, env_json, api_key_hash, allowed_origins_json, rate_limit_per_minute, timeout_ms FROM function_versions WHERE id = ?",
+    )
+    .bind(version_id)
+    .fetch_optional(pool)
+    .await
+    .map_err(|_| LoadFunctionVersionError::QueryFailed)?
+    .ok_or(LoadFunctionVersionError::NotFound)
 }
 
 #[cfg(test)]
@@ -1767,5 +2186,103 @@ export default async function handler(ctx) {
         assert_eq!(invoke_response.status(), StatusCode::CONFLICT);
         let body: crate::api::common::ApiError = test_support::response_json(invoke_response).await;
         assert!(body.error.contains("disabled"));
+    }
+
+    #[tokio::test]
+    async fn test_function_version_history_and_rollback() {
+        let (state, _dir) = test_support::make_test_state().await;
+        let admin = register_admin(state.clone()).await;
+
+        let create_response = create_function(
+            State(state.clone()),
+            Extension(claims(&admin.user.id, true)),
+            Json(UpsertFunctionRequest {
+                name: "versioned_fn".to_string(),
+                display_name: "Versioned function".to_string(),
+                endpoint_slug: "versioned-fn".to_string(),
+                runtime: "javascript".to_string(),
+                source_code: "export default async function handler() { return { version: 1 } }"
+                    .to_string(),
+                timeout_ms: Some(1500),
+                enabled: Some(true),
+                invoke_policy: Some("authenticated".to_string()),
+                env: None,
+                api_key: None,
+                allowed_origins: None,
+                rate_limit_per_minute: Some(60),
+            }),
+        )
+        .await;
+        assert_eq!(create_response.status(), StatusCode::CREATED);
+        let create_body: FunctionResponse = test_support::response_json(create_response).await;
+        assert_eq!(create_body.function.active_version_number, 1);
+
+        let update_response = update_function(
+            State(state.clone()),
+            Extension(claims(&admin.user.id, true)),
+            Path("versioned_fn".to_string()),
+            Json(UpdateFunctionRequest {
+                display_name: None,
+                endpoint_slug: None,
+                runtime: Some("javascript".to_string()),
+                source_code: Some(
+                    "export default async function handler() { return { version: 2 } }"
+                        .to_string(),
+                ),
+                timeout_ms: None,
+                enabled: None,
+                invoke_policy: None,
+                env: None,
+                api_key: None,
+                allowed_origins: None,
+                rate_limit_per_minute: None,
+            }),
+        )
+        .await;
+        assert_eq!(update_response.status(), StatusCode::OK);
+        let update_body: FunctionResponse = test_support::response_json(update_response).await;
+        assert_eq!(update_body.function.active_version_number, 2);
+
+        let versions_response = list_function_versions(
+            State(state.clone()),
+            Extension(claims(&admin.user.id, true)),
+            Path("versioned_fn".to_string()),
+        )
+        .await;
+        assert_eq!(versions_response.status(), StatusCode::OK);
+        let versions_body: FunctionVersionsResponse =
+            test_support::response_json(versions_response).await;
+        assert_eq!(versions_body.versions.len(), 2);
+        assert_eq!(versions_body.versions[0].version_number, 2);
+        assert!(versions_body.versions[0].is_active);
+        assert_eq!(versions_body.versions[1].version_number, 1);
+        assert!(!versions_body.versions[1].is_active);
+
+        let rollback_response = rollback_function_version(
+            State(state.clone()),
+            Extension(claims(&admin.user.id, true)),
+            Path(("versioned_fn".to_string(), 1)),
+        )
+        .await;
+        assert_eq!(rollback_response.status(), StatusCode::OK);
+        let rollback_body: FunctionResponse = test_support::response_json(rollback_response).await;
+        assert_eq!(rollback_body.function.active_version_number, 1);
+        assert!(rollback_body.function.source_code.contains("version: 1"));
+
+        let invoke_response = invoke_function(
+            State(state),
+            Some(Extension(claims(&admin.user.id, true))),
+            HeaderMap::new(),
+            Path("versioned-fn".to_string()),
+            Json(InvokeFunctionRequest {
+                input: serde_json::json!({}),
+                api_key: None,
+                async_invoke: None,
+            }),
+        )
+        .await;
+        assert_eq!(invoke_response.status(), StatusCode::OK);
+        let invoke_body: InvokeFunctionResponse = test_support::response_json(invoke_response).await;
+        assert_eq!(invoke_body.response, serde_json::json!({ "version": 1 }));
     }
 }
