@@ -1,5 +1,7 @@
 # Peanut
 
+<img width="1376" height="768" alt="1777174518806" src="https://github.com/user-attachments/assets/1658b9d2-a1a1-4dcc-b2aa-8adeb8516d0c" />
+
 Peanut은 Rust 단일 바이너리로 배포되는 작은 self-host 백엔드 런타임이다.
 
 핵심 방향은 명확하다.
