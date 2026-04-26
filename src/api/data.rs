@@ -137,6 +137,8 @@ pub struct ImportRowRequest {
     pub id: Option<String>,
     pub owner_user_id: Option<String>,
     pub data: Value,
+    pub created_at: Option<String>,
+    pub updated_at: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -145,12 +147,16 @@ pub struct DataTableRestoreSpec {
     pub display_name: String,
     pub schema: DataTableSchema,
     pub access_policy: AccessPolicy,
+    pub created_by: Option<String>,
+    pub created_at: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TableImportRequest {
     pub mode: Option<String>,
     pub restore_table: Option<bool>,
+    pub metadata: Option<TableExportMetadata>,
+    pub verify_checksum: Option<bool>,
     pub table: Option<DataTableRestoreSpec>,
     pub rows: Vec<ImportRowRequest>,
 }
@@ -1127,6 +1133,50 @@ fn build_table_export_checksum(table: &DataTableDetail, rows: &[DataRowResponse]
     Ok(digest.iter().map(|byte| format!("{byte:02x}")).collect())
 }
 
+fn build_import_checksum(table: &DataTableDetail, rows: &[ImportRowRequest]) -> Result<String, String> {
+    let export_rows = rows
+        .iter()
+        .map(|row| {
+            Ok(DataRowResponse {
+                id: row.id.clone().ok_or_else(|| "checksum verification requires row ids".to_string())?,
+                owner_user_id: row.owner_user_id.clone(),
+                data: row.data.clone(),
+                created_at: row
+                    .created_at
+                    .clone()
+                    .ok_or_else(|| "checksum verification requires row created_at values".to_string())?,
+                updated_at: row
+                    .updated_at
+                    .clone()
+                    .ok_or_else(|| "checksum verification requires row updated_at values".to_string())?,
+            })
+        })
+        .collect::<Result<Vec<_>, String>>()?;
+
+    build_table_export_checksum(table, &export_rows)
+}
+
+fn resolve_import_checksum_table_detail(current: &LoadedTable, payload: &TableImportRequest) -> Result<DataTableDetail, String> {
+    if let Some(table) = payload.table.as_ref() {
+        return Ok(DataTableDetail {
+            name: table.name.clone(),
+            display_name: table.display_name.clone(),
+            schema: table.schema.clone(),
+            access_policy: table.access_policy.clone(),
+            created_by: table
+                .created_by
+                .clone()
+                .ok_or_else(|| "checksum verification requires table.created_by".to_string())?,
+            created_at: table
+                .created_at
+                .clone()
+                .ok_or_else(|| "checksum verification requires table.created_at".to_string())?,
+        });
+    }
+
+    Ok(current.clone().into())
+}
+
 pub async fn import_rows(
     State(state): State<crate::AppState>,
     Extension(claims): Extension<Claims>,
@@ -1147,6 +1197,31 @@ pub async fn import_rows(
     let mode = payload.mode.as_deref().unwrap_or("append");
     if mode != "append" && mode != "replace" {
         return json_error(StatusCode::BAD_REQUEST, "mode must be append or replace");
+    }
+
+    if payload.verify_checksum.unwrap_or(false) {
+        let metadata = match payload.metadata.as_ref() {
+            Some(metadata) => metadata,
+            None => return json_error(StatusCode::BAD_REQUEST, "metadata is required when verify_checksum is true"),
+        };
+        if metadata.export_version != TABLE_EXPORT_VERSION {
+            return json_error(StatusCode::BAD_REQUEST, "unsupported import export_version");
+        }
+        if metadata.row_count != payload.rows.len() {
+            return json_error(StatusCode::BAD_REQUEST, "import row count does not match metadata");
+        }
+
+        let checksum_table = match resolve_import_checksum_table_detail(&table, &payload) {
+            Ok(table_detail) => table_detail,
+            Err(message) => return json_error(StatusCode::BAD_REQUEST, message),
+        };
+        let checksum = match build_import_checksum(&checksum_table, &payload.rows) {
+            Ok(checksum) => checksum,
+            Err(message) => return json_error(StatusCode::BAD_REQUEST, message),
+        };
+        if checksum != metadata.checksum_sha256 {
+            return json_error(StatusCode::BAD_REQUEST, "import checksum verification failed");
+        }
     }
 
     if mode == "replace" {
@@ -2812,11 +2887,15 @@ mod tests {
             Json(TableImportRequest {
                 mode: Some("replace".to_string()),
                 restore_table: None,
+                metadata: None,
+                verify_checksum: None,
                 table: None,
                 rows: vec![ImportRowRequest {
                     id: None,
                     owner_user_id: Some(admin.user.id.clone()),
                     data: json!({ "title": "buy milk" }),
+                    created_at: None,
+                    updated_at: None,
                 }],
             }),
         )
@@ -2853,6 +2932,53 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_import_rejects_checksum_mismatch_when_verification_enabled() {
+        let (state, _dir) = test_support::make_test_state().await;
+        let admin = register_user(state.clone(), "admin@example.com").await;
+
+        let create_table_response = create_table(
+            State(state.clone()),
+            Extension(claims(&admin.user.id, true)),
+            Json(todo_table_request()),
+        )
+        .await;
+        assert_eq!(create_table_response.status(), StatusCode::CREATED);
+
+        let import_response = import_rows(
+            State(state),
+            Extension(claims(&admin.user.id, true)),
+            axum::extract::Path("todos".to_string()),
+            Json(TableImportRequest {
+                mode: Some("replace".to_string()),
+                restore_table: None,
+                metadata: Some(TableExportMetadata {
+                    export_version: TABLE_EXPORT_VERSION.to_string(),
+                    row_count: 1,
+                    checksum_sha256: "deadbeef".to_string(),
+                }),
+                verify_checksum: Some(true),
+                table: Some(DataTableRestoreSpec {
+                    name: "todos".to_string(),
+                    display_name: "Todos".to_string(),
+                    schema: todo_table_request().schema,
+                    access_policy: todo_table_request().access_policy,
+                    created_by: Some(admin.user.id.clone()),
+                    created_at: Some("2026-01-01T00:00:00Z".to_string()),
+                }),
+                rows: vec![ImportRowRequest {
+                    id: Some("row-1".to_string()),
+                    owner_user_id: Some(admin.user.id.clone()),
+                    data: json!({ "title": "buy milk", "done": false }),
+                    created_at: Some("2026-01-01T00:00:00Z".to_string()),
+                    updated_at: Some("2026-01-01T00:00:00Z".to_string()),
+                }],
+            }),
+        )
+        .await;
+        assert_eq!(import_response.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
     async fn test_import_can_restore_table_schema_and_policy() {
         let (state, _dir) = test_support::make_test_state().await;
         let admin = register_user(state.clone(), "admin@example.com").await;
@@ -2872,6 +2998,8 @@ mod tests {
             Json(TableImportRequest {
                 mode: Some("replace".to_string()),
                 restore_table: Some(true),
+                metadata: None,
+                verify_checksum: None,
                 table: Some(DataTableRestoreSpec {
                     name: "todos".to_string(),
                     display_name: "Restored Todos".to_string(),
@@ -2909,11 +3037,15 @@ mod tests {
                     access_policy: AccessPolicy {
                         mode: POLICY_AUTHENTICATED_SHARED_RW.to_string(),
                     },
+                    created_by: None,
+                    created_at: None,
                 }),
                 rows: vec![ImportRowRequest {
                     id: None,
                     owner_user_id: Some(admin.user.id.clone()),
                     data: json!({ "title": "buy milk" }),
+                    created_at: None,
+                    updated_at: None,
                 }],
             }),
         )

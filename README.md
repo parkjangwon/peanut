@@ -431,6 +431,8 @@ Admin saved query presets:
 Admin snapshot import:
 - accepts `{ "mode": "append" | "replace", "rows": [...] }`
 - `restore_table: true` can also restore `display_name`, `schema`, and `access_policy` before rows are inserted
+- `verify_checksum: true` with `metadata` validates the incoming artifact before import mutates rows
+- checksum verification expects export-style artifact fields (`table.created_by`, `table.created_at`, row ids, `created_at`, `updated_at`)
 - imported rows are normalized against the current schema before insert
 - owner-private tables require `owner_user_id` per imported row
 
