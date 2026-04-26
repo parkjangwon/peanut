@@ -109,8 +109,18 @@ pub struct ImportRowRequest {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DataTableRestoreSpec {
+    pub name: String,
+    pub display_name: String,
+    pub schema: DataTableSchema,
+    pub access_policy: AccessPolicy,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TableImportRequest {
     pub mode: Option<String>,
+    pub restore_table: Option<bool>,
+    pub table: Option<DataTableRestoreSpec>,
     pub rows: Vec<ImportRowRequest>,
 }
 
@@ -814,7 +824,7 @@ pub async fn import_rows(
         return json_error(StatusCode::FORBIDDEN, "admin access required");
     }
 
-    let table = match load_table(&state.pool, &table).await {
+    let mut table = match load_table(&state.pool, &table).await {
         Ok(table) => table,
         Err(LoadTableError::NotFound) => return json_error(StatusCode::NOT_FOUND, "data table not found"),
         Err(LoadTableError::Invalid(message)) => return json_error(StatusCode::INTERNAL_SERVER_ERROR, message),
@@ -834,6 +844,17 @@ pub async fn import_rows(
             .is_err()
         {
             return json_error(StatusCode::INTERNAL_SERVER_ERROR, "failed to clear existing rows before import");
+        }
+    }
+
+    if payload.restore_table.unwrap_or(false) {
+        let Some(restore_spec) = payload.table.as_ref() else {
+            return json_error(StatusCode::BAD_REQUEST, "table is required when restore_table is true");
+        };
+        match restore_table_definition(&state.pool, &table, restore_spec).await {
+            Ok(restored) => table = restored,
+            Err(RestoreTableError::BadRequest(message)) => return json_error(StatusCode::BAD_REQUEST, message),
+            Err(RestoreTableError::Internal(message)) => return json_error(StatusCode::INTERNAL_SERVER_ERROR, message),
         }
     }
 
@@ -876,6 +897,59 @@ pub async fn import_rows(
     }
 
     (StatusCode::CREATED, Json(TableImportResponse { imported_count })).into_response()
+}
+
+async fn restore_table_definition(
+    pool: &sqlx::SqlitePool,
+    existing: &LoadedTable,
+    restore_spec: &DataTableRestoreSpec,
+) -> Result<LoadedTable, RestoreTableError> {
+    let restore_name = restore_spec.name.trim().to_lowercase();
+    if restore_name != existing.name {
+        return Err(RestoreTableError::BadRequest(
+            "restore table name must match the target table path".to_string(),
+        ));
+    }
+    if restore_spec.display_name.trim().is_empty() {
+        return Err(RestoreTableError::BadRequest("display_name is required".to_string()));
+    }
+    validate_schema(&restore_spec.schema).map_err(RestoreTableError::BadRequest)?;
+    validate_access_policy(&restore_spec.access_policy).map_err(RestoreTableError::BadRequest)?;
+
+    let row_count = count_table_rows(pool, &existing.id)
+        .await
+        .map_err(RestoreTableError::Internal)?;
+    validate_schema_evolution(&existing.schema, &restore_spec.schema, row_count)
+        .map_err(RestoreTableError::BadRequest)?;
+    validate_rows_against_schema(pool, &existing.id, &restore_spec.schema)
+        .await
+        .map_err(RestoreTableError::BadRequest)?;
+
+    let schema_json = serde_json::to_string(&restore_spec.schema)
+        .map_err(|_| RestoreTableError::Internal("failed to encode schema".to_string()))?;
+    let access_policy_json = serde_json::to_string(&restore_spec.access_policy)
+        .map_err(|_| RestoreTableError::Internal("failed to encode access policy".to_string()))?;
+
+    sqlx::query("UPDATE data_tables SET display_name = ?, schema_json = ?, access_policy_json = ? WHERE id = ?")
+        .bind(restore_spec.display_name.trim())
+        .bind(schema_json)
+        .bind(access_policy_json)
+        .bind(&existing.id)
+        .execute(pool)
+        .await
+        .map_err(|_| RestoreTableError::Internal("failed to restore table definition".to_string()))?;
+
+    load_table(pool, &existing.name)
+        .await
+        .map_err(|error| match error {
+            LoadTableError::NotFound => {
+                RestoreTableError::Internal("restored table could not be reloaded".to_string())
+            }
+            LoadTableError::Invalid(message) => RestoreTableError::Internal(message),
+            LoadTableError::QueryFailed => {
+                RestoreTableError::Internal("failed to reload restored table".to_string())
+            }
+        })
 }
 
 fn emit_data_row_event(
@@ -1419,6 +1493,12 @@ enum LoadTableError {
     NotFound,
     Invalid(String),
     QueryFailed,
+}
+
+#[derive(Debug)]
+enum RestoreTableError {
+    BadRequest(String),
+    Internal(String),
 }
 
 #[derive(Debug)]
@@ -2197,6 +2277,8 @@ mod tests {
             axum::extract::Path("todos".to_string()),
             Json(TableImportRequest {
                 mode: Some("replace".to_string()),
+                restore_table: None,
+                table: None,
                 rows: vec![ImportRowRequest {
                     id: None,
                     owner_user_id: Some(admin.user.id.clone()),
@@ -2234,6 +2316,100 @@ mod tests {
         let events_body: DataRowEventsResponse = test_support::response_json(events_response).await;
         assert_eq!(events_body.events.len(), 1);
         assert_eq!(events_body.events[0].action, "insert");
+    }
+
+    #[tokio::test]
+    async fn test_import_can_restore_table_schema_and_policy() {
+        let (state, _dir) = test_support::make_test_state().await;
+        let admin = register_user(state.clone(), "admin@example.com").await;
+
+        let create_table_response = create_table(
+            State(state.clone()),
+            Extension(claims(&admin.user.id, true)),
+            Json(todo_table_request()),
+        )
+        .await;
+        assert_eq!(create_table_response.status(), StatusCode::CREATED);
+
+        let import_response = import_rows(
+            State(state.clone()),
+            Extension(claims(&admin.user.id, true)),
+            axum::extract::Path("todos".to_string()),
+            Json(TableImportRequest {
+                mode: Some("replace".to_string()),
+                restore_table: Some(true),
+                table: Some(DataTableRestoreSpec {
+                    name: "todos".to_string(),
+                    display_name: "Restored Todos".to_string(),
+                    schema: DataTableSchema {
+                        fields: BTreeMap::from([
+                            (
+                                "done".to_string(),
+                                DataFieldSpec {
+                                    field_type: "boolean".to_string(),
+                                    required: false,
+                                    max_length: None,
+                                    default: Some(Value::Bool(false)),
+                                },
+                            ),
+                            (
+                                "priority".to_string(),
+                                DataFieldSpec {
+                                    field_type: "integer".to_string(),
+                                    required: true,
+                                    max_length: None,
+                                    default: Some(json!(1)),
+                                },
+                            ),
+                            (
+                                "title".to_string(),
+                                DataFieldSpec {
+                                    field_type: "string".to_string(),
+                                    required: true,
+                                    max_length: Some(200),
+                                    default: None,
+                                },
+                            ),
+                        ]),
+                    },
+                    access_policy: AccessPolicy {
+                        mode: POLICY_AUTHENTICATED_SHARED_RW.to_string(),
+                    },
+                }),
+                rows: vec![ImportRowRequest {
+                    id: None,
+                    owner_user_id: Some(admin.user.id.clone()),
+                    data: json!({ "title": "buy milk" }),
+                }],
+            }),
+        )
+        .await;
+        assert_eq!(import_response.status(), StatusCode::CREATED);
+
+        let table_response = get_table(
+            State(state.clone()),
+            Extension(claims(&admin.user.id, true)),
+            axum::extract::Path("todos".to_string()),
+        )
+        .await;
+        assert_eq!(table_response.status(), StatusCode::OK);
+        let table_body: DataTableResponse = test_support::response_json(table_response).await;
+        assert_eq!(table_body.table.display_name, "Restored Todos");
+        assert_eq!(table_body.table.access_policy.mode, POLICY_AUTHENTICATED_SHARED_RW);
+        assert!(table_body.table.schema.fields.contains_key("priority"));
+
+        let rows_response = list_rows(
+            State(state),
+            Extension(claims(&admin.user.id, true)),
+            axum::extract::Path("todos".to_string()),
+            axum::extract::Query(ListRowsParams::default()),
+        )
+        .await;
+        assert_eq!(rows_response.status(), StatusCode::OK);
+        let rows_body: DataRowsResponse = test_support::response_json(rows_response).await;
+        assert_eq!(rows_body.rows.len(), 1);
+        assert_eq!(rows_body.rows[0].data.get("priority"), Some(&json!(1)));
+        assert_eq!(rows_body.rows[0].data.get("title"), Some(&json!("buy milk")));
     }
 
     #[tokio::test]

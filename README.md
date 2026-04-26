@@ -401,6 +401,7 @@ Admin row realtime stream:
 ### `POST /api/data/tables/:table/import`
 Admin snapshot import:
 - accepts `{ "mode": "append" | "replace", "rows": [...] }`
+- `restore_table: true` can also restore `display_name`, `schema`, and `access_policy` before rows are inserted
 - imported rows are normalized against the current schema before insert
 - owner-private tables require `owner_user_id` per imported row
 

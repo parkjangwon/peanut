@@ -397,6 +397,7 @@ admin row realtime stream:
 ### `POST /api/data/tables/:table/import`
 admin snapshot import:
 - `{ "mode": "append" | "replace", "rows": [...] }` 형태를 받는다
+- `restore_table: true`를 주면 row insert 전에 `display_name`, `schema`, `access_policy`도 함께 복원할 수 있다
 - import row는 insert 전에 현재 schema 기준으로 정규화된다
 - owner_private 테이블은 각 row마다 `owner_user_id`가 필요하다
 
