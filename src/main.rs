@@ -162,6 +162,9 @@ async fn main() {
         )
         .nest("/api", protected_routes)
         .fallback(crate::console::static_handler)
+        .layer(axum::middleware::from_fn(
+            crate::middleware::request_id::request_id_middleware,
+        ))
         .with_state(state);
 
     tracing::info!("Listening on {}", config.bind_addr);

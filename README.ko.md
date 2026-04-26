@@ -172,6 +172,20 @@ Peanut은 현재 API-first 모드로 동작한다.
 
 ## API 요약
 
+요청/응답 메모:
+- 모든 응답에는 correlation용 `x-request-id` 헤더가 포함된다
+- JSON 에러 응답은 `error`, `code`, `request_id` 구조를 사용한다
+
+에러 응답 예시:
+
+```json
+{
+  "error": "missing bearer token",
+  "code": "unauthorized",
+  "request_id": "req_123"
+}
+```
+
 ### `GET /api/health`
 
 ```json

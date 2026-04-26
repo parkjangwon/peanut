@@ -171,6 +171,20 @@ Peanut is currently running in API-first mode.
 
 ## API contract summary
 
+Request/response notes:
+- every response now includes an `x-request-id` header for correlation
+- JSON error responses use a structured envelope with `error`, `code`, and `request_id`
+
+Example error body:
+
+```json
+{
+  "error": "missing bearer token",
+  "code": "unauthorized",
+  "request_id": "req_123"
+}
+```
+
 ### `GET /api/health`
 Returns localized JSON:
 
