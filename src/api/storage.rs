@@ -5,6 +5,7 @@ use axum::{
     response::{IntoResponse, Response},
     Extension, Json,
 };
+use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use serde::{Deserialize, Serialize};
 
 use crate::api::common::{json_error, json_message};
@@ -130,6 +131,19 @@ pub async fn list_bucket_objects(
         );
     }
 
+    let decoded_continuation_token = match decode_continuation_token(query.continuation_token.as_deref()) {
+        Ok(value) => value,
+        Err(message) => {
+            return s3_error_response(
+                StatusCode::BAD_REQUEST,
+                "InvalidArgument",
+                &message,
+                &format!("/{bucket}"),
+                None,
+            )
+        }
+    };
+
     let scoped_bucket = scoped_bucket(&claims.sub, &bucket);
     match state
         .storage
@@ -138,7 +152,7 @@ pub async fn list_bucket_objects(
             query.prefix.as_deref(),
             query.delimiter.as_deref(),
             query.max_keys,
-            query.continuation_token.as_deref(),
+            decoded_continuation_token.as_deref(),
         )
         .await
     {
@@ -297,6 +311,45 @@ fn scoped_bucket(user_id: &str, bucket: &str) -> String {
     format!("{}/{}", user_id, bucket.trim().trim_matches('/'))
 }
 
+fn decode_continuation_token(token: Option<&str>) -> Result<Option<String>, String> {
+    let Some(token) = token.filter(|value| !value.trim().is_empty()) else {
+        return Ok(None);
+    };
+    let decoded = URL_SAFE_NO_PAD
+        .decode(token)
+        .map_err(|_| "invalid continuation-token".to_string())?;
+    let decoded = String::from_utf8(decoded).map_err(|_| "invalid continuation-token".to_string())?;
+    let normalized = std::path::Path::new(
+        decoded
+            .trim()
+            .trim_start_matches('/'),
+    )
+    .to_string_lossy()
+    .replace('\\', "/");
+    if normalized.trim().is_empty() || normalized.contains("..") {
+        return Err("invalid continuation-token".to_string());
+    }
+    Ok(Some(normalized))
+}
+
+fn encode_continuation_token(token: &str) -> String {
+    URL_SAFE_NO_PAD.encode(token.as_bytes())
+}
+
+fn format_last_modified_header(value: &str) -> String {
+    chrono::DateTime::parse_from_rfc3339(value)
+        .map(|parsed| parsed.with_timezone(&chrono::Utc).to_rfc2822())
+        .unwrap_or_else(|_| value.to_string())
+}
+
+fn apply_s3_response_headers(
+    mut response: axum::http::response::Builder,
+) -> axum::http::response::Builder {
+    response = response.header("x-amz-request-id", uuid::Uuid::new_v4().to_string());
+    response = response.header("accept-ranges", "bytes");
+    response
+}
+
 fn s3_error_response(
     status: StatusCode,
     code: &str,
@@ -316,8 +369,7 @@ fn s3_error_response(
     body.push_str(&format!("<RequestId>{}</RequestId>", xml_escape(&request_id)));
     body.push_str("</Error>");
 
-    Response::builder()
-        .status(status)
+    apply_s3_response_headers(Response::builder().status(status))
         .header(header::CONTENT_TYPE, "application/xml")
         .body(axum::body::Body::from(body))
         .unwrap()
@@ -327,11 +379,14 @@ fn build_head_response(
     status: StatusCode,
     metadata: &crate::storage::local::StorageObjectMetadata,
 ) -> Response {
-    let mut response = Response::builder().status(status);
+    let mut response = apply_s3_response_headers(Response::builder().status(status));
     response = response.header(header::CONTENT_TYPE, metadata.content_type.as_str());
     response = response.header(header::CONTENT_LENGTH, metadata.content_length.to_string());
     response = response.header(header::ETAG, format!("\"{}\"", metadata.etag));
-    response = response.header(header::LAST_MODIFIED, metadata.updated_at.as_str());
+    response = response.header(
+        header::LAST_MODIFIED,
+        format_last_modified_header(metadata.updated_at.as_str()),
+    );
     response.body(axum::body::Body::empty()).unwrap()
 }
 
@@ -342,11 +397,14 @@ fn build_object_response(
     metadata: &crate::storage::local::StorageObjectMetadata,
     include_body: bool,
 ) -> Response {
-    let mut response = Response::builder().status(status);
+    let mut response = apply_s3_response_headers(Response::builder().status(status));
     response = response.header(header::CONTENT_TYPE, metadata.content_type.as_str());
     response = response.header(header::CONTENT_LENGTH, metadata.content_length.to_string());
     response = response.header(header::ETAG, format!("\"{}\"", metadata.etag));
-    response = response.header(header::LAST_MODIFIED, metadata.updated_at.as_str());
+    response = response.header(
+        header::LAST_MODIFIED,
+        format_last_modified_header(metadata.updated_at.as_str()),
+    );
     response = response.header("x-amz-meta-created-at", metadata.created_at.as_str());
     response = response.header("x-amz-meta-key", key);
     if include_body {
@@ -387,7 +445,7 @@ fn s3_list_xml_response(
     if let Some(token) = page.next_continuation_token.as_deref() {
         body.push_str(&format!(
             "<NextContinuationToken>{}</NextContinuationToken>",
-            xml_escape(token)
+            xml_escape(&encode_continuation_token(token))
         ));
     }
     for object in page.objects {
@@ -409,8 +467,7 @@ fn s3_list_xml_response(
     }
     body.push_str("</ListBucketResult>");
 
-    Response::builder()
-        .status(StatusCode::OK)
+    apply_s3_response_headers(Response::builder().status(StatusCode::OK))
         .header(header::CONTENT_TYPE, "application/xml")
         .body(axum::body::Body::from(body))
         .unwrap()
@@ -460,6 +517,14 @@ mod tests {
     async fn response_text(response: Response) -> String {
         let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
         String::from_utf8(body.to_vec()).unwrap()
+    }
+
+    fn xml_tag_value(xml: &str, tag: &str) -> Option<String> {
+        let start_tag = format!("<{tag}>");
+        let end_tag = format!("</{tag}>");
+        let start = xml.find(&start_tag)? + start_tag.len();
+        let end = xml[start..].find(&end_tag)? + start;
+        Some(xml[start..end].to_string())
     }
 
     #[tokio::test]
@@ -525,6 +590,8 @@ mod tests {
             put_response.headers().get(header::ETAG).unwrap(),
             "\"f2ff189a4ef686231302becc266e6c8d5eee814b868d11631f7660073fc9b613\""
         );
+        assert!(put_response.headers().get("x-amz-request-id").is_some());
+        assert!(put_response.headers().get(header::LAST_MODIFIED).is_some());
 
         let head_response = head_bucket_object(
             State(state.clone()),
@@ -542,6 +609,14 @@ mod tests {
             "8"
         );
         assert!(head_response.headers().get(header::ETAG).is_some());
+        assert!(head_response.headers().get("x-amz-request-id").is_some());
+        let head_last_modified = head_response
+            .headers()
+            .get(header::LAST_MODIFIED)
+            .unwrap()
+            .to_str()
+            .unwrap();
+        assert!(chrono::DateTime::parse_from_rfc2822(head_last_modified).is_ok());
 
         let get_response = get_bucket_object(
             State(state),
@@ -554,6 +629,14 @@ mod tests {
             get_response.headers().get(header::CONTENT_TYPE).unwrap(),
             "text/plain"
         );
+        assert!(get_response.headers().get("x-amz-request-id").is_some());
+        let get_last_modified = get_response
+            .headers()
+            .get(header::LAST_MODIFIED)
+            .unwrap()
+            .to_str()
+            .unwrap();
+        assert!(chrono::DateTime::parse_from_rfc2822(get_last_modified).is_ok());
         let body = response_text(get_response).await;
         assert_eq!(body, "hello s3");
     }
@@ -593,7 +676,9 @@ mod tests {
         let first_xml = response_text(first_page).await;
         assert!(first_xml.contains("<Key>notes/a.txt</Key>"));
         assert!(first_xml.contains("<IsTruncated>true</IsTruncated>"));
-        assert!(first_xml.contains("<NextContinuationToken>notes/a.txt</NextContinuationToken>"));
+        let next_token = xml_tag_value(&first_xml, "NextContinuationToken").unwrap();
+        assert_ne!(next_token, "notes/a.txt");
+        assert!(!next_token.contains("notes/a.txt"));
 
         let second_page = list_bucket_objects(
             State(state),
@@ -604,7 +689,7 @@ mod tests {
                 prefix: Some("notes/".to_string()),
                 delimiter: None,
                 max_keys: Some(10),
-                continuation_token: Some("notes/a.txt".to_string()),
+                continuation_token: Some(next_token),
             }),
         )
         .await;
@@ -612,6 +697,30 @@ mod tests {
         let second_xml = response_text(second_page).await;
         assert!(second_xml.contains("<Key>notes/b.txt</Key>"));
         assert!(!second_xml.contains("tmp/c.txt"));
+    }
+
+    #[tokio::test]
+    async fn test_s3_like_invalid_continuation_token_returns_invalid_argument_xml() {
+        let (state, _dir) = test_support::make_test_state().await;
+        let user = register_user(state.clone(), "badtoken@example.com").await;
+        let claims = claims_for(&user.user.id);
+
+        let response = list_bucket_objects(
+            State(state),
+            Extension(claims),
+            axum::extract::Path("assets".to_string()),
+            Query(S3ListQuery {
+                list_type: Some(2),
+                prefix: None,
+                delimiter: None,
+                max_keys: Some(10),
+                continuation_token: Some("not-a-valid-token".to_string()),
+            }),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        let xml = response_text(response).await;
+        assert!(xml.contains("<Code>InvalidArgument</Code>"));
     }
 
     #[tokio::test]

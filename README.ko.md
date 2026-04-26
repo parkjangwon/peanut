@@ -90,7 +90,9 @@ Peanut은 아래 원칙을 지향한다.
   - 삭제
 - `/api/s3/:bucket/*key` 아래에 S3-like path-style endpoint를 추가했다
 - S3-like object 응답은 content-type, content-length, ETag, last-modified 메타데이터를 포함한다
+- S3-like 성공/에러 응답은 `x-amz-request-id` 헤더를 포함하고, object `Last-Modified` 헤더는 HTTP-date 형식으로 내려간다
 - S3-like bucket listing은 `list-type=2`, `prefix`, `delimiter`, `max-keys`, `continuation-token`을 지원한다
+- continuation token은 raw key 대신 opaque base64url 스타일 토큰으로 내려간다
 - `delimiter=/` 사용 시 `CommonPrefixes` XML 블록도 함께 내려준다
 - S3-like storage 에러는 이제 `NoSuchKey`, `InvalidRequest` 같은 XML error envelope로 응답한다
 - storage key는 계속 인증 유저별로 자동 격리된다

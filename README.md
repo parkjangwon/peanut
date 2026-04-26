@@ -89,7 +89,9 @@ What this means for external frontend apps:
   - delete objects
 - S3-like path-style endpoints are now also available under `/api/s3/:bucket/*key`
 - S3-like object responses now include content-type, content-length, ETag, and last-modified metadata
+- S3-like success/error responses now also include `x-amz-request-id` headers, and object `Last-Modified` headers are emitted as HTTP-date strings
 - S3-like bucket listing supports `list-type=2`, `prefix`, `delimiter`, `max-keys`, and `continuation-token`
+- continuation tokens are now opaque base64url-style tokens instead of raw object keys
 - S3-like listing now emits `CommonPrefixes` XML blocks when `delimiter=/` is used
 - S3-like storage errors now return XML error envelopes such as `NoSuchKey` and `InvalidRequest`
 - storage keys remain automatically isolated per authenticated user
