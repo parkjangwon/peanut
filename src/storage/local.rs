@@ -40,6 +40,7 @@ pub struct StorageListItem {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StorageListPage {
     pub objects: Vec<StorageListItem>,
+    pub common_prefixes: Vec<String>,
     pub is_truncated: bool,
     pub next_continuation_token: Option<String>,
 }
@@ -68,7 +69,7 @@ impl LocalStorage {
     }
 
     pub async fn list(&self) -> io::Result<Vec<String>> {
-        self.list_objects_v2(DEFAULT_BUCKET, None, None, None)
+        self.list_objects_v2(DEFAULT_BUCKET, None, None, None, None)
             .await
             .map(|page| page.objects.into_iter().map(|item| item.key).collect())
     }
@@ -141,10 +142,12 @@ impl LocalStorage {
         &self,
         bucket: &str,
         prefix: Option<&str>,
+        delimiter: Option<&str>,
         max_keys: Option<usize>,
         continuation_token: Option<&str>,
     ) -> io::Result<StorageListPage> {
-        let prefix = normalize_optional_key(prefix)?;
+        let prefix = normalize_optional_prefix(prefix)?.unwrap_or_default();
+        let delimiter = normalize_optional_delimiter(delimiter)?;
         let continuation_token = normalize_optional_key(continuation_token)?;
         let max_keys = max_keys.unwrap_or(1000).min(1000);
         let bucket_root = self.resolve_bucket_root(bucket)?;
@@ -156,32 +159,36 @@ impl LocalStorage {
         .map_err(|err| io::Error::new(io::ErrorKind::Other, err))??;
         objects.sort_by(|left, right| left.key.cmp(&right.key));
 
-        let filtered: Vec<_> = objects
+        let entries = build_list_entries(objects, &prefix, delimiter.as_deref());
+        let filtered: Vec<_> = entries
             .into_iter()
-            .filter(|item| {
-                prefix
-                    .as_ref()
-                    .map(|value| item.key.starts_with(value))
-                    .unwrap_or(true)
-            })
-            .filter(|item| {
+            .filter(|entry| {
                 continuation_token
                     .as_ref()
-                    .map(|value| item.key > *value)
+                    .map(|value| entry.token() > value.as_str())
                     .unwrap_or(true)
             })
             .collect();
 
         let is_truncated = filtered.len() > max_keys;
-        let mut page_objects = filtered.into_iter().take(max_keys).collect::<Vec<_>>();
+        let page_entries = filtered.into_iter().take(max_keys).collect::<Vec<_>>();
         let next_continuation_token = if is_truncated {
-            page_objects.last().map(|item| item.key.clone())
+            page_entries.last().map(|entry| entry.token().to_string())
         } else {
             None
         };
+        let mut page_objects = Vec::new();
+        let mut common_prefixes = Vec::new();
+        for entry in page_entries {
+            match entry {
+                ListEntry::Object(item) => page_objects.push(item),
+                ListEntry::CommonPrefix(prefix) => common_prefixes.push(prefix),
+            }
+        }
 
         Ok(StorageListPage {
-            objects: std::mem::take(&mut page_objects),
+            objects: page_objects,
+            common_prefixes,
             is_truncated,
             next_continuation_token,
         })
@@ -301,6 +308,83 @@ fn normalize_optional_key(value: Option<&str>) -> io::Result<Option<String>> {
         )),
         _ => Ok(None),
     }
+}
+
+fn normalize_optional_prefix(value: Option<&str>) -> io::Result<Option<String>> {
+    match value {
+        Some(raw) if !raw.trim().is_empty() => {
+            let trimmed = raw.trim().trim_start_matches('/');
+            let has_trailing_slash = trimmed.ends_with('/');
+            let normalized = normalize_object_key(trimmed)?
+                .to_string_lossy()
+                .replace('\\', "/");
+            if has_trailing_slash {
+                Ok(Some(format!("{normalized}/")))
+            } else {
+                Ok(Some(normalized))
+            }
+        }
+        _ => Ok(None),
+    }
+}
+
+fn normalize_optional_delimiter(value: Option<&str>) -> io::Result<Option<String>> {
+    match value {
+        Some(raw) if !raw.trim().is_empty() => {
+            let trimmed = raw.trim();
+            if trimmed.contains('/') {
+                Ok(Some(trimmed.to_string()))
+            } else {
+                Ok(Some(trimmed.to_string()))
+            }
+        }
+        _ => Ok(None),
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum ListEntry {
+    Object(StorageListItem),
+    CommonPrefix(String),
+}
+
+impl ListEntry {
+    fn token(&self) -> &str {
+        match self {
+            ListEntry::Object(item) => item.key.as_str(),
+            ListEntry::CommonPrefix(prefix) => prefix.as_str(),
+        }
+    }
+}
+
+fn build_list_entries(
+    objects: Vec<StorageListItem>,
+    prefix: &str,
+    delimiter: Option<&str>,
+) -> Vec<ListEntry> {
+    let mut entries = Vec::new();
+    let mut common_prefixes = std::collections::BTreeSet::new();
+
+    for item in objects {
+        if !item.key.starts_with(prefix) {
+            continue;
+        }
+
+        if let Some(delimiter) = delimiter {
+            let suffix = &item.key[prefix.len()..];
+            if let Some(index) = suffix.find(delimiter) {
+                let common_prefix = format!("{}{}", prefix, &suffix[..index + delimiter.len()]);
+                common_prefixes.insert(common_prefix);
+                continue;
+            }
+        }
+
+        entries.push(ListEntry::Object(item));
+    }
+
+    entries.extend(common_prefixes.into_iter().map(ListEntry::CommonPrefix));
+    entries.sort_by(|left, right| left.token().cmp(right.token()));
+    entries
 }
 
 fn compute_etag(data: &[u8]) -> String {
@@ -437,10 +521,38 @@ mod tests {
         assert_eq!(stored.metadata.etag, metadata.etag);
 
         let page = storage
-            .list_objects_v2("user-1/assets", Some("avatars/"), Some(10), None)
+            .list_objects_v2("user-1/assets", Some("avatars/"), None, Some(10), None)
             .await
             .unwrap();
         assert_eq!(page.objects.len(), 1);
         assert_eq!(page.objects[0].key, "avatars/me.txt");
+    }
+
+    #[tokio::test]
+    async fn test_storage_list_objects_v2_supports_delimiter_common_prefixes() {
+        let dir = tempfile::tempdir().unwrap();
+        let storage = LocalStorage::new(dir.path());
+
+        storage
+            .put_object("user-1/assets", "photos/2026/a.jpg", b"a", Some("image/jpeg"))
+            .await
+            .unwrap();
+        storage
+            .put_object("user-1/assets", "photos/2027/b.jpg", b"b", Some("image/jpeg"))
+            .await
+            .unwrap();
+        storage
+            .put_object("user-1/assets", "photos/cover.jpg", b"c", Some("image/jpeg"))
+            .await
+            .unwrap();
+
+        let page = storage
+            .list_objects_v2("user-1/assets", Some("photos/"), Some("/"), Some(10), None)
+            .await
+            .unwrap();
+
+        assert_eq!(page.objects.len(), 1);
+        assert_eq!(page.objects[0].key, "photos/cover.jpg");
+        assert_eq!(page.common_prefixes, vec!["photos/2026/", "photos/2027/"]);
     }
 }

@@ -22,6 +22,7 @@ pub struct S3ListQuery {
     #[serde(rename = "list-type")]
     pub list_type: Option<u8>,
     pub prefix: Option<String>,
+    pub delimiter: Option<String>,
     #[serde(rename = "max-keys")]
     pub max_keys: Option<usize>,
     #[serde(rename = "continuation-token")]
@@ -35,7 +36,7 @@ pub async fn list_objects(
     let scoped_bucket = scoped_bucket(&claims.sub, DEFAULT_STORAGE_BUCKET);
     match state
         .storage
-        .list_objects_v2(&scoped_bucket, None, None, None)
+        .list_objects_v2(&scoped_bucket, None, None, None, None)
         .await
     {
         Ok(page) => {
@@ -120,7 +121,13 @@ pub async fn list_bucket_objects(
     Query(query): Query<S3ListQuery>,
 ) -> Response {
     if query.list_type != Some(2) {
-        return json_error(StatusCode::BAD_REQUEST, "only list-type=2 is supported");
+        return s3_error_response(
+            StatusCode::BAD_REQUEST,
+            "InvalidRequest",
+            "only list-type=2 is supported",
+            &format!("/{bucket}"),
+            None,
+        );
     }
 
     let scoped_bucket = scoped_bucket(&claims.sub, &bucket);
@@ -129,18 +136,26 @@ pub async fn list_bucket_objects(
         .list_objects_v2(
             &scoped_bucket,
             query.prefix.as_deref(),
+            query.delimiter.as_deref(),
             query.max_keys,
             query.continuation_token.as_deref(),
         )
         .await
     {
         Ok(page) => s3_list_xml_response(&bucket, &query, page).into_response(),
-        Err(err) if err.kind() == std::io::ErrorKind::InvalidInput => {
-            json_error(StatusCode::BAD_REQUEST, err.to_string())
-        }
-        Err(_) => json_error(
+        Err(err) if err.kind() == std::io::ErrorKind::InvalidInput => s3_error_response(
+            StatusCode::BAD_REQUEST,
+            "InvalidRequest",
+            &err.to_string(),
+            &format!("/{bucket}"),
+            None,
+        ),
+        Err(_) => s3_error_response(
             StatusCode::INTERNAL_SERVER_ERROR,
+            "InternalError",
             "failed to list storage objects",
+            &format!("/{bucket}"),
+            None,
         ),
     }
 }
@@ -153,15 +168,26 @@ pub async fn head_bucket_object(
     let scoped_bucket = scoped_bucket(&claims.sub, &bucket);
     match state.storage.head_object(&scoped_bucket, &key).await {
         Ok(metadata) => build_head_response(StatusCode::OK, &metadata),
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
-            json_error(StatusCode::NOT_FOUND, "object not found")
-        }
-        Err(err) if err.kind() == std::io::ErrorKind::InvalidInput => {
-            json_error(StatusCode::BAD_REQUEST, err.to_string())
-        }
-        Err(_) => json_error(
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => s3_error_response(
+            StatusCode::NOT_FOUND,
+            "NoSuchKey",
+            "object not found",
+            &format!("/{bucket}/{key}"),
+            Some(&key),
+        ),
+        Err(err) if err.kind() == std::io::ErrorKind::InvalidInput => s3_error_response(
+            StatusCode::BAD_REQUEST,
+            "InvalidObjectName",
+            &err.to_string(),
+            &format!("/{bucket}/{key}"),
+            Some(&key),
+        ),
+        Err(_) => s3_error_response(
             StatusCode::INTERNAL_SERVER_ERROR,
+            "InternalError",
             "failed to read object metadata",
+            &format!("/{bucket}/{key}"),
+            Some(&key),
         ),
     }
 }
@@ -176,13 +202,27 @@ pub async fn get_bucket_object(
         Ok(object) => {
             build_object_response(StatusCode::OK, &key, object.data, &object.metadata, true)
         }
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
-            json_error(StatusCode::NOT_FOUND, "object not found")
-        }
-        Err(err) if err.kind() == std::io::ErrorKind::InvalidInput => {
-            json_error(StatusCode::BAD_REQUEST, err.to_string())
-        }
-        Err(_) => json_error(StatusCode::INTERNAL_SERVER_ERROR, "failed to read object"),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => s3_error_response(
+            StatusCode::NOT_FOUND,
+            "NoSuchKey",
+            "object not found",
+            &format!("/{bucket}/{key}"),
+            Some(&key),
+        ),
+        Err(err) if err.kind() == std::io::ErrorKind::InvalidInput => s3_error_response(
+            StatusCode::BAD_REQUEST,
+            "InvalidObjectName",
+            &err.to_string(),
+            &format!("/{bucket}/{key}"),
+            Some(&key),
+        ),
+        Err(_) => s3_error_response(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "InternalError",
+            "failed to read object",
+            &format!("/{bucket}/{key}"),
+            Some(&key),
+        ),
     }
 }
 
@@ -204,10 +244,20 @@ pub async fn put_bucket_object(
         .await
     {
         Ok(metadata) => build_object_response(StatusCode::OK, &key, Vec::new(), &metadata, false),
-        Err(err) if err.kind() == std::io::ErrorKind::InvalidInput => {
-            json_error(StatusCode::BAD_REQUEST, err.to_string())
-        }
-        Err(_) => json_error(StatusCode::INTERNAL_SERVER_ERROR, "failed to save object"),
+        Err(err) if err.kind() == std::io::ErrorKind::InvalidInput => s3_error_response(
+            StatusCode::BAD_REQUEST,
+            "InvalidObjectName",
+            &err.to_string(),
+            &format!("/{bucket}/{key}"),
+            Some(&key),
+        ),
+        Err(_) => s3_error_response(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "InternalError",
+            "failed to save object",
+            &format!("/{bucket}/{key}"),
+            Some(&key),
+        ),
     }
 }
 
@@ -219,18 +269,58 @@ pub async fn delete_bucket_object(
     let scoped_bucket = scoped_bucket(&claims.sub, &bucket);
     match state.storage.delete_object(&scoped_bucket, &key).await {
         Ok(()) => StatusCode::NO_CONTENT.into_response(),
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
-            json_error(StatusCode::NOT_FOUND, "object not found")
-        }
-        Err(err) if err.kind() == std::io::ErrorKind::InvalidInput => {
-            json_error(StatusCode::BAD_REQUEST, err.to_string())
-        }
-        Err(_) => json_error(StatusCode::INTERNAL_SERVER_ERROR, "failed to delete object"),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => s3_error_response(
+            StatusCode::NOT_FOUND,
+            "NoSuchKey",
+            "object not found",
+            &format!("/{bucket}/{key}"),
+            Some(&key),
+        ),
+        Err(err) if err.kind() == std::io::ErrorKind::InvalidInput => s3_error_response(
+            StatusCode::BAD_REQUEST,
+            "InvalidObjectName",
+            &err.to_string(),
+            &format!("/{bucket}/{key}"),
+            Some(&key),
+        ),
+        Err(_) => s3_error_response(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "InternalError",
+            "failed to delete object",
+            &format!("/{bucket}/{key}"),
+            Some(&key),
+        ),
     }
 }
 
 fn scoped_bucket(user_id: &str, bucket: &str) -> String {
     format!("{}/{}", user_id, bucket.trim().trim_matches('/'))
+}
+
+fn s3_error_response(
+    status: StatusCode,
+    code: &str,
+    message: &str,
+    resource: &str,
+    key: Option<&str>,
+) -> Response {
+    let request_id = uuid::Uuid::new_v4().to_string();
+    let mut body = String::from("<?xml version=\"1.0\" encoding=\"UTF-8\"?>");
+    body.push_str("<Error>");
+    body.push_str(&format!("<Code>{}</Code>", xml_escape(code)));
+    body.push_str(&format!("<Message>{}</Message>", xml_escape(message)));
+    if let Some(key) = key {
+        body.push_str(&format!("<Key>{}</Key>", xml_escape(key)));
+    }
+    body.push_str(&format!("<Resource>{}</Resource>", xml_escape(resource)));
+    body.push_str(&format!("<RequestId>{}</RequestId>", xml_escape(&request_id)));
+    body.push_str("</Error>");
+
+    Response::builder()
+        .status(status)
+        .header(header::CONTENT_TYPE, "application/xml")
+        .body(axum::body::Body::from(body))
+        .unwrap()
 }
 
 fn build_head_response(
@@ -271,7 +361,7 @@ fn s3_list_xml_response(
     query: &S3ListQuery,
     page: crate::storage::local::StorageListPage,
 ) -> Response {
-    let key_count = page.objects.len();
+    let key_count = page.objects.len() + page.common_prefixes.len();
     let mut body = String::from("<?xml version=\"1.0\" encoding=\"UTF-8\"?>");
     body.push_str("<ListBucketResult xmlns=\"http://s3.amazonaws.com/doc/2006-03-01/\">");
     body.push_str(&format!("<Name>{}</Name>", xml_escape(bucket)));
@@ -279,6 +369,9 @@ fn s3_list_xml_response(
         "<Prefix>{}</Prefix>",
         xml_escape(query.prefix.as_deref().unwrap_or(""))
     ));
+    if let Some(delimiter) = query.delimiter.as_deref() {
+        body.push_str(&format!("<Delimiter>{}</Delimiter>", xml_escape(delimiter)));
+    }
     body.push_str(&format!("<KeyCount>{key_count}</KeyCount>"));
     body.push_str(&format!(
         "<MaxKeys>{}</MaxKeys>",
@@ -288,6 +381,9 @@ fn s3_list_xml_response(
         "<IsTruncated>{}</IsTruncated>",
         if page.is_truncated { "true" } else { "false" }
     ));
+    if let Some(token) = query.continuation_token.as_deref() {
+        body.push_str(&format!("<ContinuationToken>{}</ContinuationToken>", xml_escape(token)));
+    }
     if let Some(token) = page.next_continuation_token.as_deref() {
         body.push_str(&format!(
             "<NextContinuationToken>{}</NextContinuationToken>",
@@ -305,6 +401,11 @@ fn s3_list_xml_response(
         body.push_str(&format!("<Size>{}</Size>", object.size));
         body.push_str("<StorageClass>STANDARD</StorageClass>");
         body.push_str("</Contents>");
+    }
+    for prefix in page.common_prefixes {
+        body.push_str("<CommonPrefixes>");
+        body.push_str(&format!("<Prefix>{}</Prefix>", xml_escape(&prefix)));
+        body.push_str("</CommonPrefixes>");
     }
     body.push_str("</ListBucketResult>");
 
@@ -482,6 +583,7 @@ mod tests {
             Query(S3ListQuery {
                 list_type: Some(2),
                 prefix: Some("notes/".to_string()),
+                delimiter: None,
                 max_keys: Some(1),
                 continuation_token: None,
             }),
@@ -500,6 +602,7 @@ mod tests {
             Query(S3ListQuery {
                 list_type: Some(2),
                 prefix: Some("notes/".to_string()),
+                delimiter: None,
                 max_keys: Some(10),
                 continuation_token: Some("notes/a.txt".to_string()),
             }),
@@ -509,5 +612,86 @@ mod tests {
         let second_xml = response_text(second_page).await;
         assert!(second_xml.contains("<Key>notes/b.txt</Key>"));
         assert!(!second_xml.contains("tmp/c.txt"));
+    }
+
+    #[tokio::test]
+    async fn test_s3_like_list_objects_v2_supports_delimiter_common_prefixes() {
+        let (state, _dir) = test_support::make_test_state().await;
+        let user = register_user(state.clone(), "prefixes@example.com").await;
+        let claims = claims_for(&user.user.id);
+
+        for key in ["photos/2026/a.jpg", "photos/2027/b.jpg", "photos/cover.jpg"] {
+            let response = put_bucket_object(
+                State(state.clone()),
+                Extension(claims.clone()),
+                axum::extract::Path(("assets".to_string(), key.to_string())),
+                HeaderMap::new(),
+                Bytes::from_static(b"x"),
+            )
+            .await;
+            assert_eq!(response.status(), StatusCode::OK);
+        }
+
+        let response = list_bucket_objects(
+            State(state),
+            Extension(claims),
+            axum::extract::Path("assets".to_string()),
+            Query(S3ListQuery {
+                list_type: Some(2),
+                prefix: Some("photos/".to_string()),
+                delimiter: Some("/".to_string()),
+                max_keys: Some(10),
+                continuation_token: None,
+            }),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let xml = response_text(response).await;
+        assert!(xml.contains("<Key>photos/cover.jpg</Key>"));
+        assert!(xml.contains("<CommonPrefixes><Prefix>photos/2026/</Prefix></CommonPrefixes>"));
+        assert!(xml.contains("<CommonPrefixes><Prefix>photos/2027/</Prefix></CommonPrefixes>"));
+    }
+
+    #[tokio::test]
+    async fn test_s3_like_errors_are_returned_as_xml() {
+        let (state, _dir) = test_support::make_test_state().await;
+        let user = register_user(state.clone(), "errors@example.com").await;
+        let claims = claims_for(&user.user.id);
+
+        let missing = get_bucket_object(
+            State(state.clone()),
+            Extension(claims.clone()),
+            axum::extract::Path(("assets".to_string(), "missing.txt".to_string())),
+        )
+        .await;
+        assert_eq!(missing.status(), StatusCode::NOT_FOUND);
+        assert_eq!(
+            missing.headers().get(header::CONTENT_TYPE).unwrap(),
+            "application/xml"
+        );
+        let missing_xml = response_text(missing).await;
+        assert!(missing_xml.contains("<Code>NoSuchKey</Code>"));
+        assert!(missing_xml.contains("<Key>missing.txt</Key>"));
+
+        let invalid_list = list_bucket_objects(
+            State(state),
+            Extension(claims),
+            axum::extract::Path("assets".to_string()),
+            Query(S3ListQuery {
+                list_type: Some(1),
+                prefix: None,
+                delimiter: None,
+                max_keys: None,
+                continuation_token: None,
+            }),
+        )
+        .await;
+        assert_eq!(invalid_list.status(), StatusCode::BAD_REQUEST);
+        assert_eq!(
+            invalid_list.headers().get(header::CONTENT_TYPE).unwrap(),
+            "application/xml"
+        );
+        let invalid_xml = response_text(invalid_list).await;
+        assert!(invalid_xml.contains("<Code>InvalidRequest</Code>"));
     }
 }
