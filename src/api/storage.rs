@@ -606,7 +606,19 @@ pub async fn put_bucket_object(
         .and_then(|value| value.to_str().ok());
     let content_type = content_type_header.unwrap_or("application/octet-stream");
     let custom_metadata = extract_custom_metadata_headers(&headers);
-    let checksum_sha256 = match validate_checksum_sha256(&body, extract_checksum_sha256(&headers).as_deref()) {
+    let checksum_header = match extract_checksum_header(&headers) {
+        Ok(value) => value,
+        Err(message) => {
+            return s3_error_response(
+                StatusCode::BAD_REQUEST,
+                "InvalidRequest",
+                &message,
+                &format!("/{bucket}/{key}"),
+                Some(&key),
+            )
+        }
+    };
+    let (checksum_sha256, checksum_sha1) = match validate_checksum_header(&body, checksum_header) {
         Ok(value) => value,
         Err(message) => {
             return s3_error_response(
@@ -688,12 +700,13 @@ pub async fn put_bucket_object(
             Ok(source_object) => {
                 let request_response_headers = extract_standard_response_headers(&headers);
                 let request_tagging = extract_object_tagging(&headers);
-                let (target_content_type, target_custom_metadata, target_response_headers, target_checksum_sha256, target_tagging) = match metadata_directive {
+                let (target_content_type, target_custom_metadata, target_response_headers, target_checksum_sha256, target_checksum_sha1, target_tagging) = match metadata_directive {
                     MetadataDirective::Copy => (
                         source_object.metadata.content_type.clone(),
                         source_object.metadata.custom_metadata.clone(),
                         source_object.metadata.response_headers.clone(),
                         source_object.metadata.checksum_sha256.clone(),
+                        source_object.metadata.checksum_sha1.clone(),
                         source_object.metadata.tagging.clone(),
                     ),
                     MetadataDirective::Replace => (
@@ -706,6 +719,7 @@ pub async fn put_bucket_object(
                             request_response_headers,
                         ),
                         source_object.metadata.checksum_sha256.clone(),
+                        source_object.metadata.checksum_sha1.clone(),
                         request_tagging.or(source_object.metadata.tagging.clone()),
                     ),
                 };
@@ -719,6 +733,7 @@ pub async fn put_bucket_object(
                         target_custom_metadata,
                         target_response_headers,
                         target_checksum_sha256,
+                        target_checksum_sha1,
                         target_tagging,
                     )
                     .await
@@ -916,6 +931,7 @@ pub async fn put_bucket_object(
             custom_metadata,
             extract_standard_response_headers(&headers),
             checksum_sha256,
+            checksum_sha1,
             tagging,
         )
         .await
@@ -1112,6 +1128,7 @@ fn parse_tagging_xml(body: &[u8]) -> Result<Option<String>, String> {
         return Err("missing Tagging root element".to_string());
     }
     let mut pairs = Vec::new();
+    let mut seen_keys = std::collections::BTreeSet::new();
     for chunk in xml.split("<Tag>").skip(1) {
         let Some(inner) = chunk.split_once("</Tag>").map(|(part, _)| part) else {
             return Err("tagging entry is missing </Tag>".to_string());
@@ -1120,10 +1137,24 @@ fn parse_tagging_xml(body: &[u8]) -> Result<Option<String>, String> {
             .ok_or_else(|| "tagging entry is missing Key".to_string())?;
         let value = find_xml_tag_value(inner, "Value")
             .ok_or_else(|| "tagging entry is missing Value".to_string())?;
-        if key.trim().is_empty() {
+        let key = key.trim();
+        let value = value.trim();
+        if key.is_empty() {
             return Err("tagging key must not be empty".to_string());
         }
-        pairs.push(format!("{}={}", key.trim(), value.trim()));
+        if key.len() > 128 {
+            return Err("tagging key must be 128 characters or fewer".to_string());
+        }
+        if value.len() > 256 {
+            return Err("tagging value must be 256 characters or fewer".to_string());
+        }
+        if !seen_keys.insert(key.to_string()) {
+            return Err("duplicate tagging keys are not allowed".to_string());
+        }
+        pairs.push(format!("{}={}", key, value));
+    }
+    if pairs.len() > 10 {
+        return Err("tagging supports at most 10 tags".to_string());
     }
     Ok((!pairs.is_empty()).then(|| pairs.join("&")))
 }
@@ -1651,13 +1682,22 @@ fn extract_custom_metadata_headers(headers: &HeaderMap) -> BTreeMap<String, Stri
         .collect()
 }
 
-fn extract_checksum_sha256(headers: &HeaderMap) -> Option<String> {
-    headers
-        .get("x-amz-checksum-sha256")
-        .and_then(|value| value.to_str().ok())
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(str::to_string)
+fn extract_checksum_header(headers: &HeaderMap) -> Result<Option<(String, String)>, String> {
+    let mut found = Vec::new();
+    for name in ["x-amz-checksum-sha256", "x-amz-checksum-sha1"] {
+        if let Some(value) = headers
+            .get(name)
+            .and_then(|value| value.to_str().ok())
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
+            found.push((name.to_string(), value.to_string()));
+        }
+    }
+    if found.len() > 1 {
+        return Err("only one checksum header is supported".to_string());
+    }
+    Ok(found.into_iter().next())
 }
 
 fn compute_sha256_hex(data: &[u8]) -> String {
@@ -1667,12 +1707,36 @@ fn compute_sha256_hex(data: &[u8]) -> String {
         .collect()
 }
 
-fn validate_checksum_sha256(data: &[u8], checksum: Option<&str>) -> Result<Option<String>, String> {
-    let computed = compute_sha256_hex(data);
-    match checksum.map(str::trim).filter(|value| !value.is_empty()) {
-        Some(value) if value.eq_ignore_ascii_case(&computed) => Ok(Some(computed)),
-        Some(_) => Err("x-amz-checksum-sha256 does not match payload".to_string()),
-        None => Ok(Some(computed)),
+fn compute_sha1_hex(data: &[u8]) -> String {
+    openssl::sha::sha1(data)
+        .iter()
+        .map(|byte| format!("{:02x}", byte))
+        .collect()
+}
+
+fn validate_checksum_header(
+    data: &[u8],
+    checksum: Option<(String, String)>,
+) -> Result<(Option<String>, Option<String>), String> {
+    match checksum {
+        Some((name, value)) if name == "x-amz-checksum-sha256" => {
+            let computed = compute_sha256_hex(data);
+            if value.eq_ignore_ascii_case(&computed) {
+                Ok((Some(computed), None))
+            } else {
+                Err("x-amz-checksum-sha256 does not match payload".to_string())
+            }
+        }
+        Some((name, value)) if name == "x-amz-checksum-sha1" => {
+            let computed = compute_sha1_hex(data);
+            if value.eq_ignore_ascii_case(&computed) {
+                Ok((None, Some(computed)))
+            } else {
+                Err("x-amz-checksum-sha1 does not match payload".to_string())
+            }
+        }
+        Some(_) => Err("unsupported checksum header".to_string()),
+        None => Ok((Some(compute_sha256_hex(data)), None)),
     }
 }
 
@@ -1754,6 +1818,9 @@ fn apply_standard_object_response_headers(
     }
     if let Some(value) = metadata.checksum_sha256.as_deref() {
         response = response.header("x-amz-checksum-sha256", value);
+    }
+    if let Some(value) = metadata.checksum_sha1.as_deref() {
+        response = response.header("x-amz-checksum-sha1", value);
     }
     let tag_count = tagging_count(metadata.tagging.as_deref());
     if tag_count > 0 {
@@ -4822,6 +4889,243 @@ mod tests {
         assert_eq!(bad_tagging.status(), StatusCode::BAD_REQUEST);
         let xml = response_text(bad_tagging).await;
         assert!(xml.contains("<Code>MalformedXML</Code>"));
+    }
+
+    #[tokio::test]
+    async fn test_s3_like_put_object_supports_sha1_checksum_header() {
+        let (state, _dir) = test_support::make_test_state().await;
+        let user = register_user(state.clone(), "checksum-sha1@example.com").await;
+        let claims = claims_for(&user.user.id);
+        let body = "hello sha1";
+        let checksum = compute_sha1_hex(body.as_bytes());
+
+        let mut headers = HeaderMap::new();
+        headers.insert("x-amz-checksum-sha1", HeaderValue::from_str(&checksum).unwrap());
+
+        let put_response = put_bucket_object(
+            State(state.clone()),
+            Extension(claims.clone()),
+            axum::extract::Path(("assets".to_string(), "meta/sha1.txt".to_string())),
+            RawQuery(None),
+            headers,
+            Bytes::from(body),
+        )
+        .await;
+        assert_eq!(put_response.status(), StatusCode::OK);
+        assert_eq!(put_response.headers().get("x-amz-checksum-sha1").unwrap(), checksum.as_str());
+
+        let head_response = head_bucket_object(
+            State(state.clone()),
+            Extension(claims.clone()),
+            axum::extract::Path(("assets".to_string(), "meta/sha1.txt".to_string())),
+            HeaderMap::new(),
+        )
+        .await;
+        assert_eq!(head_response.status(), StatusCode::OK);
+        assert_eq!(head_response.headers().get("x-amz-checksum-sha1").unwrap(), checksum.as_str());
+    }
+
+    #[tokio::test]
+    async fn test_s3_like_put_object_rejects_multiple_checksum_headers() {
+        let (state, _dir) = test_support::make_test_state().await;
+        let user = register_user(state.clone(), "checksum-multi@example.com").await;
+        let claims = claims_for(&user.user.id);
+        let body = "hello multi checksum";
+
+        let mut headers = HeaderMap::new();
+        headers.insert("x-amz-checksum-sha256", HeaderValue::from_str(&compute_sha256_hex(body.as_bytes())).unwrap());
+        headers.insert("x-amz-checksum-sha1", HeaderValue::from_str(&compute_sha1_hex(body.as_bytes())).unwrap());
+
+        let response = put_bucket_object(
+            State(state),
+            Extension(claims),
+            axum::extract::Path(("assets".to_string(), "meta/multi-checksum.txt".to_string())),
+            RawQuery(None),
+            headers,
+            Bytes::from(body),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        let xml = response_text(response).await;
+        assert!(xml.contains("only one checksum header is supported"));
+    }
+
+    #[tokio::test]
+    async fn test_s3_like_tagging_subresource_rejects_duplicate_keys_and_too_many_tags() {
+        let (state, _dir) = test_support::make_test_state().await;
+        let user = register_user(state.clone(), "tagging-constraints@example.com").await;
+        let claims = claims_for(&user.user.id);
+
+        let put_response = put_bucket_object(
+            State(state.clone()),
+            Extension(claims.clone()),
+            axum::extract::Path(("assets".to_string(), "tags/constraints.txt".to_string())),
+            RawQuery(None),
+            HeaderMap::new(),
+            Bytes::from("tag me"),
+        )
+        .await;
+        assert_eq!(put_response.status(), StatusCode::OK);
+
+        let duplicate_xml = r#"<Tagging><TagSet><Tag><Key>color</Key><Value>blue</Value></Tag><Tag><Key>color</Key><Value>red</Value></Tag></TagSet></Tagging>"#;
+        let duplicate_response = put_bucket_object(
+            State(state.clone()),
+            Extension(claims.clone()),
+            axum::extract::Path(("assets".to_string(), "tags/constraints.txt".to_string())),
+            RawQuery(Some("tagging".to_string())),
+            HeaderMap::new(),
+            Bytes::from(duplicate_xml),
+        )
+        .await;
+        assert_eq!(duplicate_response.status(), StatusCode::BAD_REQUEST);
+        let duplicate_body = response_text(duplicate_response).await;
+        assert!(duplicate_body.contains("duplicate tagging keys are not allowed"));
+
+        let tags = (1..=11)
+            .map(|i| format!("<Tag><Key>k{i}</Key><Value>v{i}</Value></Tag>"))
+            .collect::<String>();
+        let too_many_xml = format!("<Tagging><TagSet>{tags}</TagSet></Tagging>");
+        let too_many_response = put_bucket_object(
+            State(state),
+            Extension(claims),
+            axum::extract::Path(("assets".to_string(), "tags/constraints.txt".to_string())),
+            RawQuery(Some("tagging".to_string())),
+            HeaderMap::new(),
+            Bytes::from(too_many_xml),
+        )
+        .await;
+        assert_eq!(too_many_response.status(), StatusCode::BAD_REQUEST);
+        let too_many_body = response_text(too_many_response).await;
+        assert!(too_many_body.contains("tagging supports at most 10 tags"));
+    }
+
+    #[tokio::test]
+    async fn test_sdk_cli_like_tagging_and_delete_smoke_interop() {
+        let (state, _dir) = test_support::make_test_state().await;
+        let user = register_user(state.clone(), "sdk-cli-delete@example.com").await;
+        let secret_access_key = format!("{}:{}", state.jwt_secret, user.user.id);
+
+        let app = axum::Router::new()
+            .route("/api/s3/:bucket", axum::routing::get(list_bucket_objects))
+            .route(
+                "/api/s3/:bucket/*key",
+                axum::routing::put(put_bucket_object)
+                    .get(get_bucket_object)
+                    .head(head_bucket_object)
+                    .delete(delete_bucket_object),
+            )
+            .layer(axum::middleware::from_fn_with_state(
+                state.clone(),
+                crate::middleware::s3_auth::s3_auth_middleware,
+            ))
+            .with_state(state.clone());
+
+        let put_signed = crate::middleware::s3_auth::build_signed_header_auth_with_secret(
+            "PUT",
+            "https://example.com/api/s3/assets/sdk-cli.txt",
+            &user.user.id,
+            &secret_access_key,
+            None,
+        ).unwrap();
+        let put_response = tower::ServiceExt::oneshot(
+            app.clone(),
+            axum::http::Request::builder()
+                .method("PUT")
+                .uri("/api/s3/assets/sdk-cli.txt")
+                .header("host", "example.com")
+                .header("authorization", put_signed.authorization)
+                .header("x-amz-date", put_signed.amz_date)
+                .header("x-amz-content-sha256", put_signed.payload_hash)
+                .body(axum::body::Body::from("sdk cli body"))
+                .unwrap(),
+        ).await.unwrap();
+        assert_eq!(put_response.status(), StatusCode::OK);
+
+        let tagging_body = r#"<Tagging><TagSet><Tag><Key>env</Key><Value>dev</Value></Tag></TagSet></Tagging>"#;
+        let tagging_signed = crate::middleware::s3_auth::build_signed_header_auth_with_secret(
+            "PUT",
+            "https://example.com/api/s3/assets/sdk-cli.txt?tagging",
+            &user.user.id,
+            &secret_access_key,
+            None,
+        ).unwrap();
+        let tagging_response = tower::ServiceExt::oneshot(
+            app.clone(),
+            axum::http::Request::builder()
+                .method("PUT")
+                .uri("/api/s3/assets/sdk-cli.txt?tagging")
+                .header("host", "example.com")
+                .header("authorization", tagging_signed.authorization)
+                .header("x-amz-date", tagging_signed.amz_date)
+                .header("x-amz-content-sha256", tagging_signed.payload_hash)
+                .body(axum::body::Body::from(tagging_body))
+                .unwrap(),
+        ).await.unwrap();
+        assert_eq!(tagging_response.status(), StatusCode::OK);
+
+        let get_tagging_signed = crate::middleware::s3_auth::build_signed_header_auth_with_secret(
+            "GET",
+            "https://example.com/api/s3/assets/sdk-cli.txt?tagging",
+            &user.user.id,
+            &secret_access_key,
+            None,
+        ).unwrap();
+        let get_tagging_response = tower::ServiceExt::oneshot(
+            app.clone(),
+            axum::http::Request::builder()
+                .uri("/api/s3/assets/sdk-cli.txt?tagging")
+                .header("host", "example.com")
+                .header("authorization", get_tagging_signed.authorization)
+                .header("x-amz-date", get_tagging_signed.amz_date)
+                .header("x-amz-content-sha256", get_tagging_signed.payload_hash)
+                .body(axum::body::Body::empty())
+                .unwrap(),
+        ).await.unwrap();
+        assert_eq!(get_tagging_response.status(), StatusCode::OK);
+        assert!(response_text(get_tagging_response).await.contains("<Key>env</Key><Value>dev</Value>"));
+
+        let delete_signed = crate::middleware::s3_auth::build_signed_header_auth_with_secret(
+            "DELETE",
+            "https://example.com/api/s3/assets/sdk-cli.txt",
+            &user.user.id,
+            &secret_access_key,
+            None,
+        ).unwrap();
+        let delete_response = tower::ServiceExt::oneshot(
+            app.clone(),
+            axum::http::Request::builder()
+                .method("DELETE")
+                .uri("/api/s3/assets/sdk-cli.txt")
+                .header("host", "example.com")
+                .header("authorization", delete_signed.authorization)
+                .header("x-amz-date", delete_signed.amz_date)
+                .header("x-amz-content-sha256", delete_signed.payload_hash)
+                .body(axum::body::Body::empty())
+                .unwrap(),
+        ).await.unwrap();
+        assert_eq!(delete_response.status(), StatusCode::NO_CONTENT);
+
+        let list_signed = crate::middleware::s3_auth::build_signed_header_auth_with_secret(
+            "GET",
+            "https://example.com/api/s3/assets?list-type=2",
+            &user.user.id,
+            &secret_access_key,
+            None,
+        ).unwrap();
+        let list_response = tower::ServiceExt::oneshot(
+            app,
+            axum::http::Request::builder()
+                .uri("/api/s3/assets?list-type=2")
+                .header("host", "example.com")
+                .header("authorization", list_signed.authorization)
+                .header("x-amz-date", list_signed.amz_date)
+                .header("x-amz-content-sha256", list_signed.payload_hash)
+                .body(axum::body::Body::empty())
+                .unwrap(),
+        ).await.unwrap();
+        assert_eq!(list_response.status(), StatusCode::OK);
+        let list_xml = response_text(list_response).await;
+        assert!(!list_xml.contains("<Key>sdk-cli.txt</Key>"));
     }
 
     #[tokio::test]

@@ -39,6 +39,8 @@ pub struct StorageObjectMetadata {
     #[serde(default)]
     pub checksum_sha256: Option<String>,
     #[serde(default)]
+    pub checksum_sha1: Option<String>,
+    #[serde(default)]
     pub tagging: Option<String>,
 }
 
@@ -139,6 +141,7 @@ impl LocalStorage {
             StorageObjectResponseHeaders::default(),
             None,
             None,
+            None,
         )
         .await
     }
@@ -152,6 +155,7 @@ impl LocalStorage {
         custom_metadata: BTreeMap<String, String>,
         response_headers: StorageObjectResponseHeaders,
         checksum_sha256: Option<String>,
+        checksum_sha1: Option<String>,
         tagging: Option<String>,
     ) -> io::Result<StorageObjectMetadata> {
         let path = self.resolve_object_path(bucket, key)?;
@@ -181,6 +185,7 @@ impl LocalStorage {
             custom_metadata,
             response_headers,
             checksum_sha256,
+            checksum_sha1,
             tagging,
         };
 

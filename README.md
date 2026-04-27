@@ -116,11 +116,14 @@ What this means for external frontend apps:
 - CopyObject with `x-amz-metadata-directive: REPLACE` now preserves unspecified standard response headers from the source object while applying any explicitly provided replacements
 - CopyObject does not yet support `x-amz-copy-source-if-*` conditional headers; Peanut now rejects them explicitly with `InvalidRequest`
 - when `x-amz-checksum-sha256` is sent on PUT, Peanut validates it against the payload and replays it on subsequent object responses (PUT/GET/HEAD)
+- Peanut now also accepts `x-amz-checksum-sha1` on PUT under the same minimal contract
+- multiple checksum headers on the same PUT are rejected explicitly
 - when `x-amz-tagging` is sent on PUT, Peanut stores a minimal tagging contract and replays the derived `x-amz-tagging-count` on subsequent object responses
 - Peanut now also supports the object tagging subresource at a minimal level:
   - `GET /api/s3/:bucket/*key?tagging`
   - `PUT /api/s3/:bucket/*key?tagging` with `Tagging` XML
   - `DELETE /api/s3/:bucket/*key?tagging`
+- tagging XML is currently validated under a minimal contract, but duplicate keys and more than 10 tags are rejected explicitly
 - custom object metadata sent as `x-amz-meta-*` on PUT is now persisted and returned again on subsequent PUT/GET/HEAD responses
 - S3-like success/error responses now also include `x-amz-request-id` headers, and object `Last-Modified` headers are emitted as HTTP-date strings
 - S3-like bucket listing supports `list-type=2`, `prefix`, `delimiter`, `max-keys`, `continuation-token`, `start-after`, `encoding-type=url`, and `fetch-owner=true`

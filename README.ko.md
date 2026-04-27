@@ -117,11 +117,14 @@ Peanut은 아래 원칙을 지향한다.
 - `x-amz-metadata-directive: REPLACE` 를 사용하는 CopyObject는 source object의 표준 response header를 기본 유지하면서, 명시적으로 전달한 값만 치환한다
 - CopyObject에서는 `x-amz-copy-source-if-*` 조건부 헤더를 아직 지원하지 않으며, 전달 시 `InvalidRequest`로 거부한다
 - PUT 시 `x-amz-checksum-sha256` 를 보내면 payload와 일치하는지 검증하고, 저장된 object 응답(이후 PUT/GET/HEAD)에도 다시 내려준다
+- PUT 시 `x-amz-checksum-sha1` 도 같은 최소 계약으로 지원한다
+- 같은 PUT에 checksum header를 여러 개 보내면 명시적으로 거부한다
 - PUT 시 `x-amz-tagging` 을 보내면 최소 계약으로 tag count를 저장하고 이후 object 응답에서 `x-amz-tagging-count` 로 다시 내려준다
 - object tagging subresource도 최소 계약으로 지원한다:
   - `GET /api/s3/:bucket/*key?tagging`
   - `PUT /api/s3/:bucket/*key?tagging` + `Tagging` XML
   - `DELETE /api/s3/:bucket/*key?tagging`
+- tagging XML은 최소 계약으로 검증하며 duplicate key와 10개 초과 tag는 명시적으로 거부한다
 - PUT 시 전달한 `x-amz-meta-*` custom object metadata는 이제 저장되며, 이후 PUT/GET/HEAD 응답에서도 다시 내려간다
 - S3-like 성공/에러 응답은 `x-amz-request-id` 헤더를 포함하고, object `Last-Modified` 헤더는 HTTP-date 형식으로 내려간다
 - S3-like bucket listing은 `list-type=2`, `prefix`, `delimiter`, `max-keys`, `continuation-token`, `start-after`, `encoding-type=url`, `fetch-owner=true`를 지원한다
