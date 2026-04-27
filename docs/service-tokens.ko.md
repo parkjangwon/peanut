@@ -22,6 +22,7 @@ Admin 엔드포인트:
 - `POST /api/admin/service-tokens`
 - `DELETE /api/admin/service-tokens/:token_id`
 - curl 예제: `examples/service-tokens/`
+- jq 보조 예제: `examples/service-tokens/create-token-jq.sh`
 - 통합 운영 예제: `examples/operations-e2e/`
 
 ## 토큰 생성
@@ -57,6 +58,7 @@ Admin 엔드포인트:
 - plaintext `token` 값은 바로 복사해둬야 한다
 - Peanut은 hash만 저장하므로 raw token은 나중에 다시 볼 수 없다
 - 바로 실행 가능한 curl 파일은 `examples/service-tokens/` 참고
+- `jq` 가 있으면 `examples/service-tokens/create-token-jq.sh` 가 바로 붙여넣을 export 라인을 출력한다
 
 ## 토큰 사용
 

@@ -14,6 +14,7 @@ Goal:
 
 Files included:
 - `create-service-token.sh`
+- `bootstrap-service-token-jq.sh`
 - `create-todos-table.sh`
 - `create-todo-row.sh`
 - `upload-storage-object.sh`
@@ -43,6 +44,15 @@ export SERVICE_TOKEN='pst_...'
 ./examples/operations-e2e/create-todo-row.sh
 ./examples/operations-e2e/upload-storage-object.sh
 ./examples/operations-e2e/head-storage-object.sh
+```
+
+If `jq` is installed, you can bootstrap the service token and print the next commands automatically:
+
+```bash
+export BASE_URL=http://127.0.0.1:3000
+export ADMIN_JWT='<PASTE_ADMIN_JWT>'
+
+./examples/operations-e2e/bootstrap-service-token-jq.sh
 ```
 
 Notes:

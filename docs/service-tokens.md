@@ -22,6 +22,7 @@ Admin endpoints:
 - `POST /api/admin/service-tokens`
 - `DELETE /api/admin/service-tokens/:token_id`
 - curl examples: `examples/service-tokens/`
+- jq-assisted examples: `examples/service-tokens/create-token-jq.sh`
 - combined runbook: `examples/operations-e2e/`
 
 ## Create a token
@@ -57,6 +58,7 @@ Important:
 - copy the plaintext `token` immediately
 - Peanut stores only the hash, so the raw token is not recoverable later
 - see `examples/service-tokens/` for copy-pasteable curl files
+- if `jq` is available, `examples/service-tokens/create-token-jq.sh` prints ready-to-paste export lines
 
 ## Use a token
 

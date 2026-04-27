@@ -12,9 +12,11 @@ Recommended flow:
 Files included:
 - `create-token.json`
 - `create-token.sh`
+- `create-token-jq.sh`
 - `list-tokens.sh`
 - `use-token-admin-users.sh`
 - `revoke-token.sh`
+- `revoke-latest-token-jq.sh`
 - for a combined Data API + storage operator flow, see `../operations-e2e/`
 
 Minimal flow:
@@ -28,4 +30,14 @@ export ADMIN_JWT='<PASTE_ADMIN_JWT>'
 
 export SERVICE_TOKEN='pst_...'
 ./examples/service-tokens/use-token-admin-users.sh
+```
+
+If `jq` is installed, you can skip manual copying:
+
+```bash
+export BASE_URL=http://127.0.0.1:3000
+export ADMIN_JWT='<PASTE_ADMIN_JWT>'
+
+./examples/service-tokens/create-token-jq.sh
+# copy/paste the printed export lines
 ```

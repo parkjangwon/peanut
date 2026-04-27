@@ -91,6 +91,7 @@ What this means for external frontend apps:
 - English guide: `docs/service-tokens.md`
 - Korean guide: `docs/service-tokens.ko.md`
 - curl examples: `examples/service-tokens/`
+- jq-assisted token bootstrap: `examples/service-tokens/create-token-jq.sh`
 - end-to-end operations example: `examples/operations-e2e/`
 
 ### Storage

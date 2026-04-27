@@ -92,6 +92,7 @@ Peanut은 아래 원칙을 지향한다.
 - 한국어 가이드: `docs/service-tokens.ko.md`
 - English guide: `docs/service-tokens.md`
 - curl 예제: `examples/service-tokens/`
+- jq 보조 부트스트랩: `examples/service-tokens/create-token-jq.sh`
 - end-to-end 운영 예제: `examples/operations-e2e/`
 
 ### Storage
