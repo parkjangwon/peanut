@@ -633,6 +633,7 @@ curl -s "$BASE_URL/api/data/tables/todos/rows?search=buy&filter_field=title&filt
 - Data API를 조금 더 실전적으로 보려면 `docs/data-api.ko.md` 참고
 - 바로 보낼 수 있는 payload 예제는 `examples/data-api/` 참고
 - service token + data + storage를 한 번에 보는 운영 예제는 `examples/operations-e2e/` 참고
+- 해당 예제에는 Data API list/export 단계도 포함되어 있다
 - 외부 프론트 auth 전체 흐름은 `docs/auth-client.ko.md`와 `examples/auth-client-web/` 참고
 
 ## 로컬 개발

@@ -10,6 +10,8 @@ Goal:
 - mint one admin service token
 - use that service token to create a Data API table
 - insert a row into the table
+- list rows back through the Data API
+- export the table snapshot
 - upload an object into Peanut storage
 
 Files included:
@@ -17,6 +19,8 @@ Files included:
 - `bootstrap-service-token-jq.sh`
 - `create-todos-table.sh`
 - `create-todo-row.sh`
+- `list-todo-rows.sh`
+- `export-todos-table.sh`
 - `upload-storage-object.sh`
 - `head-storage-object.sh`
 - `todos-table.json`
@@ -27,6 +31,7 @@ Environment variables used:
 - `BASE_URL` default: `http://127.0.0.1:3000`
 - `ADMIN_JWT` required for service-token creation
 - `SERVICE_TOKEN` required for Data API + storage steps
+- `TABLE_NAME` optional, default `ops_todos`
 - `STORAGE_BUCKET` optional, default `assets`
 - `STORAGE_KEY` optional, default `ops/hello.txt`
 
@@ -42,6 +47,8 @@ export ADMIN_JWT='<PASTE_ADMIN_JWT>'
 export SERVICE_TOKEN='pst_...'
 ./examples/operations-e2e/create-todos-table.sh
 ./examples/operations-e2e/create-todo-row.sh
+./examples/operations-e2e/list-todo-rows.sh
+./examples/operations-e2e/export-todos-table.sh
 ./examples/operations-e2e/upload-storage-object.sh
 ./examples/operations-e2e/head-storage-object.sh
 ```

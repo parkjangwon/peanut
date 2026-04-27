@@ -17,5 +17,7 @@ printf 'export SERVICE_TOKEN=%q\n' "$(echo "$response" | jq -r '.token')"
 printf 'export TOKEN_ID=%q\n' "$(echo "$response" | jq -r '.service_token.id')"
 echo './examples/operations-e2e/create-todos-table.sh'
 echo './examples/operations-e2e/create-todo-row.sh'
+echo './examples/operations-e2e/list-todo-rows.sh'
+echo './examples/operations-e2e/export-todos-table.sh'
 echo './examples/operations-e2e/upload-storage-object.sh'
 echo './examples/operations-e2e/head-storage-object.sh'
