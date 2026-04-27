@@ -20,8 +20,14 @@ fn decode_failed_destinations(
     partial_failure_count: i64,
 ) -> Vec<PushDeliveryFailure> {
     if let Some(value) = raw {
-        if let Ok(decoded) = serde_json::from_str::<Vec<PushDeliveryFailure>>(value) {
-            return decoded;
+        match serde_json::from_str::<Vec<PushDeliveryFailure>>(value) {
+            Ok(decoded) => return decoded,
+            Err(error) => {
+                tracing::warn!(
+                    "failed to decode failed_destinations_json for push queue item; falling back to legacy last_error parsing when possible: {}",
+                    error
+                );
+            }
         }
     }
 
@@ -699,6 +705,49 @@ mod tests {
                 error: "timeout".to_string(),
             }
         );
+    }
+
+    #[test]
+    fn test_decode_failed_destinations_warns_and_falls_back_when_json_is_invalid() {
+        use std::io::{self, Write};
+        use std::sync::{Arc, Mutex};
+
+        #[derive(Clone)]
+        struct SharedWriter(Arc<Mutex<Vec<u8>>>);
+
+        impl Write for SharedWriter {
+            fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+                self.0.lock().unwrap().extend_from_slice(buf);
+                Ok(buf.len())
+            }
+
+            fn flush(&mut self) -> io::Result<()> {
+                Ok(())
+            }
+        }
+
+        let buffer = Arc::new(Mutex::new(Vec::new()));
+        let writer_buffer = buffer.clone();
+        let subscriber = tracing_subscriber::fmt()
+            .with_writer(move || SharedWriter(writer_buffer.clone()))
+            .without_time()
+            .with_max_level(tracing::Level::WARN)
+            .with_ansi(false)
+            .finish();
+
+        let decoded = tracing::subscriber::with_default(subscriber, || {
+            decode_failed_destinations(
+                Some("{not-json"),
+                Some(
+                    "partial delivery failures: https://example.invalid/push-a: gone | https://example.invalid/push-b: timeout",
+                ),
+                2,
+            )
+        });
+
+        assert_eq!(decoded.len(), 2);
+        let logs = String::from_utf8(buffer.lock().unwrap().clone()).unwrap();
+        assert!(logs.contains("failed to decode failed_destinations_json"));
     }
 
     #[tokio::test]
