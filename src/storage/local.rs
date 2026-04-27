@@ -36,6 +36,10 @@ pub struct StorageObjectMetadata {
     pub custom_metadata: BTreeMap<String, String>,
     #[serde(default)]
     pub response_headers: StorageObjectResponseHeaders,
+    #[serde(default)]
+    pub checksum_sha256: Option<String>,
+    #[serde(default)]
+    pub tagging: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -133,6 +137,8 @@ impl LocalStorage {
             content_type,
             BTreeMap::new(),
             StorageObjectResponseHeaders::default(),
+            None,
+            None,
         )
         .await
     }
@@ -145,6 +151,8 @@ impl LocalStorage {
         content_type: Option<&str>,
         custom_metadata: BTreeMap<String, String>,
         response_headers: StorageObjectResponseHeaders,
+        checksum_sha256: Option<String>,
+        tagging: Option<String>,
     ) -> io::Result<StorageObjectMetadata> {
         let path = self.resolve_object_path(bucket, key)?;
         let metadata_path = self.resolve_metadata_path(bucket, key)?;
@@ -172,6 +180,8 @@ impl LocalStorage {
             updated_at: now,
             custom_metadata,
             response_headers,
+            checksum_sha256,
+            tagging,
         };
 
         tokio::fs::write(&path, data).await?;

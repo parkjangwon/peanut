@@ -180,6 +180,17 @@ pub async fn list_bucket_objects(
             None,
         );
     }
+    if let Some(value) = query.encoding_type.as_deref() {
+        if !value.eq_ignore_ascii_case("url") {
+            return s3_error_response(
+                StatusCode::BAD_REQUEST,
+                "InvalidArgument",
+                "encoding-type must be url when provided",
+                &format!("/{bucket}"),
+                None,
+            );
+        }
+    }
 
     let decoded_continuation_token = match decode_continuation_token(query.continuation_token.as_deref()) {
         Ok(value) => value,
@@ -529,6 +540,19 @@ pub async fn put_bucket_object(
         .and_then(|value| value.to_str().ok());
     let content_type = content_type_header.unwrap_or("application/octet-stream");
     let custom_metadata = extract_custom_metadata_headers(&headers);
+    let checksum_sha256 = match validate_checksum_sha256(&body, extract_checksum_sha256(&headers).as_deref()) {
+        Ok(value) => value,
+        Err(message) => {
+            return s3_error_response(
+                StatusCode::BAD_REQUEST,
+                "InvalidRequest",
+                &message,
+                &format!("/{bucket}/{key}"),
+                Some(&key),
+            )
+        }
+    };
+    let tagging = extract_object_tagging(&headers);
 
     if let Some(copy_source) = headers
         .get("x-amz-copy-source")
@@ -597,11 +621,14 @@ pub async fn put_bucket_object(
         return match state.storage.get_object(&source_scoped_bucket, &source_key).await {
             Ok(source_object) => {
                 let request_response_headers = extract_standard_response_headers(&headers);
-                let (target_content_type, target_custom_metadata, target_response_headers) = match metadata_directive {
+                let request_tagging = extract_object_tagging(&headers);
+                let (target_content_type, target_custom_metadata, target_response_headers, target_checksum_sha256, target_tagging) = match metadata_directive {
                     MetadataDirective::Copy => (
                         source_object.metadata.content_type.clone(),
                         source_object.metadata.custom_metadata.clone(),
                         source_object.metadata.response_headers.clone(),
+                        source_object.metadata.checksum_sha256.clone(),
+                        source_object.metadata.tagging.clone(),
                     ),
                     MetadataDirective::Replace => (
                         content_type_header
@@ -612,6 +639,8 @@ pub async fn put_bucket_object(
                             source_object.metadata.response_headers.clone(),
                             request_response_headers,
                         ),
+                        source_object.metadata.checksum_sha256.clone(),
+                        request_tagging.or(source_object.metadata.tagging.clone()),
                     ),
                 };
                 match state
@@ -623,6 +652,8 @@ pub async fn put_bucket_object(
                         Some(target_content_type.as_str()),
                         target_custom_metadata,
                         target_response_headers,
+                        target_checksum_sha256,
+                        target_tagging,
                     )
                     .await
                 {
@@ -818,6 +849,8 @@ pub async fn put_bucket_object(
             Some(content_type),
             custom_metadata,
             extract_standard_response_headers(&headers),
+            checksum_sha256,
+            tagging,
         )
         .await
     {
@@ -1476,6 +1509,46 @@ fn extract_custom_metadata_headers(headers: &HeaderMap) -> BTreeMap<String, Stri
         .collect()
 }
 
+fn extract_checksum_sha256(headers: &HeaderMap) -> Option<String> {
+    headers
+        .get("x-amz-checksum-sha256")
+        .and_then(|value| value.to_str().ok())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+}
+
+fn compute_sha256_hex(data: &[u8]) -> String {
+    openssl::sha::sha256(data)
+        .iter()
+        .map(|byte| format!("{:02x}", byte))
+        .collect()
+}
+
+fn validate_checksum_sha256(data: &[u8], checksum: Option<&str>) -> Result<Option<String>, String> {
+    let computed = compute_sha256_hex(data);
+    match checksum.map(str::trim).filter(|value| !value.is_empty()) {
+        Some(value) if value.eq_ignore_ascii_case(&computed) => Ok(Some(computed)),
+        Some(_) => Err("x-amz-checksum-sha256 does not match payload".to_string()),
+        None => Ok(Some(computed)),
+    }
+}
+
+fn extract_object_tagging(headers: &HeaderMap) -> Option<String> {
+    headers
+        .get("x-amz-tagging")
+        .and_then(|value| value.to_str().ok())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+}
+
+fn tagging_count(value: Option<&str>) -> usize {
+    value
+        .map(|value| value.split('&').filter(|pair| !pair.trim().is_empty()).count())
+        .unwrap_or(0)
+}
+
 fn extract_standard_response_headers(
     headers: &HeaderMap,
 ) -> crate::storage::local::StorageObjectResponseHeaders {
@@ -1536,6 +1609,13 @@ fn apply_standard_object_response_headers(
     }
     if let Some(value) = metadata.response_headers.expires.as_deref() {
         response = response.header(header::EXPIRES, value);
+    }
+    if let Some(value) = metadata.checksum_sha256.as_deref() {
+        response = response.header("x-amz-checksum-sha256", value);
+    }
+    let tag_count = tagging_count(metadata.tagging.as_deref());
+    if tag_count > 0 {
+        response = response.header("x-amz-tagging-count", tag_count.to_string());
     }
     response
 }
@@ -4280,6 +4360,230 @@ mod tests {
         let xml = response_text(copy_response).await;
         assert!(xml.contains("<Code>InvalidRequest</Code>"));
         assert!(xml.contains("copy-source conditional headers are not supported"));
+    }
+
+    #[tokio::test]
+    async fn test_s3_like_put_object_persists_checksum_and_tagging_headers() {
+        let (state, _dir) = test_support::make_test_state().await;
+        let user = register_user(state.clone(), "checksum-tagging@example.com").await;
+        let claims = claims_for(&user.user.id);
+        let body = "hello checksum tagging";
+        let checksum = compute_sha256_hex(body.as_bytes());
+
+        let mut headers = HeaderMap::new();
+        headers.insert("x-amz-checksum-sha256", HeaderValue::from_str(&checksum).unwrap());
+        headers.insert("x-amz-tagging", HeaderValue::from_static("color=blue&team=peanut"));
+
+        let put_response = put_bucket_object(
+            State(state.clone()),
+            Extension(claims.clone()),
+            axum::extract::Path(("assets".to_string(), "meta/checksum.txt".to_string())),
+            RawQuery(None),
+            headers,
+            Bytes::from(body),
+        )
+        .await;
+        assert_eq!(put_response.status(), StatusCode::OK);
+        assert_eq!(put_response.headers().get("x-amz-checksum-sha256").unwrap(), checksum.as_str());
+        assert_eq!(put_response.headers().get("x-amz-tagging-count").unwrap(), "2");
+
+        let head_response = head_bucket_object(
+            State(state.clone()),
+            Extension(claims.clone()),
+            axum::extract::Path(("assets".to_string(), "meta/checksum.txt".to_string())),
+            HeaderMap::new(),
+        )
+        .await;
+        assert_eq!(head_response.status(), StatusCode::OK);
+        assert_eq!(head_response.headers().get("x-amz-checksum-sha256").unwrap(), checksum.as_str());
+        assert_eq!(head_response.headers().get("x-amz-tagging-count").unwrap(), "2");
+
+        let get_response = get_bucket_object(
+            State(state),
+            Extension(claims),
+            axum::extract::Path(("assets".to_string(), "meta/checksum.txt".to_string())),
+            RawQuery(None),
+            HeaderMap::new(),
+        )
+        .await;
+        assert_eq!(get_response.status(), StatusCode::OK);
+        assert_eq!(get_response.headers().get("x-amz-checksum-sha256").unwrap(), checksum.as_str());
+        assert_eq!(get_response.headers().get("x-amz-tagging-count").unwrap(), "2");
+    }
+
+    #[tokio::test]
+    async fn test_s3_like_put_object_rejects_checksum_mismatch() {
+        let (state, _dir) = test_support::make_test_state().await;
+        let user = register_user(state.clone(), "checksum-mismatch@example.com").await;
+        let claims = claims_for(&user.user.id);
+
+        let mut headers = HeaderMap::new();
+        headers.insert("x-amz-checksum-sha256", HeaderValue::from_static("deadbeef"));
+
+        let response = put_bucket_object(
+            State(state),
+            Extension(claims),
+            axum::extract::Path(("assets".to_string(), "meta/bad-checksum.txt".to_string())),
+            RawQuery(None),
+            headers,
+            Bytes::from("hello"),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        let xml = response_text(response).await;
+        assert!(xml.contains("<Code>InvalidRequest</Code>"));
+        assert!(xml.contains("x-amz-checksum-sha256 does not match payload"));
+    }
+
+    #[tokio::test]
+    async fn test_s3_like_list_objects_v2_rejects_invalid_encoding_type() {
+        let (state, _dir) = test_support::make_test_state().await;
+        let user = register_user(state.clone(), "invalid-encoding-type@example.com").await;
+        let claims = claims_for(&user.user.id);
+
+        let response = list_bucket_objects(
+            State(state),
+            Extension(claims),
+            axum::extract::Path("assets".to_string()),
+            Query(S3ListQuery {
+                list_type: Some(2),
+                uploads: None,
+                prefix: None,
+                delimiter: None,
+                max_keys: Some(10),
+                max_uploads: None,
+                continuation_token: None,
+                start_after: None,
+                encoding_type: Some("xml".to_string()),
+                fetch_owner: None,
+                key_marker: None,
+                upload_id_marker: None,
+            }),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        let xml = response_text(response).await;
+        assert!(xml.contains("<Code>InvalidArgument</Code>"));
+        assert!(xml.contains("encoding-type must be url when provided"));
+    }
+
+    #[tokio::test]
+    async fn test_sdk_cp_like_smoke_interop_supports_list_copy_and_head() {
+        let (state, _dir) = test_support::make_test_state().await;
+        let user = register_user(state.clone(), "sdk-cp@example.com").await;
+        let secret_access_key = format!("{}:{}", state.jwt_secret, user.user.id);
+
+        let app = axum::Router::new()
+            .route("/api/s3/:bucket", axum::routing::get(list_bucket_objects))
+            .route(
+                "/api/s3/:bucket/*key",
+                axum::routing::put(put_bucket_object)
+                    .get(get_bucket_object)
+                    .head(head_bucket_object),
+            )
+            .layer(axum::middleware::from_fn_with_state(
+                state.clone(),
+                crate::middleware::s3_auth::s3_auth_middleware,
+            ))
+            .with_state(state.clone());
+
+        let put_signed = crate::middleware::s3_auth::build_signed_header_auth_with_secret(
+            "PUT",
+            "https://example.com/api/s3/assets/sdk-source.txt",
+            &user.user.id,
+            &secret_access_key,
+            None,
+        )
+        .unwrap();
+        let put_response = tower::ServiceExt::oneshot(
+            app.clone(),
+            axum::http::Request::builder()
+                .method("PUT")
+                .uri("/api/s3/assets/sdk-source.txt")
+                .header("host", "example.com")
+                .header("authorization", put_signed.authorization)
+                .header("x-amz-date", put_signed.amz_date)
+                .header("x-amz-content-sha256", put_signed.payload_hash)
+                .body(axum::body::Body::from("sdk cp body"))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(put_response.status(), StatusCode::OK);
+
+        let list_signed = crate::middleware::s3_auth::build_signed_header_auth_with_secret(
+            "GET",
+            "https://example.com/api/s3/assets?list-type=2",
+            &user.user.id,
+            &secret_access_key,
+            None,
+        )
+        .unwrap();
+        let list_response = tower::ServiceExt::oneshot(
+            app.clone(),
+            axum::http::Request::builder()
+                .uri("/api/s3/assets?list-type=2")
+                .header("host", "example.com")
+                .header("authorization", list_signed.authorization)
+                .header("x-amz-date", list_signed.amz_date)
+                .header("x-amz-content-sha256", list_signed.payload_hash)
+                .body(axum::body::Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(list_response.status(), StatusCode::OK);
+        assert!(response_text(list_response).await.contains("<Key>sdk-source.txt</Key>"));
+
+        let copy_signed = crate::middleware::s3_auth::build_signed_header_auth_with_secret(
+            "PUT",
+            "https://example.com/api/s3/assets/sdk-copied.txt",
+            &user.user.id,
+            &secret_access_key,
+            None,
+        )
+        .unwrap();
+        let copy_response = tower::ServiceExt::oneshot(
+            app.clone(),
+            axum::http::Request::builder()
+                .method("PUT")
+                .uri("/api/s3/assets/sdk-copied.txt")
+                .header("host", "example.com")
+                .header("authorization", copy_signed.authorization)
+                .header("x-amz-date", copy_signed.amz_date)
+                .header("x-amz-content-sha256", copy_signed.payload_hash)
+                .header("x-amz-copy-source", "/assets/sdk-source.txt")
+                .body(axum::body::Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(copy_response.status(), StatusCode::OK);
+
+        let head_signed = crate::middleware::s3_auth::build_signed_header_auth_with_secret(
+            "HEAD",
+            "https://example.com/api/s3/assets/sdk-copied.txt",
+            &user.user.id,
+            &secret_access_key,
+            None,
+        )
+        .unwrap();
+        let head_response = tower::ServiceExt::oneshot(
+            app,
+            axum::http::Request::builder()
+                .method("HEAD")
+                .uri("/api/s3/assets/sdk-copied.txt")
+                .header("host", "example.com")
+                .header("authorization", head_signed.authorization)
+                .header("x-amz-date", head_signed.amz_date)
+                .header("x-amz-content-sha256", head_signed.payload_hash)
+                .body(axum::body::Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(head_response.status(), StatusCode::OK);
+        assert!(head_response.headers().get(header::ETAG).is_some());
     }
 
     #[tokio::test]

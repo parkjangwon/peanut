@@ -114,10 +114,14 @@ What this means for external frontend apps:
 - when ETag validators are present, date validators are ignored in the usual HTTP precondition order (`If-Match` over `If-Unmodified-Since`, `If-None-Match` over `If-Modified-Since`)
 - object response headers `Cache-Control`, `Content-Disposition`, `Content-Encoding`, `Content-Language`, and `Expires` are now persisted on PUT and replayed on subsequent PUT/GET/HEAD responses
 - CopyObject with `x-amz-metadata-directive: REPLACE` now preserves unspecified standard response headers from the source object while applying any explicitly provided replacements
+- CopyObject does not yet support `x-amz-copy-source-if-*` conditional headers; Peanut now rejects them explicitly with `InvalidRequest`
+- when `x-amz-checksum-sha256` is sent on PUT, Peanut validates it against the payload and replays it on subsequent object responses (PUT/GET/HEAD)
+- when `x-amz-tagging` is sent on PUT, Peanut stores a minimal tagging contract and replays the derived `x-amz-tagging-count` on subsequent object responses
 - custom object metadata sent as `x-amz-meta-*` on PUT is now persisted and returned again on subsequent PUT/GET/HEAD responses
 - S3-like success/error responses now also include `x-amz-request-id` headers, and object `Last-Modified` headers are emitted as HTTP-date strings
 - S3-like bucket listing supports `list-type=2`, `prefix`, `delimiter`, `max-keys`, `continuation-token`, `start-after`, `encoding-type=url`, and `fetch-owner=true`
 - when both `continuation-token` and `start-after` are present, Peanut follows the opaque continuation token and ignores `start-after`
+- invalid `encoding-type` values are rejected with `InvalidArgument`
 - `max-keys=0` now returns an empty page with the expected truncation metadata instead of failing the request
 - continuation tokens are now opaque base64url-style tokens instead of raw object keys
 - S3-like listing now emits `CommonPrefixes` XML blocks when `delimiter=/` is used
