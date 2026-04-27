@@ -472,11 +472,111 @@ pub async fn put_bucket_object(
         }
     };
     let scoped_bucket = scoped_bucket(&claims.sub, &bucket);
-    let content_type = headers
+    let content_type_header = headers
         .get(header::CONTENT_TYPE)
-        .and_then(|value| value.to_str().ok())
-        .unwrap_or("application/octet-stream");
+        .and_then(|value| value.to_str().ok());
+    let content_type = content_type_header.unwrap_or("application/octet-stream");
     let custom_metadata = extract_custom_metadata_headers(&headers);
+
+    if let Some(copy_source) = headers
+        .get("x-amz-copy-source")
+        .and_then(|value| value.to_str().ok())
+        .filter(|_| !query.uploads && query.part_number.is_none() && query.upload_id.is_none())
+    {
+        let metadata_directive = match parse_metadata_directive(
+            headers
+                .get("x-amz-metadata-directive")
+                .and_then(|value| value.to_str().ok()),
+        ) {
+            Ok(value) => value,
+            Err(message) => {
+                return s3_error_response(
+                    StatusCode::BAD_REQUEST,
+                    "InvalidRequest",
+                    &message,
+                    &format!("/{bucket}/{key}"),
+                    Some(&key),
+                )
+            }
+        };
+        let (source_bucket, source_key) = match parse_copy_source(copy_source) {
+            Ok(value) => value,
+            Err(message) => {
+                return s3_error_response(
+                    StatusCode::BAD_REQUEST,
+                    "InvalidRequest",
+                    &message,
+                    &format!("/{bucket}/{key}"),
+                    Some(&key),
+                )
+            }
+        };
+        let source_scoped_bucket = self::scoped_bucket(&claims.sub, &source_bucket);
+        return match state.storage.get_object(&source_scoped_bucket, &source_key).await {
+            Ok(source_object) => {
+                let (target_content_type, target_custom_metadata) = match metadata_directive {
+                    MetadataDirective::Copy => (
+                        source_object.metadata.content_type.clone(),
+                        source_object.metadata.custom_metadata.clone(),
+                    ),
+                    MetadataDirective::Replace => (
+                        content_type_header
+                            .map(str::to_string)
+                            .unwrap_or_else(|| source_object.metadata.content_type.clone()),
+                        custom_metadata,
+                    ),
+                };
+                match state
+                    .storage
+                    .put_object_with_metadata(
+                        &scoped_bucket,
+                        &key,
+                        &source_object.data,
+                        Some(target_content_type.as_str()),
+                        target_custom_metadata,
+                    )
+                    .await
+                {
+                    Ok(metadata) => s3_copy_object_response(&bucket, &key, &metadata),
+                    Err(err) if err.kind() == std::io::ErrorKind::InvalidInput => s3_error_response(
+                        StatusCode::BAD_REQUEST,
+                        "InvalidObjectName",
+                        &err.to_string(),
+                        &format!("/{bucket}/{key}"),
+                        Some(&key),
+                    ),
+                    Err(_) => s3_error_response(
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        "InternalError",
+                        "failed to copy object",
+                        &format!("/{bucket}/{key}"),
+                        Some(&key),
+                    ),
+                }
+            }
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => s3_error_response(
+                StatusCode::NOT_FOUND,
+                "NoSuchKey",
+                "copy source object not found",
+                &format!("/{source_bucket}/{source_key}"),
+                Some(&source_key),
+            ),
+            Err(err) if err.kind() == std::io::ErrorKind::InvalidInput => s3_error_response(
+                StatusCode::BAD_REQUEST,
+                "InvalidRequest",
+                &err.to_string(),
+                &format!("/{source_bucket}/{source_key}"),
+                Some(&source_key),
+            ),
+            Err(_) => s3_error_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "InternalError",
+                "failed to read copy source object",
+                &format!("/{source_bucket}/{source_key}"),
+                Some(&source_key),
+            ),
+        };
+    }
 
     if query.uploads || (query.part_number.is_some() ^ query.upload_id.is_some()) {
         return s3_error_response(
@@ -999,6 +1099,41 @@ fn s3_copy_part_response(etag: &str) -> Response {
         .header(header::CONTENT_TYPE, "application/xml")
         .body(axum::body::Body::from(body))
         .unwrap()
+}
+
+fn s3_copy_object_response(
+    bucket: &str,
+    key: &str,
+    metadata: &crate::storage::local::StorageObjectMetadata,
+) -> Response {
+    let body = format!(
+        "<?xml version=\"1.0\" encoding=\"UTF-8\"?><CopyObjectResult xmlns=\"http://s3.amazonaws.com/doc/2006-03-01/\"><Location>/{}/{}</Location><Bucket>{}</Bucket><Key>{}</Key><LastModified>{}</LastModified><ETag>\"{}\"</ETag></CopyObjectResult>",
+        xml_escape(bucket),
+        xml_escape(key),
+        xml_escape(bucket),
+        xml_escape(key),
+        xml_escape(&metadata.updated_at),
+        xml_escape(&metadata.etag)
+    );
+    apply_s3_response_headers(Response::builder().status(StatusCode::OK))
+        .header(header::CONTENT_TYPE, "application/xml")
+        .body(axum::body::Body::from(body))
+        .unwrap()
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum MetadataDirective {
+    Copy,
+    Replace,
+}
+
+fn parse_metadata_directive(value: Option<&str>) -> Result<MetadataDirective, String> {
+    match value.map(str::trim).filter(|value| !value.is_empty()) {
+        None => Ok(MetadataDirective::Copy),
+        Some(value) if value.eq_ignore_ascii_case("COPY") => Ok(MetadataDirective::Copy),
+        Some(value) if value.eq_ignore_ascii_case("REPLACE") => Ok(MetadataDirective::Replace),
+        Some(_) => Err("x-amz-metadata-directive must be COPY or REPLACE".to_string()),
+    }
 }
 
 fn parse_copy_source(value: &str) -> Result<(String, String), String> {
@@ -2560,6 +2695,255 @@ mod tests {
         .unwrap();
         assert_eq!(get_response.status(), StatusCode::OK);
         assert_eq!(response_text(get_response).await, "copied body");
+    }
+
+    #[tokio::test]
+    async fn test_s3_like_copy_object_copies_body_and_metadata_by_default() {
+        let (state, _dir) = test_support::make_test_state().await;
+        let user = register_user(state.clone(), "copy-object@example.com").await;
+
+        let app = axum::Router::new()
+            .route(
+                "/api/s3/:bucket/*key",
+                axum::routing::put(put_bucket_object)
+                    .get(get_bucket_object)
+                    .head(head_bucket_object),
+            )
+            .layer(axum::middleware::from_fn_with_state(
+                state.clone(),
+                crate::middleware::s3_auth::s3_auth_middleware,
+            ))
+            .with_state(state.clone());
+
+        let put_source_signed = crate::middleware::s3_auth::build_signed_header_auth(
+            "PUT",
+            "https://example.com/api/s3/assets/source-copy.txt",
+            &user.user.id,
+            state.jwt_secret.as_str(),
+            None,
+        )
+        .unwrap();
+        let put_source_response = tower::ServiceExt::oneshot(
+            app.clone(),
+            axum::http::Request::builder()
+                .method("PUT")
+                .uri("/api/s3/assets/source-copy.txt")
+                .header("host", "example.com")
+                .header("authorization", put_source_signed.authorization)
+                .header("x-amz-date", put_source_signed.amz_date)
+                .header("x-amz-content-sha256", put_source_signed.payload_hash)
+                .header(header::CONTENT_TYPE, "text/plain")
+                .header("x-amz-meta-color", "blue")
+                .body(axum::body::Body::from("copy source body"))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(put_source_response.status(), StatusCode::OK);
+
+        let copy_signed = crate::middleware::s3_auth::build_signed_header_auth(
+            "PUT",
+            "https://example.com/api/s3/assets/copied-object.txt",
+            &user.user.id,
+            state.jwt_secret.as_str(),
+            None,
+        )
+        .unwrap();
+        let copy_response = tower::ServiceExt::oneshot(
+            app.clone(),
+            axum::http::Request::builder()
+                .method("PUT")
+                .uri("/api/s3/assets/copied-object.txt")
+                .header("host", "example.com")
+                .header("authorization", copy_signed.authorization)
+                .header("x-amz-date", copy_signed.amz_date)
+                .header("x-amz-content-sha256", copy_signed.payload_hash)
+                .header("x-amz-copy-source", "/assets/source-copy.txt")
+                .body(axum::body::Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(copy_response.status(), StatusCode::OK);
+        let copy_xml = response_text(copy_response).await;
+        assert!(copy_xml.contains("<CopyObjectResult"));
+
+        let head_signed = crate::middleware::s3_auth::build_signed_header_auth(
+            "HEAD",
+            "https://example.com/api/s3/assets/copied-object.txt",
+            &user.user.id,
+            state.jwt_secret.as_str(),
+            None,
+        )
+        .unwrap();
+        let head_response = tower::ServiceExt::oneshot(
+            app.clone(),
+            axum::http::Request::builder()
+                .method("HEAD")
+                .uri("/api/s3/assets/copied-object.txt")
+                .header("host", "example.com")
+                .header("authorization", head_signed.authorization)
+                .header("x-amz-date", head_signed.amz_date)
+                .header("x-amz-content-sha256", head_signed.payload_hash)
+                .body(axum::body::Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(head_response.status(), StatusCode::OK);
+        assert_eq!(head_response.headers().get(header::CONTENT_TYPE).unwrap(), "text/plain");
+        assert_eq!(head_response.headers().get("x-amz-meta-color").unwrap(), "blue");
+
+        let get_signed = crate::middleware::s3_auth::build_signed_header_auth(
+            "GET",
+            "https://example.com/api/s3/assets/copied-object.txt",
+            &user.user.id,
+            state.jwt_secret.as_str(),
+            None,
+        )
+        .unwrap();
+        let get_response = tower::ServiceExt::oneshot(
+            app,
+            axum::http::Request::builder()
+                .uri("/api/s3/assets/copied-object.txt")
+                .header("host", "example.com")
+                .header("authorization", get_signed.authorization)
+                .header("x-amz-date", get_signed.amz_date)
+                .header("x-amz-content-sha256", get_signed.payload_hash)
+                .body(axum::body::Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(get_response.status(), StatusCode::OK);
+        assert_eq!(response_text(get_response).await, "copy source body");
+    }
+
+    #[tokio::test]
+    async fn test_s3_like_copy_object_supports_metadata_replace() {
+        let (state, _dir) = test_support::make_test_state().await;
+        let user = register_user(state.clone(), "copy-object-replace@example.com").await;
+
+        let app = axum::Router::new()
+            .route(
+                "/api/s3/:bucket/*key",
+                axum::routing::put(put_bucket_object)
+                    .get(get_bucket_object)
+                    .head(head_bucket_object),
+            )
+            .layer(axum::middleware::from_fn_with_state(
+                state.clone(),
+                crate::middleware::s3_auth::s3_auth_middleware,
+            ))
+            .with_state(state.clone());
+
+        let put_source_signed = crate::middleware::s3_auth::build_signed_header_auth(
+            "PUT",
+            "https://example.com/api/s3/assets/source-replace.txt",
+            &user.user.id,
+            state.jwt_secret.as_str(),
+            None,
+        )
+        .unwrap();
+        let put_source_response = tower::ServiceExt::oneshot(
+            app.clone(),
+            axum::http::Request::builder()
+                .method("PUT")
+                .uri("/api/s3/assets/source-replace.txt")
+                .header("host", "example.com")
+                .header("authorization", put_source_signed.authorization)
+                .header("x-amz-date", put_source_signed.amz_date)
+                .header("x-amz-content-sha256", put_source_signed.payload_hash)
+                .header(header::CONTENT_TYPE, "text/plain")
+                .header("x-amz-meta-color", "blue")
+                .body(axum::body::Body::from("replace source body"))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(put_source_response.status(), StatusCode::OK);
+
+        let copy_signed = crate::middleware::s3_auth::build_signed_header_auth(
+            "PUT",
+            "https://example.com/api/s3/assets/replaced-object.txt",
+            &user.user.id,
+            state.jwt_secret.as_str(),
+            None,
+        )
+        .unwrap();
+        let copy_response = tower::ServiceExt::oneshot(
+            app.clone(),
+            axum::http::Request::builder()
+                .method("PUT")
+                .uri("/api/s3/assets/replaced-object.txt")
+                .header("host", "example.com")
+                .header("authorization", copy_signed.authorization)
+                .header("x-amz-date", copy_signed.amz_date)
+                .header("x-amz-content-sha256", copy_signed.payload_hash)
+                .header("x-amz-copy-source", "/assets/source-replace.txt")
+                .header("x-amz-metadata-directive", "REPLACE")
+                .header(header::CONTENT_TYPE, "application/json")
+                .header("x-amz-meta-color", "red")
+                .header("x-amz-meta-owner", "jangwon")
+                .body(axum::body::Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(copy_response.status(), StatusCode::OK);
+        let copy_xml = response_text(copy_response).await;
+        assert!(copy_xml.contains("<CopyObjectResult"));
+
+        let head_signed = crate::middleware::s3_auth::build_signed_header_auth(
+            "HEAD",
+            "https://example.com/api/s3/assets/replaced-object.txt",
+            &user.user.id,
+            state.jwt_secret.as_str(),
+            None,
+        )
+        .unwrap();
+        let head_response = tower::ServiceExt::oneshot(
+            app.clone(),
+            axum::http::Request::builder()
+                .method("HEAD")
+                .uri("/api/s3/assets/replaced-object.txt")
+                .header("host", "example.com")
+                .header("authorization", head_signed.authorization)
+                .header("x-amz-date", head_signed.amz_date)
+                .header("x-amz-content-sha256", head_signed.payload_hash)
+                .body(axum::body::Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(head_response.status(), StatusCode::OK);
+        assert_eq!(head_response.headers().get(header::CONTENT_TYPE).unwrap(), "application/json");
+        assert_eq!(head_response.headers().get("x-amz-meta-color").unwrap(), "red");
+        assert_eq!(head_response.headers().get("x-amz-meta-owner").unwrap(), "jangwon");
+
+        let get_signed = crate::middleware::s3_auth::build_signed_header_auth(
+            "GET",
+            "https://example.com/api/s3/assets/replaced-object.txt",
+            &user.user.id,
+            state.jwt_secret.as_str(),
+            None,
+        )
+        .unwrap();
+        let get_response = tower::ServiceExt::oneshot(
+            app,
+            axum::http::Request::builder()
+                .uri("/api/s3/assets/replaced-object.txt")
+                .header("host", "example.com")
+                .header("authorization", get_signed.authorization)
+                .header("x-amz-date", get_signed.amz_date)
+                .header("x-amz-content-sha256", get_signed.payload_hash)
+                .body(axum::body::Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(get_response.status(), StatusCode::OK);
+        assert_eq!(response_text(get_response).await, "replace source body");
     }
 
     #[tokio::test]

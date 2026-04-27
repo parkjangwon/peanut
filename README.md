@@ -93,6 +93,8 @@ What this means for external frontend apps:
 - S3-like multipart upload now supports a stronger S3-compatible contract:
   - `POST /api/s3/:bucket/*key?uploads` to initiate and receive an `UploadId`
   - `GET /api/s3/:bucket?uploads=1&prefix=...&max-uploads=...&key-marker=...&upload-id-marker=...` to list active multipart uploads in a bucket with marker pagination
+  - `PUT /api/s3/:bucket/*key` with `x-amz-copy-source: /src-bucket/src-key` to CopyObject into a new key
+  - `x-amz-metadata-directive: COPY|REPLACE` is supported for CopyObject metadata behavior
   - `PUT /api/s3/:bucket/*key?partNumber=N&uploadId=...` to upload parts
   - non-final multipart parts must be at least 5 MiB, matching the usual S3 minimum part-size rule
   - `PUT /api/s3/:bucket/*key?partNumber=N&uploadId=...` with `x-amz-copy-source: /src-bucket/src-key` to CopyPart from an existing object
