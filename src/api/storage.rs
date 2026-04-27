@@ -2625,6 +2625,29 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_create_presigned_url_rejects_unsupported_subresource() {
+        let (state, _dir) = test_support::make_test_state().await;
+        let user = register_user(state.clone(), "presign-subresource-bad@example.com").await;
+        let claims = claims_for(&user.user.id);
+
+        let response = create_presigned_url(
+            Extension(claims),
+            axum::extract::Path(("assets".to_string(), "notes/file.txt".to_string())),
+            HeaderMap::new(),
+            State(state),
+            Json(crate::middleware::s3_auth::PresignRequest {
+                method: "GET".to_string(),
+                expires_in: Some(300),
+                subresource: Some("acl".to_string()),
+            }),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        let body = response_text(response).await;
+        assert!(body.contains("subresource must be tagging when provided"));
+    }
+
+    #[tokio::test]
     async fn test_presigned_put_tagging_round_trip_uses_sigv4_query_auth() {
         let (state, _dir) = test_support::make_test_state().await;
         let user = register_user(state.clone(), "presign-tagging@example.com").await;
@@ -2710,6 +2733,105 @@ mod tests {
         assert_eq!(get_response.status(), StatusCode::OK);
         let xml = response_text(get_response).await;
         assert!(xml.contains("<Key>env</Key><Value>presigned</Value>"));
+    }
+
+    #[tokio::test]
+    async fn test_presigned_delete_tagging_round_trip_uses_sigv4_query_auth() {
+        let (state, _dir) = test_support::make_test_state().await;
+        let user = register_user(state.clone(), "presign-tagging-delete@example.com").await;
+        let claims = claims_for(&user.user.id);
+
+        let put_object_response = put_bucket_object(
+            State(state.clone()),
+            Extension(claims.clone()),
+            axum::extract::Path(("assets".to_string(), "notes/presigned-tagging-delete.txt".to_string())),
+            RawQuery(None),
+            HeaderMap::new(),
+            Bytes::from("hello presigned tagging delete"),
+        )
+        .await;
+        assert_eq!(put_object_response.status(), StatusCode::OK);
+
+        let put_tagging_response = put_bucket_object(
+            State(state.clone()),
+            Extension(claims),
+            axum::extract::Path(("assets".to_string(), "notes/presigned-tagging-delete.txt".to_string())),
+            RawQuery(Some("tagging".to_string())),
+            HeaderMap::new(),
+            Bytes::from_static(b"<Tagging><TagSet><Tag><Key>env</Key><Value>delete-me</Value></Tag></TagSet></Tagging>"),
+        )
+        .await;
+        assert_eq!(put_tagging_response.status(), StatusCode::OK);
+
+        let app = axum::Router::new()
+            .route(
+                "/api/s3/:bucket/*key",
+                axum::routing::put(put_bucket_object)
+                    .get(get_bucket_object)
+                    .delete(delete_bucket_object),
+            )
+            .layer(axum::middleware::from_fn_with_state(
+                state.clone(),
+                crate::middleware::s3_auth::s3_auth_middleware,
+            ))
+            .with_state(state.clone());
+
+        let delete_request = crate::middleware::s3_auth::PresignRequest {
+            method: "DELETE".to_string(),
+            expires_in: Some(300),
+            subresource: Some("tagging".to_string()),
+        };
+        let delete_generated = build_presigned_url(
+            "https://example.com",
+            &user.user.id,
+            "assets",
+            "notes/presigned-tagging-delete.txt",
+            &delete_request,
+            state.jwt_secret.as_str(),
+        )
+        .unwrap();
+        let delete_uri = delete_generated.url.replace("https://example.com", "");
+        let delete_response = tower::ServiceExt::oneshot(
+            app.clone(),
+            axum::http::Request::builder()
+                .method("DELETE")
+                .uri(delete_uri)
+                .header("host", "example.com")
+                .body(axum::body::Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(delete_response.status(), StatusCode::NO_CONTENT);
+
+        let get_request = crate::middleware::s3_auth::PresignRequest {
+            method: "GET".to_string(),
+            expires_in: Some(300),
+            subresource: Some("tagging".to_string()),
+        };
+        let get_generated = build_presigned_url(
+            "https://example.com",
+            &user.user.id,
+            "assets",
+            "notes/presigned-tagging-delete.txt",
+            &get_request,
+            state.jwt_secret.as_str(),
+        )
+        .unwrap();
+        let get_uri = get_generated.url.replace("https://example.com", "");
+        let get_response = tower::ServiceExt::oneshot(
+            app,
+            axum::http::Request::builder()
+                .uri(get_uri)
+                .header("host", "example.com")
+                .body(axum::body::Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(get_response.status(), StatusCode::OK);
+        let xml = response_text(get_response).await;
+        assert!(xml.contains("<TagSet></TagSet>"));
     }
 
     #[tokio::test]

@@ -89,7 +89,8 @@ What this means for external frontend apps:
   - delete objects
 - S3-like path-style endpoints are now also available under `/api/s3/:bucket/*key`
 - authenticated clients can now mint presigned S3-like URLs through `POST /api/s3/:bucket/*key/presign`
-- the presign helper now also supports object tagging subresource URLs for flows like `PUT/GET ...?tagging`
+- the presign helper now also supports object tagging subresource URLs for flows like `PUT/GET/DELETE ...?tagging`
+- when `subresource` is provided to the presign helper, Peanut currently accepts only `tagging`
 - S3-like object routes now accept either bearer auth, SigV4-style `Authorization` header auth, or SigV4-style query auth from presigned URLs
 - S3-like multipart upload now supports a stronger S3-compatible contract:
   - `POST /api/s3/:bucket/*key?uploads` to initiate and receive an `UploadId`
