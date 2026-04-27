@@ -104,6 +104,7 @@ Peanut은 아래 원칙을 지향한다.
 - multipart complete는 이제 최종 조립 object hash 대신 multipart composite ETag(`etag-partcount`)를 응답/저장한다
 - ranged CopyPart 흐름에 대한 SDK-style smoke coverage도 추가했다
 - S3-like object 응답은 content-type, content-length, ETag, last-modified 메타데이터를 포함한다
+- PUT 시 전달한 `x-amz-meta-*` custom object metadata는 이제 저장되며, 이후 PUT/GET/HEAD 응답에서도 다시 내려간다
 - S3-like 성공/에러 응답은 `x-amz-request-id` 헤더를 포함하고, object `Last-Modified` 헤더는 HTTP-date 형식으로 내려간다
 - S3-like bucket listing은 `list-type=2`, `prefix`, `delimiter`, `max-keys`, `continuation-token`을 지원한다
 - continuation token은 raw key 대신 opaque base64url 스타일 토큰으로 내려간다

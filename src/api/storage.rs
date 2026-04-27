@@ -1,3 +1,5 @@
+use std::collections::BTreeMap;
+
 use axum::{
     body::Bytes,
     extract::{Path, Query, RawQuery, State},
@@ -474,6 +476,7 @@ pub async fn put_bucket_object(
         .get(header::CONTENT_TYPE)
         .and_then(|value| value.to_str().ok())
         .unwrap_or("application/octet-stream");
+    let custom_metadata = extract_custom_metadata_headers(&headers);
 
     if query.uploads || (query.part_number.is_some() ^ query.upload_id.is_some()) {
         return s3_error_response(
@@ -619,7 +622,13 @@ pub async fn put_bucket_object(
 
     match state
         .storage
-        .put_object(&scoped_bucket, &key, &body, Some(content_type))
+        .put_object_with_metadata(
+            &scoped_bucket,
+            &key,
+            &body,
+            Some(content_type),
+            custom_metadata,
+        )
         .await
     {
         Ok(metadata) => build_object_response(StatusCode::OK, &key, Vec::new(), &metadata, false),
@@ -1155,10 +1164,28 @@ fn encode_continuation_token(token: &str) -> String {
     URL_SAFE_NO_PAD.encode(token.as_bytes())
 }
 
-fn format_last_modified_header(value: &str) -> String {
-    chrono::DateTime::parse_from_rfc3339(value)
-        .map(|parsed| parsed.with_timezone(&chrono::Utc).to_rfc2822())
-        .unwrap_or_else(|_| value.to_string())
+fn format_last_modified_header(timestamp: &str) -> String {
+    chrono::DateTime::parse_from_rfc3339(timestamp)
+        .map(|value| value.with_timezone(&chrono::Utc).to_rfc2822())
+        .unwrap_or_else(|_| timestamp.to_string())
+}
+
+fn extract_custom_metadata_headers(headers: &HeaderMap) -> BTreeMap<String, String> {
+    headers
+        .iter()
+        .filter_map(|(name, value)| {
+            let name = name.as_str();
+            let metadata_name = name.strip_prefix("x-amz-meta-")?;
+            if metadata_name.is_empty() || matches!(metadata_name, "created-at" | "key") {
+                return None;
+            }
+            let value = value.to_str().ok()?.trim();
+            if value.is_empty() {
+                return None;
+            }
+            Some((metadata_name.to_string(), value.to_string()))
+        })
+        .collect()
 }
 
 fn apply_s3_response_headers(
@@ -1206,6 +1233,9 @@ fn build_head_response(
         header::LAST_MODIFIED,
         format_last_modified_header(metadata.updated_at.as_str()),
     );
+    for (name, value) in &metadata.custom_metadata {
+        response = response.header(format!("x-amz-meta-{name}"), value);
+    }
     response.body(axum::body::Body::empty()).unwrap()
 }
 
@@ -1226,6 +1256,9 @@ fn build_object_response(
     );
     response = response.header("x-amz-meta-created-at", metadata.created_at.as_str());
     response = response.header("x-amz-meta-key", key);
+    for (name, value) in &metadata.custom_metadata {
+        response = response.header(format!("x-amz-meta-{name}"), value);
+    }
     if include_body {
         response.body(axum::body::Body::from(data)).unwrap()
     } else {
@@ -1395,6 +1428,8 @@ mod tests {
 
         let mut headers = HeaderMap::new();
         headers.insert(header::CONTENT_TYPE, HeaderValue::from_static("text/plain"));
+        headers.insert("x-amz-meta-color", HeaderValue::from_static("blue"));
+        headers.insert("x-amz-meta-owner", HeaderValue::from_static("jangwon"));
 
         let put_response = put_bucket_object(
             State(state.clone()),
@@ -1412,6 +1447,14 @@ mod tests {
         );
         assert!(put_response.headers().get("x-amz-request-id").is_some());
         assert!(put_response.headers().get(header::LAST_MODIFIED).is_some());
+        assert_eq!(
+            put_response.headers().get("x-amz-meta-color").unwrap(),
+            "blue"
+        );
+        assert_eq!(
+            put_response.headers().get("x-amz-meta-owner").unwrap(),
+            "jangwon"
+        );
 
         let head_response = head_bucket_object(
             State(state.clone()),
@@ -1430,6 +1473,14 @@ mod tests {
         );
         assert!(head_response.headers().get(header::ETAG).is_some());
         assert!(head_response.headers().get("x-amz-request-id").is_some());
+        assert_eq!(
+            head_response.headers().get("x-amz-meta-color").unwrap(),
+            "blue"
+        );
+        assert_eq!(
+            head_response.headers().get("x-amz-meta-owner").unwrap(),
+            "jangwon"
+        );
         let head_last_modified = head_response
             .headers()
             .get(header::LAST_MODIFIED)
@@ -1451,6 +1502,14 @@ mod tests {
             "text/plain"
         );
         assert!(get_response.headers().get("x-amz-request-id").is_some());
+        assert_eq!(
+            get_response.headers().get("x-amz-meta-color").unwrap(),
+            "blue"
+        );
+        assert_eq!(
+            get_response.headers().get("x-amz-meta-owner").unwrap(),
+            "jangwon"
+        );
         let get_last_modified = get_response
             .headers()
             .get(header::LAST_MODIFIED)

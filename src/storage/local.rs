@@ -1,4 +1,5 @@
 use std::{
+    collections::BTreeMap,
     io,
     path::{Component, Path, PathBuf},
 };
@@ -22,6 +23,8 @@ pub struct StorageObjectMetadata {
     pub etag: String,
     pub created_at: String,
     pub updated_at: String,
+    #[serde(default)]
+    pub custom_metadata: BTreeMap<String, String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -112,6 +115,18 @@ impl LocalStorage {
         data: &[u8],
         content_type: Option<&str>,
     ) -> io::Result<StorageObjectMetadata> {
+        self.put_object_with_metadata(bucket, key, data, content_type, BTreeMap::new())
+            .await
+    }
+
+    pub async fn put_object_with_metadata(
+        &self,
+        bucket: &str,
+        key: &str,
+        data: &[u8],
+        content_type: Option<&str>,
+        custom_metadata: BTreeMap<String, String>,
+    ) -> io::Result<StorageObjectMetadata> {
         let path = self.resolve_object_path(bucket, key)?;
         let metadata_path = self.resolve_metadata_path(bucket, key)?;
         if let Some(parent) = path.parent() {
@@ -136,6 +151,7 @@ impl LocalStorage {
                 .map(|value| value.created_at.clone())
                 .unwrap_or_else(|| now.clone()),
             updated_at: now,
+            custom_metadata,
         };
 
         tokio::fs::write(&path, data).await?;
