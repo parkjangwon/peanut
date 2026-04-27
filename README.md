@@ -108,6 +108,7 @@ What this means for external frontend apps:
 - multipart completion now returns and persists a multipart-composite ETag (`etag-partcount`) instead of the final assembled object hash
 - multipart compatibility now has additional SDK-style smoke coverage for ranged CopyPart flows
 - S3-like object responses now include content-type, content-length, ETag, and last-modified metadata
+- S3-like GET now supports single `Range: bytes=...` requests and returns `206 Partial Content` with `Content-Range`
 - custom object metadata sent as `x-amz-meta-*` on PUT is now persisted and returned again on subsequent PUT/GET/HEAD responses
 - S3-like success/error responses now also include `x-amz-request-id` headers, and object `Last-Modified` headers are emitted as HTTP-date strings
 - S3-like bucket listing supports `list-type=2`, `prefix`, `delimiter`, `max-keys`, and `continuation-token`

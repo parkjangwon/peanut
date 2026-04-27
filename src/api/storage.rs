@@ -254,6 +254,7 @@ pub async fn get_bucket_object(
     Extension(claims): Extension<Claims>,
     Path((bucket, key)): Path<(String, String)>,
     RawQuery(raw_query): RawQuery,
+    headers: HeaderMap,
 ) -> Response {
     let scoped_bucket = scoped_bucket(&claims.sub, &bucket);
     let query = match parse_multipart_query(raw_query.as_deref()) {
@@ -311,7 +312,28 @@ pub async fn get_bucket_object(
 
     match state.storage.get_object(&scoped_bucket, &key).await {
         Ok(object) => {
-            build_object_response(StatusCode::OK, &key, object.data, &object.metadata, true)
+            let range = match parse_range_header(
+                headers
+                    .get(header::RANGE)
+                    .and_then(|value| value.to_str().ok()),
+                object.data.len(),
+            ) {
+                Ok(value) => value,
+                Err(message) => {
+                    return s3_error_response(
+                        StatusCode::RANGE_NOT_SATISFIABLE,
+                        "InvalidRange",
+                        &message,
+                        &format!("/{bucket}/{key}"),
+                        Some(&key),
+                    )
+                }
+            };
+            if let Some((start, end)) = range {
+                build_ranged_object_response(&key, object.data, &object.metadata, start, end)
+            } else {
+                build_object_response(StatusCode::OK, &key, object.data, &object.metadata, true)
+            }
         }
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => s3_error_response(
             StatusCode::NOT_FOUND,
@@ -1426,6 +1448,34 @@ fn build_object_response(
     }
 }
 
+fn build_ranged_object_response(
+    key: &str,
+    data: Vec<u8>,
+    metadata: &crate::storage::local::StorageObjectMetadata,
+    start: usize,
+    end: usize,
+) -> Response {
+    let chunk = data[start..=end].to_vec();
+    let mut response = apply_s3_response_headers(Response::builder().status(StatusCode::PARTIAL_CONTENT));
+    response = response.header(header::CONTENT_TYPE, metadata.content_type.as_str());
+    response = response.header(header::CONTENT_LENGTH, chunk.len().to_string());
+    response = response.header(
+        header::CONTENT_RANGE,
+        format!("bytes {start}-{end}/{}", metadata.content_length),
+    );
+    response = response.header(header::ETAG, format!("\"{}\"", metadata.etag));
+    response = response.header(
+        header::LAST_MODIFIED,
+        format_last_modified_header(metadata.updated_at.as_str()),
+    );
+    response = response.header("x-amz-meta-created-at", metadata.created_at.as_str());
+    response = response.header("x-amz-meta-key", key);
+    for (name, value) in &metadata.custom_metadata {
+        response = response.header(format!("x-amz-meta-{name}"), value);
+    }
+    response.body(axum::body::Body::from(chunk)).unwrap()
+}
+
 fn s3_list_xml_response(
     bucket: &str,
     query: &S3ListQuery,
@@ -1483,6 +1533,55 @@ fn s3_list_xml_response(
         .header(header::CONTENT_TYPE, "application/xml")
         .body(axum::body::Body::from(body))
         .unwrap()
+}
+
+fn parse_range_header(value: Option<&str>, len: usize) -> Result<Option<(usize, usize)>, String> {
+    let Some(value) = value.map(str::trim).filter(|value| !value.is_empty()) else {
+        return Ok(None);
+    };
+    let Some(spec) = value.strip_prefix("bytes=") else {
+        return Err("Range header must use bytes=start-end format".to_string());
+    };
+    if spec.contains(',') {
+        return Err("multiple byte ranges are not supported".to_string());
+    }
+    let Some((start_raw, end_raw)) = spec.split_once('-') else {
+        return Err("Range header must use bytes=start-end format".to_string());
+    };
+    if len == 0 {
+        return Err("requested range is outside the object length".to_string());
+    }
+
+    let (start, end) = if start_raw.is_empty() {
+        let suffix_len = end_raw
+            .parse::<usize>()
+            .map_err(|_| "Range header must use bytes=start-end format".to_string())?;
+        if suffix_len == 0 {
+            return Err("requested range is outside the object length".to_string());
+        }
+        let start = len.saturating_sub(suffix_len);
+        (start, len - 1)
+    } else {
+        let start = start_raw
+            .parse::<usize>()
+            .map_err(|_| "Range header must use bytes=start-end format".to_string())?;
+        if start >= len {
+            return Err("requested range is outside the object length".to_string());
+        }
+        let end = if end_raw.is_empty() {
+            len - 1
+        } else {
+            end_raw
+                .parse::<usize>()
+                .map_err(|_| "Range header must use bytes=start-end format".to_string())?
+        };
+        if start > end {
+            return Err("requested range start must be less than or equal to end".to_string());
+        }
+        (start, end.min(len - 1))
+    };
+
+    Ok(Some((start, end)))
 }
 
 fn xml_escape(value: &str) -> String {
@@ -1654,6 +1753,7 @@ mod tests {
             Extension(claims),
             axum::extract::Path(("assets".to_string(), "avatars/me.txt".to_string())),
             RawQuery(None),
+            HeaderMap::new(),
         )
         .await;
         assert_eq!(get_response.status(), StatusCode::OK);
@@ -2720,6 +2820,75 @@ mod tests {
         .unwrap();
         assert_eq!(get_response.status(), StatusCode::OK);
         assert_eq!(response_text(get_response).await, "copied body");
+    }
+
+    #[tokio::test]
+    async fn test_s3_like_get_object_supports_single_byte_range() {
+        let (state, _dir) = test_support::make_test_state().await;
+        let user = register_user(state.clone(), "range-get@example.com").await;
+
+        let app = axum::Router::new()
+            .route(
+                "/api/s3/:bucket/*key",
+                axum::routing::put(put_bucket_object).get(get_bucket_object),
+            )
+            .layer(axum::middleware::from_fn_with_state(
+                state.clone(),
+                crate::middleware::s3_auth::s3_auth_middleware,
+            ))
+            .with_state(state.clone());
+
+        let put_signed = crate::middleware::s3_auth::build_signed_header_auth(
+            "PUT",
+            "https://example.com/api/s3/assets/range-demo.txt",
+            &user.user.id,
+            state.jwt_secret.as_str(),
+            None,
+        )
+        .unwrap();
+        let put_response = tower::ServiceExt::oneshot(
+            app.clone(),
+            axum::http::Request::builder()
+                .method("PUT")
+                .uri("/api/s3/assets/range-demo.txt")
+                .header("host", "example.com")
+                .header("authorization", put_signed.authorization)
+                .header("x-amz-date", put_signed.amz_date)
+                .header("x-amz-content-sha256", put_signed.payload_hash)
+                .header(header::CONTENT_TYPE, "text/plain")
+                .body(axum::body::Body::from("hello range world"))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(put_response.status(), StatusCode::OK);
+
+        let get_signed = crate::middleware::s3_auth::build_signed_header_auth(
+            "GET",
+            "https://example.com/api/s3/assets/range-demo.txt",
+            &user.user.id,
+            state.jwt_secret.as_str(),
+            None,
+        )
+        .unwrap();
+        let get_response = tower::ServiceExt::oneshot(
+            app,
+            axum::http::Request::builder()
+                .uri("/api/s3/assets/range-demo.txt")
+                .header("host", "example.com")
+                .header("authorization", get_signed.authorization)
+                .header("x-amz-date", get_signed.amz_date)
+                .header("x-amz-content-sha256", get_signed.payload_hash)
+                .header(header::RANGE, "bytes=6-10")
+                .body(axum::body::Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(get_response.status(), StatusCode::PARTIAL_CONTENT);
+        assert_eq!(get_response.headers().get(header::CONTENT_RANGE).unwrap(), "bytes 6-10/17");
+        assert_eq!(get_response.headers().get(header::CONTENT_LENGTH).unwrap(), "5");
+        assert_eq!(response_text(get_response).await, "range");
     }
 
     #[tokio::test]
@@ -4378,6 +4547,7 @@ mod tests {
             Extension(claims.clone()),
             axum::extract::Path(("assets".to_string(), "missing.txt".to_string())),
             RawQuery(None),
+            HeaderMap::new(),
         )
         .await;
         assert_eq!(missing.status(), StatusCode::NOT_FOUND);
