@@ -44,7 +44,7 @@ export ADMIN_JWT='<PASTE_ADMIN_JWT>'
 ./examples/operations-e2e/create-service-token.sh
 # copy `token` from the JSON response
 
-export SERVICE_TOKEN='pst_...'
+export SERVICE_TOKEN='***'
 ./examples/operations-e2e/create-todos-table.sh
 ./examples/operations-e2e/create-todo-row.sh
 ./examples/operations-e2e/list-todo-rows.sh
@@ -63,7 +63,8 @@ export ADMIN_JWT='<PASTE_ADMIN_JWT>'
 ```
 
 Notes:
-- if you want to turn this into cron/systemd/CI automation, see `../../docs/automation-runbook.md`
+- if you want to turn this into cron/systemd/CI automation, see `../automation/` and `../../docs/automation-runbook.md`
+- for machine-local secret storage, start from `../automation/peanut.env.sample`
 - these examples intentionally use explicit placeholders instead of shell JSON parsing tricks
 - the service token acts as the backing admin user on protected APIs
 - the storage object still lands in the current authenticated user's scoped storage namespace

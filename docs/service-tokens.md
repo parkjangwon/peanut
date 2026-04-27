@@ -18,6 +18,7 @@ This is intentionally not:
 See also:
 - `README.md`
 - `docs/automation-runbook.md`
+- `examples/automation/`
 
 ## Endpoints
 
@@ -101,7 +102,7 @@ curl -s -X DELETE "$BASE_URL/api/admin/service-tokens/$TOKEN_ID" \
 
 ## Practical use cases
 
-For cron/systemd/CI-style operator automation, see `docs/automation-runbook.md`.
+For cron/systemd/CI-style operator automation, see `docs/automation-runbook.md` and `examples/automation/`.
 
 
 Good fits:

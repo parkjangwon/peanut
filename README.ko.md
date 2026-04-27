@@ -95,6 +95,7 @@ Peanut은 아래 원칙을 지향한다.
 - curl 예제: `examples/service-tokens/`
 - jq 보조 부트스트랩: `examples/service-tokens/create-token-jq.sh`
 - end-to-end 운영 예제: `examples/operations-e2e/`
+- 실행 가능한 automation 예제 + env 샘플: `examples/automation/`
 
 ### Storage
 - 상세 호환 범위 표: `docs/storage-s3-compat.ko.md`
@@ -634,6 +635,7 @@ curl -s "$BASE_URL/api/data/tables/todos/rows?search=buy&filter_field=title&filt
 - 바로 보낼 수 있는 payload 예제는 `examples/data-api/` 참고
 - service token + data + storage를 한 번에 보는 운영 예제는 `examples/operations-e2e/` 참고
 - 해당 예제에는 Data API list/export 단계도 포함되어 있다
+- env 파일 기반 cron 스크립트 예제는 `examples/automation/` 참고
 - 외부 프론트 auth 전체 흐름은 `docs/auth-client.ko.md`와 `examples/auth-client-web/` 참고
 
 ## 로컬 개발

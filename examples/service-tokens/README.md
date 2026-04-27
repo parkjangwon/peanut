@@ -18,6 +18,7 @@ Files included:
 - `revoke-token.sh`
 - `revoke-latest-token-jq.sh`
 - for a combined Data API + storage operator flow, see `../operations-e2e/`
+- for runnable cron/operator scripts, see `../automation/`
 - for cron/operator automation guidance, see `../../docs/automation-runbook.md`
 
 Minimal flow:
@@ -29,7 +30,7 @@ export ADMIN_JWT='<PASTE_ADMIN_JWT>'
 ./examples/service-tokens/create-token.sh
 # copy `token` from the JSON response
 
-export SERVICE_TOKEN='pst_...'
+export SERVICE_TOKEN='***'
 ./examples/service-tokens/use-token-admin-users.sh
 ```
 
@@ -42,3 +43,5 @@ export ADMIN_JWT='<PASTE_ADMIN_JWT>'
 ./examples/service-tokens/create-token-jq.sh
 # copy/paste the printed export lines
 ```
+
+For machine-local secret storage, copy `../automation/peanut.env.sample` and paste the plaintext service token there.

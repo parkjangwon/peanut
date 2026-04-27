@@ -11,12 +11,13 @@ See also:
 - `docs/service-tokens.md`
 - `examples/service-tokens/`
 - `examples/operations-e2e/`
+- `examples/automation/`
 
 ## Recommended pattern
 
 1. log in once as an admin and mint a dedicated service token
 2. store that plaintext token in a secure env file on the machine running automation
-3. call Peanut protected APIs with `Authorization: Bearer pst_...`
+3. call Peanut protected APIs with `Authorization: Bearer <pst_...>`
 4. revoke and replace the token when the automation no longer needs access
 
 ## Good fits for service-token automation
@@ -36,48 +37,44 @@ See also:
 
 ## Environment file example
 
-```bash
-export BASE_URL=http://127.0.0.1:3000
-export SERVICE_TOKEN='pst_...'
-```
+Use the committed sample as a starting point:
+- `examples/automation/peanut.env.sample`
 
-## Cron example: table export snapshot
+Example machine-local file:
 
 ```bash
-#!/usr/bin/env bash
-set -euo pipefail
-
-source /opt/peanut/peanut.env
-TIMESTAMP=$(date +%F-%H%M%S)
-OUT_DIR=/opt/peanut/backups
-mkdir -p "$OUT_DIR"
-
-curl -s "$BASE_URL/api/data/tables/ops_todos/export" \
-  -H "authorization: Bearer $SERVICE_TOKEN" \
-  > "$OUT_DIR/ops_todos-$TIMESTAMP.json"
+BASE_URL=http://127.0.0.1:3000
+SERVICE_TOKEN=pst_replace_me
+TABLE_NAME=ops_todos
+STORAGE_BUCKET=assets
+STORAGE_KEY=ops/hello.txt
+AUTOMATION_OUT_DIR=/opt/peanut/backups
 ```
 
-Example crontab:
+## Runnable automation examples
+
+Committed scripts:
+- `examples/automation/export-ops-todos.sh`
+- `examples/automation/check-storage-head.sh`
+
+Example:
+
+```bash
+cp examples/automation/peanut.env.sample /opt/peanut/peanut.env
+$EDITOR /opt/peanut/peanut.env
+
+PEANUT_ENV_FILE=/opt/peanut/peanut.env \
+  ./examples/automation/export-ops-todos.sh
+
+PEANUT_ENV_FILE=/opt/peanut/peanut.env \
+  ./examples/automation/check-storage-head.sh
+```
+
+## Cron example
 
 ```cron
-15 2 * * * /opt/peanut/scripts/export-ops-todos.sh
-```
-
-## Cron example: protected storage HEAD check
-
-```bash
-#!/usr/bin/env bash
-set -euo pipefail
-
-source /opt/peanut/peanut.env
-curl -fsSI "$BASE_URL/api/s3/assets/ops/hello.txt" \
-  -H "authorization: Bearer $SERVICE_TOKEN"
-```
-
-Example crontab:
-
-```cron
-*/30 * * * * /opt/peanut/scripts/check-storage-head.sh
+15 2 * * * PEANUT_ENV_FILE=/opt/peanut/peanut.env /opt/peanut/examples/automation/export-ops-todos.sh
+*/30 * * * * PEANUT_ENV_FILE=/opt/peanut/peanut.env /opt/peanut/examples/automation/check-storage-head.sh
 ```
 
 ## Recommended rollout flow
@@ -85,7 +82,8 @@ Example crontab:
 For a full bootstrap path, follow:
 1. `examples/service-tokens/create-token.sh` or `create-token-jq.sh`
 2. `examples/operations-e2e/`
-3. convert the validated sequence into your local cron/systemd/CI job
+3. copy `examples/automation/peanut.env.sample` to a machine-local secret file and paste the plaintext token
+4. convert the validated sequence into your local cron/systemd/CI job
 
 ## Rotation guidance
 

@@ -94,6 +94,7 @@ What this means for external frontend apps:
 - curl examples: `examples/service-tokens/`
 - jq-assisted token bootstrap: `examples/service-tokens/create-token-jq.sh`
 - end-to-end operations example: `examples/operations-e2e/`
+- runnable automation examples + env sample: `examples/automation/`
 
 ### Storage
 - detailed compatibility matrix: `docs/storage-s3-compat.md`
@@ -640,6 +641,7 @@ Quick notes:
 - for ready-to-send payload files, see `examples/data-api/`
 - for a combined service-token + data + storage runbook, see `examples/operations-e2e/`
 - that runbook now also includes Data API list/export steps
+- for reusable env-backed cron scripts, see `examples/automation/`
 - for a full external frontend auth flow, see `docs/auth-client.md` and `examples/auth-client-web/`
 
 ## Local development

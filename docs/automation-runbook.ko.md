@@ -11,12 +11,13 @@
 - `docs/service-tokens.ko.md`
 - `examples/service-tokens/`
 - `examples/operations-e2e/`
+- `examples/automation/`
 
 ## 권장 패턴
 
 1. admin으로 한 번 로그인해서 전용 service token을 발급한다
 2. automation이 도는 머신의 안전한 env 파일에 plaintext token을 저장한다
-3. Peanut protected API를 `Authorization: Bearer pst_...` 로 호출한다
+3. Peanut protected API를 `Authorization: Bearer <pst_...>` 헤더로 호출한다
 4. 자동화 목적이 끝나면 token을 revoke하고 새 것으로 교체한다
 
 ## service token 자동화에 잘 맞는 것
@@ -36,48 +37,44 @@
 
 ## env 파일 예시
 
-```bash
-export BASE_URL=http://127.0.0.1:3000
-export SERVICE_TOKEN='pst_...'
-```
+시작점으로는 커밋된 샘플 파일을 그대로 복사하면 된다:
+- `examples/automation/peanut.env.sample`
 
-## Cron 예시: table export snapshot
+예시 로컬 파일:
 
 ```bash
-#!/usr/bin/env bash
-set -euo pipefail
-
-source /opt/peanut/peanut.env
-TIMESTAMP=$(date +%F-%H%M%S)
-OUT_DIR=/opt/peanut/backups
-mkdir -p "$OUT_DIR"
-
-curl -s "$BASE_URL/api/data/tables/ops_todos/export" \
-  -H "authorization: Bearer $SERVICE_TOKEN" \
-  > "$OUT_DIR/ops_todos-$TIMESTAMP.json"
+BASE_URL=http://127.0.0.1:3000
+SERVICE_TOKEN=pst_replace_me
+TABLE_NAME=ops_todos
+STORAGE_BUCKET=assets
+STORAGE_KEY=ops/hello.txt
+AUTOMATION_OUT_DIR=/opt/peanut/backups
 ```
 
-예시 crontab:
+## 바로 실행 가능한 automation 예제
+
+커밋된 스크립트:
+- `examples/automation/export-ops-todos.sh`
+- `examples/automation/check-storage-head.sh`
+
+예시:
+
+```bash
+cp examples/automation/peanut.env.sample /opt/peanut/peanut.env
+$EDITOR /opt/peanut/peanut.env
+
+PEANUT_ENV_FILE=/opt/peanut/peanut.env \
+  ./examples/automation/export-ops-todos.sh
+
+PEANUT_ENV_FILE=/opt/peanut/peanut.env \
+  ./examples/automation/check-storage-head.sh
+```
+
+## Cron 예시
 
 ```cron
-15 2 * * * /opt/peanut/scripts/export-ops-todos.sh
-```
-
-## Cron 예시: protected storage HEAD 체크
-
-```bash
-#!/usr/bin/env bash
-set -euo pipefail
-
-source /opt/peanut/peanut.env
-curl -fsSI "$BASE_URL/api/s3/assets/ops/hello.txt" \
-  -H "authorization: Bearer $SERVICE_TOKEN"
-```
-
-예시 crontab:
-
-```cron
-*/30 * * * * /opt/peanut/scripts/check-storage-head.sh
+15 2 * * * PEANUT_ENV_FILE=/opt/peanut/peanut.env /opt/peanut/examples/automation/export-ops-todos.sh
+*/30 * * * * PEANUT_ENV_FILE=/opt/peanut/peanut.env /opt/peanut/examples/automation/check-storage-head.sh
 ```
 
 ## 권장 도입 순서
@@ -85,7 +82,8 @@ curl -fsSI "$BASE_URL/api/s3/assets/ops/hello.txt" \
 전체 부트스트랩 흐름은 아래 순서로 보면 된다:
 1. `examples/service-tokens/create-token.sh` 또는 `create-token-jq.sh`
 2. `examples/operations-e2e/`
-3. 검증된 시퀀스를 로컬 cron/systemd/CI job으로 옮긴다
+3. `examples/automation/peanut.env.sample` 을 머신 로컬 비밀 파일로 복사하고 plaintext token을 넣는다
+4. 검증된 시퀀스를 로컬 cron/systemd/CI job으로 옮긴다
 
 ## Rotation 가이드
 
