@@ -90,6 +90,7 @@ What this means for external frontend apps:
 ### Service token guide
 - English guide: `docs/service-tokens.md`
 - Korean guide: `docs/service-tokens.ko.md`
+- automation runbook: `docs/automation-runbook.md`
 - curl examples: `examples/service-tokens/`
 - jq-assisted token bootstrap: `examples/service-tokens/create-token-jq.sh`
 - end-to-end operations example: `examples/operations-e2e/`
@@ -634,6 +635,7 @@ Quick notes:
 - `owner_private` rows are scoped to the authenticated user
 - the same bearer token works for storage, data, push, and session endpoints
 - for server-to-server admin automation, see `docs/service-tokens.md`
+- for cron/operator automation patterns, see `docs/automation-runbook.md`
 - for a fuller Data API walkthrough, see `docs/data-api.md`
 - for ready-to-send payload files, see `examples/data-api/`
 - for a combined service-token + data + storage runbook, see `examples/operations-e2e/`

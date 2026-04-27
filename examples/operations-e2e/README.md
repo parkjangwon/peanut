@@ -56,6 +56,7 @@ export ADMIN_JWT='<PASTE_ADMIN_JWT>'
 ```
 
 Notes:
+- if you want to turn this into cron/systemd/CI automation, see `../../docs/automation-runbook.md`
 - these examples intentionally use explicit placeholders instead of shell JSON parsing tricks
 - the service token acts as the backing admin user on protected APIs
 - the storage object still lands in the current authenticated user's scoped storage namespace

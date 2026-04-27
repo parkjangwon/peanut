@@ -91,6 +91,7 @@ Peanut은 아래 원칙을 지향한다.
 ### Service token 가이드
 - 한국어 가이드: `docs/service-tokens.ko.md`
 - English guide: `docs/service-tokens.md`
+- 운영 자동화 런북: `docs/automation-runbook.ko.md`
 - curl 예제: `examples/service-tokens/`
 - jq 보조 부트스트랩: `examples/service-tokens/create-token-jq.sh`
 - end-to-end 운영 예제: `examples/operations-e2e/`
@@ -628,6 +629,7 @@ curl -s "$BASE_URL/api/data/tables/todos/rows?search=buy&filter_field=title&filt
 - `owner_private` row는 인증 유저 기준으로 격리된다
 - 같은 bearer token으로 storage, data, push, session 엔드포인트를 함께 호출할 수 있다
 - server-to-server admin 자동화는 `docs/service-tokens.ko.md` 참고
+- cron/운영 자동화 패턴은 `docs/automation-runbook.ko.md` 참고
 - Data API를 조금 더 실전적으로 보려면 `docs/data-api.ko.md` 참고
 - 바로 보낼 수 있는 payload 예제는 `examples/data-api/` 참고
 - service token + data + storage를 한 번에 보는 운영 예제는 `examples/operations-e2e/` 참고

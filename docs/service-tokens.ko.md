@@ -15,6 +15,10 @@ Peanut은 운영 자동화를 위한 좁은 범위의 server-to-server token 모
 - 앱별 복잡한 secret 관리
 - end-user impersonation
 
+같이 보면 좋은 문서:
+- `README.ko.md`
+- `docs/automation-runbook.ko.md`
+
 ## 엔드포인트
 
 Admin 엔드포인트:
@@ -96,6 +100,9 @@ curl -s -X DELETE "$BASE_URL/api/admin/service-tokens/$TOKEN_ID" \
 - 성공적으로 사용되면 `last_used_at` 이 갱신된다
 
 ## 실전 사용처
+
+cron/systemd/CI 스타일 운영 자동화 예시는 `docs/automation-runbook.ko.md` 참고.
+
 
 잘 맞는 용도:
 - deploy hook

@@ -15,6 +15,10 @@ This is intentionally not:
 - per-app secret management
 - end-user impersonation
 
+See also:
+- `README.md`
+- `docs/automation-runbook.md`
+
 ## Endpoints
 
 Admin endpoints:
@@ -96,6 +100,9 @@ curl -s -X DELETE "$BASE_URL/api/admin/service-tokens/$TOKEN_ID" \
 - `last_used_at` is updated on successful use
 
 ## Practical use cases
+
+For cron/systemd/CI-style operator automation, see `docs/automation-runbook.md`.
+
 
 Good fits:
 - deploy hooks

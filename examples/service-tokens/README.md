@@ -18,6 +18,7 @@ Files included:
 - `revoke-token.sh`
 - `revoke-latest-token-jq.sh`
 - for a combined Data API + storage operator flow, see `../operations-e2e/`
+- for cron/operator automation guidance, see `../../docs/automation-runbook.md`
 
 Minimal flow:
 
