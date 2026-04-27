@@ -21,6 +21,7 @@ Admin endpoints:
 - `GET /api/admin/service-tokens`
 - `POST /api/admin/service-tokens`
 - `DELETE /api/admin/service-tokens/:token_id`
+- curl examples: `examples/service-tokens/`
 
 ## Create a token
 
@@ -54,6 +55,7 @@ Response:
 Important:
 - copy the plaintext `token` immediately
 - Peanut stores only the hash, so the raw token is not recoverable later
+- see `examples/service-tokens/` for copy-pasteable curl files
 
 ## Use a token
 

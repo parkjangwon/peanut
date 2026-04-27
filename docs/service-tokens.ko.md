@@ -21,6 +21,7 @@ Admin 엔드포인트:
 - `GET /api/admin/service-tokens`
 - `POST /api/admin/service-tokens`
 - `DELETE /api/admin/service-tokens/:token_id`
+- curl 예제: `examples/service-tokens/`
 
 ## 토큰 생성
 
@@ -54,6 +55,7 @@ Admin 엔드포인트:
 중요:
 - plaintext `token` 값은 바로 복사해둬야 한다
 - Peanut은 hash만 저장하므로 raw token은 나중에 다시 볼 수 없다
+- 바로 실행 가능한 curl 파일은 `examples/service-tokens/` 참고
 
 ## 토큰 사용
 

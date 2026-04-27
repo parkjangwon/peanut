@@ -90,6 +90,7 @@ What this means for external frontend apps:
 ### Service token guide
 - English guide: `docs/service-tokens.md`
 - Korean guide: `docs/service-tokens.ko.md`
+- curl examples: `examples/service-tokens/`
 
 ### Storage
 - detailed compatibility matrix: `docs/storage-s3-compat.md`

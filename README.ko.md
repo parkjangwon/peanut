@@ -91,6 +91,7 @@ Peanut은 아래 원칙을 지향한다.
 ### Service token 가이드
 - 한국어 가이드: `docs/service-tokens.ko.md`
 - English guide: `docs/service-tokens.md`
+- curl 예제: `examples/service-tokens/`
 
 ### Storage
 - 상세 호환 범위 표: `docs/storage-s3-compat.ko.md`
