@@ -560,6 +560,15 @@ pub async fn put_bucket_object(
                 Some(&key),
             );
         }
+        if headers.keys().any(|name| name.as_str().starts_with("x-amz-copy-source-if-")) {
+            return s3_error_response(
+                StatusCode::BAD_REQUEST,
+                "InvalidRequest",
+                "copy-source conditional headers are not supported",
+                &format!("/{bucket}/{key}"),
+                Some(&key),
+            );
+        }
         let (source_bucket, source_key) = match parse_copy_source(copy_source) {
             Ok(value) => value,
             Err(message) => {
@@ -4086,6 +4095,191 @@ mod tests {
         let xml = response_text(list_response).await;
         assert!(xml.contains("<FetchOwner>true</FetchOwner>"));
         assert!(xml.contains(&format!("<Owner><ID>{}</ID></Owner>", user.user.id)));
+    }
+
+    #[tokio::test]
+    async fn test_s3_like_list_objects_v2_start_after_skips_earlier_common_prefixes() {
+        let (state, _dir) = test_support::make_test_state().await;
+        let user = register_user(state.clone(), "list-start-after-prefix@example.com").await;
+        let claims = claims_for(&user.user.id);
+
+        for key in ["photos/2026/a.jpg", "photos/2027/b.jpg", "photos/cover.jpg"] {
+            let response = put_bucket_object(
+                State(state.clone()),
+                Extension(claims.clone()),
+                axum::extract::Path(("assets".to_string(), key.to_string())),
+                RawQuery(None),
+                HeaderMap::new(),
+                Bytes::from_static(b"x"),
+            )
+            .await;
+            assert_eq!(response.status(), StatusCode::OK);
+        }
+
+        let response = list_bucket_objects(
+            State(state),
+            Extension(claims),
+            axum::extract::Path("assets".to_string()),
+            Query(S3ListQuery {
+                list_type: Some(2),
+                uploads: None,
+                prefix: Some("photos/".to_string()),
+                delimiter: Some("/".to_string()),
+                max_keys: Some(10),
+                max_uploads: None,
+                continuation_token: None,
+                start_after: Some("photos/2026/z.jpg".to_string()),
+                encoding_type: None,
+                fetch_owner: None,
+                key_marker: None,
+                upload_id_marker: None,
+            }),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let xml = response_text(response).await;
+        assert!(xml.contains("<Key>photos/cover.jpg</Key>"));
+        assert!(!xml.contains("<CommonPrefixes><Prefix>photos/2026/</Prefix></CommonPrefixes>"));
+        assert!(xml.contains("<CommonPrefixes><Prefix>photos/2027/</Prefix></CommonPrefixes>"));
+    }
+
+    #[tokio::test]
+    async fn test_s3_like_list_objects_v2_prefers_continuation_token_over_start_after() {
+        let (state, _dir) = test_support::make_test_state().await;
+        let user = register_user(state.clone(), "list-anchor-precedence@example.com").await;
+        let claims = claims_for(&user.user.id);
+
+        for key in ["notes/a.txt", "notes/b.txt", "notes/c.txt"] {
+            let response = put_bucket_object(
+                State(state.clone()),
+                Extension(claims.clone()),
+                axum::extract::Path(("assets".to_string(), key.to_string())),
+                RawQuery(None),
+                HeaderMap::new(),
+                Bytes::from(key.to_string()),
+            )
+            .await;
+            assert_eq!(response.status(), StatusCode::OK);
+        }
+
+        let first_page = list_bucket_objects(
+            State(state.clone()),
+            Extension(claims.clone()),
+            axum::extract::Path("assets".to_string()),
+            Query(S3ListQuery {
+                list_type: Some(2),
+                uploads: None,
+                prefix: Some("notes/".to_string()),
+                delimiter: None,
+                max_keys: Some(1),
+                max_uploads: None,
+                continuation_token: None,
+                start_after: None,
+                encoding_type: None,
+                fetch_owner: None,
+                key_marker: None,
+                upload_id_marker: None,
+            }),
+        )
+        .await;
+        assert_eq!(first_page.status(), StatusCode::OK);
+        let first_xml = response_text(first_page).await;
+        let next_token = xml_tag_value(&first_xml, "NextContinuationToken").unwrap();
+
+        let second_page = list_bucket_objects(
+            State(state),
+            Extension(claims),
+            axum::extract::Path("assets".to_string()),
+            Query(S3ListQuery {
+                list_type: Some(2),
+                uploads: None,
+                prefix: Some("notes/".to_string()),
+                delimiter: None,
+                max_keys: Some(10),
+                max_uploads: None,
+                continuation_token: Some(next_token),
+                start_after: Some("notes/z.txt".to_string()),
+                encoding_type: None,
+                fetch_owner: None,
+                key_marker: None,
+                upload_id_marker: None,
+            }),
+        )
+        .await;
+        assert_eq!(second_page.status(), StatusCode::OK);
+        let second_xml = response_text(second_page).await;
+        assert!(second_xml.contains("<Key>notes/b.txt</Key>"));
+        assert!(second_xml.contains("<Key>notes/c.txt</Key>"));
+    }
+
+    #[tokio::test]
+    async fn test_s3_like_copy_object_rejects_unsupported_copy_source_conditionals() {
+        let (state, _dir) = test_support::make_test_state().await;
+        let user = register_user(state.clone(), "copy-object-conditionals@example.com").await;
+
+        let app = axum::Router::new()
+            .route(
+                "/api/s3/:bucket/*key",
+                axum::routing::put(put_bucket_object).head(head_bucket_object),
+            )
+            .layer(axum::middleware::from_fn_with_state(
+                state.clone(),
+                crate::middleware::s3_auth::s3_auth_middleware,
+            ))
+            .with_state(state.clone());
+
+        let put_source_signed = crate::middleware::s3_auth::build_signed_header_auth(
+            "PUT",
+            "https://example.com/api/s3/assets/source-conditional-copy.txt",
+            &user.user.id,
+            state.jwt_secret.as_str(),
+            None,
+        )
+        .unwrap();
+        let put_source_response = tower::ServiceExt::oneshot(
+            app.clone(),
+            axum::http::Request::builder()
+                .method("PUT")
+                .uri("/api/s3/assets/source-conditional-copy.txt")
+                .header("host", "example.com")
+                .header("authorization", put_source_signed.authorization)
+                .header("x-amz-date", put_source_signed.amz_date)
+                .header("x-amz-content-sha256", put_source_signed.payload_hash)
+                .body(axum::body::Body::from("copy me"))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(put_source_response.status(), StatusCode::OK);
+
+        let copy_signed = crate::middleware::s3_auth::build_signed_header_auth(
+            "PUT",
+            "https://example.com/api/s3/assets/conditional-copy-target.txt",
+            &user.user.id,
+            state.jwt_secret.as_str(),
+            None,
+        )
+        .unwrap();
+        let copy_response = tower::ServiceExt::oneshot(
+            app,
+            axum::http::Request::builder()
+                .method("PUT")
+                .uri("/api/s3/assets/conditional-copy-target.txt")
+                .header("host", "example.com")
+                .header("authorization", copy_signed.authorization)
+                .header("x-amz-date", copy_signed.amz_date)
+                .header("x-amz-content-sha256", copy_signed.payload_hash)
+                .header("x-amz-copy-source", "/assets/source-conditional-copy.txt")
+                .header("x-amz-copy-source-if-match", "\"whatever\"")
+                .body(axum::body::Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(copy_response.status(), StatusCode::BAD_REQUEST);
+        let xml = response_text(copy_response).await;
+        assert!(xml.contains("<Code>InvalidRequest</Code>"));
+        assert!(xml.contains("copy-source conditional headers are not supported"));
     }
 
     #[tokio::test]

@@ -117,6 +117,7 @@ What this means for external frontend apps:
 - custom object metadata sent as `x-amz-meta-*` on PUT is now persisted and returned again on subsequent PUT/GET/HEAD responses
 - S3-like success/error responses now also include `x-amz-request-id` headers, and object `Last-Modified` headers are emitted as HTTP-date strings
 - S3-like bucket listing supports `list-type=2`, `prefix`, `delimiter`, `max-keys`, `continuation-token`, `start-after`, `encoding-type=url`, and `fetch-owner=true`
+- when both `continuation-token` and `start-after` are present, Peanut follows the opaque continuation token and ignores `start-after`
 - `max-keys=0` now returns an empty page with the expected truncation metadata instead of failing the request
 - continuation tokens are now opaque base64url-style tokens instead of raw object keys
 - S3-like listing now emits `CommonPrefixes` XML blocks when `delimiter=/` is used
