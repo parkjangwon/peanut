@@ -1158,7 +1158,11 @@ fn parse_metadata_directive(value: Option<&str>) -> Result<MetadataDirective, St
 }
 
 fn parse_copy_source(value: &str) -> Result<(String, String), String> {
-    let trimmed = value.trim().trim_start_matches('/');
+    let trimmed = value.trim();
+    if !trimmed.starts_with('/') {
+        return Err("x-amz-copy-source must be /bucket/key".to_string());
+    }
+    let trimmed = trimmed.trim_start_matches('/');
     let Some((bucket, key)) = trimmed.split_once('/') else {
         return Err("x-amz-copy-source must be /bucket/key".to_string());
     };
@@ -3109,6 +3113,173 @@ mod tests {
         let copy_xml = response_text(copy_response).await;
         assert!(copy_xml.contains("<Code>InvalidRequest</Code>"));
         assert!(copy_xml.contains("x-amz-metadata-directive must be COPY or REPLACE"));
+    }
+
+    #[tokio::test]
+    async fn test_s3_like_copy_object_rejects_copy_source_without_leading_slash() {
+        let (state, _dir) = test_support::make_test_state().await;
+        let user = register_user(state.clone(), "copy-object-no-leading-slash@example.com").await;
+
+        let app = axum::Router::new()
+            .route(
+                "/api/s3/:bucket/*key",
+                axum::routing::put(put_bucket_object)
+                    .get(get_bucket_object)
+                    .head(head_bucket_object),
+            )
+            .layer(axum::middleware::from_fn_with_state(
+                state.clone(),
+                crate::middleware::s3_auth::s3_auth_middleware,
+            ))
+            .with_state(state.clone());
+
+        let put_source_signed = crate::middleware::s3_auth::build_signed_header_auth(
+            "PUT",
+            "https://example.com/api/s3/assets/source-no-leading-slash.txt",
+            &user.user.id,
+            state.jwt_secret.as_str(),
+            None,
+        )
+        .unwrap();
+        let put_source_response = tower::ServiceExt::oneshot(
+            app.clone(),
+            axum::http::Request::builder()
+                .method("PUT")
+                .uri("/api/s3/assets/source-no-leading-slash.txt")
+                .header("host", "example.com")
+                .header("authorization", put_source_signed.authorization)
+                .header("x-amz-date", put_source_signed.amz_date)
+                .header("x-amz-content-sha256", put_source_signed.payload_hash)
+                .body(axum::body::Body::from("source body"))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(put_source_response.status(), StatusCode::OK);
+
+        let copy_signed = crate::middleware::s3_auth::build_signed_header_auth(
+            "PUT",
+            "https://example.com/api/s3/assets/target-no-leading-slash.txt",
+            &user.user.id,
+            state.jwt_secret.as_str(),
+            None,
+        )
+        .unwrap();
+        let copy_response = tower::ServiceExt::oneshot(
+            app,
+            axum::http::Request::builder()
+                .method("PUT")
+                .uri("/api/s3/assets/target-no-leading-slash.txt")
+                .header("host", "example.com")
+                .header("authorization", copy_signed.authorization)
+                .header("x-amz-date", copy_signed.amz_date)
+                .header("x-amz-content-sha256", copy_signed.payload_hash)
+                .header("x-amz-copy-source", "assets/source-no-leading-slash.txt")
+                .body(axum::body::Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(copy_response.status(), StatusCode::BAD_REQUEST);
+        let copy_xml = response_text(copy_response).await;
+        assert!(copy_xml.contains("<Code>InvalidRequest</Code>"));
+        assert!(copy_xml.contains("x-amz-copy-source must be /bucket/key"));
+    }
+
+    #[tokio::test]
+    async fn test_s3_like_copy_part_rejects_copy_source_without_leading_slash() {
+        let (state, _dir) = test_support::make_test_state().await;
+        let user = register_user(state.clone(), "copy-part-no-leading-slash@example.com").await;
+
+        let app = axum::Router::new()
+            .route(
+                "/api/s3/:bucket/*key",
+                axum::routing::post(post_bucket_object)
+                    .put(put_bucket_object)
+                    .get(get_bucket_object),
+            )
+            .layer(axum::middleware::from_fn_with_state(
+                state.clone(),
+                crate::middleware::s3_auth::s3_auth_middleware,
+            ))
+            .with_state(state.clone());
+
+        let put_source_signed = crate::middleware::s3_auth::build_signed_header_auth(
+            "PUT",
+            "https://example.com/api/s3/assets/source-part-no-leading-slash.txt",
+            &user.user.id,
+            state.jwt_secret.as_str(),
+            None,
+        )
+        .unwrap();
+        let put_source_response = tower::ServiceExt::oneshot(
+            app.clone(),
+            axum::http::Request::builder()
+                .method("PUT")
+                .uri("/api/s3/assets/source-part-no-leading-slash.txt")
+                .header("host", "example.com")
+                .header("authorization", put_source_signed.authorization)
+                .header("x-amz-date", put_source_signed.amz_date)
+                .header("x-amz-content-sha256", put_source_signed.payload_hash)
+                .body(axum::body::Body::from("copied part body"))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(put_source_response.status(), StatusCode::OK);
+
+        let create_signed = crate::middleware::s3_auth::build_signed_header_auth(
+            "POST",
+            "https://example.com/api/s3/assets/copied-part-no-leading-slash.txt?uploads=1",
+            &user.user.id,
+            state.jwt_secret.as_str(),
+            None,
+        )
+        .unwrap();
+        let create_response = tower::ServiceExt::oneshot(
+            app.clone(),
+            axum::http::Request::builder()
+                .method("POST")
+                .uri("/api/s3/assets/copied-part-no-leading-slash.txt?uploads=1")
+                .header("host", "example.com")
+                .header("authorization", create_signed.authorization)
+                .header("x-amz-date", create_signed.amz_date)
+                .header("x-amz-content-sha256", create_signed.payload_hash)
+                .body(axum::body::Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(create_response.status(), StatusCode::OK);
+        let upload_id = xml_tag_value(&response_text(create_response).await, "UploadId").unwrap();
+
+        let copy_part_signed = crate::middleware::s3_auth::build_signed_header_auth(
+            "PUT",
+            &format!("https://example.com/api/s3/assets/copied-part-no-leading-slash.txt?partNumber=1&uploadId={upload_id}"),
+            &user.user.id,
+            state.jwt_secret.as_str(),
+            None,
+        )
+        .unwrap();
+        let copy_part_response = tower::ServiceExt::oneshot(
+            app,
+            axum::http::Request::builder()
+                .method("PUT")
+                .uri(format!("/api/s3/assets/copied-part-no-leading-slash.txt?partNumber=1&uploadId={upload_id}"))
+                .header("host", "example.com")
+                .header("authorization", copy_part_signed.authorization)
+                .header("x-amz-date", copy_part_signed.amz_date)
+                .header("x-amz-content-sha256", copy_part_signed.payload_hash)
+                .header("x-amz-copy-source", "assets/source-part-no-leading-slash.txt")
+                .body(axum::body::Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(copy_part_response.status(), StatusCode::BAD_REQUEST);
+        let copy_xml = response_text(copy_part_response).await;
+        assert!(copy_xml.contains("<Code>InvalidRequest</Code>"));
+        assert!(copy_xml.contains("x-amz-copy-source must be /bucket/key"));
     }
 
     #[tokio::test]

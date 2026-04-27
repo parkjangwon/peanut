@@ -94,6 +94,7 @@ What this means for external frontend apps:
   - `POST /api/s3/:bucket/*key?uploads` to initiate and receive an `UploadId`
   - `GET /api/s3/:bucket?uploads=1&prefix=...&max-uploads=...&key-marker=...&upload-id-marker=...` to list active multipart uploads in a bucket with marker pagination
   - `PUT /api/s3/:bucket/*key` with `x-amz-copy-source: /src-bucket/src-key` to CopyObject into a new key
+  - `x-amz-copy-source` must use the path-style `/bucket/key` form
   - `x-amz-metadata-directive: COPY|REPLACE` is supported for CopyObject metadata behavior
   - copying an object onto itself now requires `x-amz-metadata-directive: REPLACE`
   - `x-amz-copy-source-range` is rejected for CopyObject and only supported for CopyPart

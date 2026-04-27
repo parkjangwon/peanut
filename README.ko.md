@@ -95,6 +95,7 @@ Peanut은 아래 원칙을 지향한다.
   - `POST /api/s3/:bucket/*key?uploads` 로 `UploadId`를 발급받는다
   - `GET /api/s3/:bucket?uploads=1&prefix=...&max-uploads=...&key-marker=...&upload-id-marker=...` 로 active multipart upload를 marker pagination과 함께 조회한다
   - `PUT /api/s3/:bucket/*key` 에 `x-amz-copy-source: /src-bucket/src-key` 헤더를 주면 새 key로 CopyObject 한다
+  - `x-amz-copy-source` 는 `/bucket/key` 형태의 path-style 값만 허용한다
   - `x-amz-metadata-directive: COPY|REPLACE` 로 CopyObject 메타데이터 동작을 제어할 수 있다
   - 같은 object를 자기 자신에게 CopyObject 하는 경우는 `x-amz-metadata-directive: REPLACE` 가 필요하다
   - `x-amz-copy-source-range` 는 CopyObject에서는 거부되며 CopyPart에서만 지원한다
