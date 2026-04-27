@@ -499,6 +499,15 @@ pub async fn put_bucket_object(
                 )
             }
         };
+        if headers.get("x-amz-copy-source-range").is_some() {
+            return s3_error_response(
+                StatusCode::BAD_REQUEST,
+                "InvalidRequest",
+                "x-amz-copy-source-range is only supported for CopyPart",
+                &format!("/{bucket}/{key}"),
+                Some(&key),
+            );
+        }
         let (source_bucket, source_key) = match parse_copy_source(copy_source) {
             Ok(value) => value,
             Err(message) => {
@@ -3028,6 +3037,150 @@ mod tests {
         assert_eq!(copy_response.status(), StatusCode::BAD_REQUEST);
         let copy_xml = response_text(copy_response).await;
         assert!(copy_xml.contains("<Code>InvalidRequest</Code>"));
+    }
+
+    #[tokio::test]
+    async fn test_s3_like_copy_object_rejects_invalid_metadata_directive() {
+        let (state, _dir) = test_support::make_test_state().await;
+        let user = register_user(state.clone(), "copy-object-bad-directive@example.com").await;
+
+        let app = axum::Router::new()
+            .route(
+                "/api/s3/:bucket/*key",
+                axum::routing::put(put_bucket_object)
+                    .get(get_bucket_object)
+                    .head(head_bucket_object),
+            )
+            .layer(axum::middleware::from_fn_with_state(
+                state.clone(),
+                crate::middleware::s3_auth::s3_auth_middleware,
+            ))
+            .with_state(state.clone());
+
+        let put_source_signed = crate::middleware::s3_auth::build_signed_header_auth(
+            "PUT",
+            "https://example.com/api/s3/assets/source-bad-directive.txt",
+            &user.user.id,
+            state.jwt_secret.as_str(),
+            None,
+        )
+        .unwrap();
+        let put_source_response = tower::ServiceExt::oneshot(
+            app.clone(),
+            axum::http::Request::builder()
+                .method("PUT")
+                .uri("/api/s3/assets/source-bad-directive.txt")
+                .header("host", "example.com")
+                .header("authorization", put_source_signed.authorization)
+                .header("x-amz-date", put_source_signed.amz_date)
+                .header("x-amz-content-sha256", put_source_signed.payload_hash)
+                .body(axum::body::Body::from("bad directive source"))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(put_source_response.status(), StatusCode::OK);
+
+        let copy_signed = crate::middleware::s3_auth::build_signed_header_auth(
+            "PUT",
+            "https://example.com/api/s3/assets/bad-directive-target.txt",
+            &user.user.id,
+            state.jwt_secret.as_str(),
+            None,
+        )
+        .unwrap();
+        let copy_response = tower::ServiceExt::oneshot(
+            app,
+            axum::http::Request::builder()
+                .method("PUT")
+                .uri("/api/s3/assets/bad-directive-target.txt")
+                .header("host", "example.com")
+                .header("authorization", copy_signed.authorization)
+                .header("x-amz-date", copy_signed.amz_date)
+                .header("x-amz-content-sha256", copy_signed.payload_hash)
+                .header("x-amz-copy-source", "/assets/source-bad-directive.txt")
+                .header("x-amz-metadata-directive", "MOVE")
+                .body(axum::body::Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(copy_response.status(), StatusCode::BAD_REQUEST);
+        let copy_xml = response_text(copy_response).await;
+        assert!(copy_xml.contains("<Code>InvalidRequest</Code>"));
+        assert!(copy_xml.contains("x-amz-metadata-directive must be COPY or REPLACE"));
+    }
+
+    #[tokio::test]
+    async fn test_s3_like_copy_object_rejects_copy_source_range_header() {
+        let (state, _dir) = test_support::make_test_state().await;
+        let user = register_user(state.clone(), "copy-object-range@example.com").await;
+
+        let app = axum::Router::new()
+            .route(
+                "/api/s3/:bucket/*key",
+                axum::routing::put(put_bucket_object)
+                    .get(get_bucket_object)
+                    .head(head_bucket_object),
+            )
+            .layer(axum::middleware::from_fn_with_state(
+                state.clone(),
+                crate::middleware::s3_auth::s3_auth_middleware,
+            ))
+            .with_state(state.clone());
+
+        let put_source_signed = crate::middleware::s3_auth::build_signed_header_auth(
+            "PUT",
+            "https://example.com/api/s3/assets/source-range-object.txt",
+            &user.user.id,
+            state.jwt_secret.as_str(),
+            None,
+        )
+        .unwrap();
+        let put_source_response = tower::ServiceExt::oneshot(
+            app.clone(),
+            axum::http::Request::builder()
+                .method("PUT")
+                .uri("/api/s3/assets/source-range-object.txt")
+                .header("host", "example.com")
+                .header("authorization", put_source_signed.authorization)
+                .header("x-amz-date", put_source_signed.amz_date)
+                .header("x-amz-content-sha256", put_source_signed.payload_hash)
+                .body(axum::body::Body::from("copy range source"))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(put_source_response.status(), StatusCode::OK);
+
+        let copy_signed = crate::middleware::s3_auth::build_signed_header_auth(
+            "PUT",
+            "https://example.com/api/s3/assets/range-target.txt",
+            &user.user.id,
+            state.jwt_secret.as_str(),
+            None,
+        )
+        .unwrap();
+        let copy_response = tower::ServiceExt::oneshot(
+            app,
+            axum::http::Request::builder()
+                .method("PUT")
+                .uri("/api/s3/assets/range-target.txt")
+                .header("host", "example.com")
+                .header("authorization", copy_signed.authorization)
+                .header("x-amz-date", copy_signed.amz_date)
+                .header("x-amz-content-sha256", copy_signed.payload_hash)
+                .header("x-amz-copy-source", "/assets/source-range-object.txt")
+                .header("x-amz-copy-source-range", "bytes=0-3")
+                .body(axum::body::Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(copy_response.status(), StatusCode::BAD_REQUEST);
+        let copy_xml = response_text(copy_response).await;
+        assert!(copy_xml.contains("<Code>InvalidRequest</Code>"));
+        assert!(copy_xml.contains("x-amz-copy-source-range is only supported for CopyPart"));
     }
 
     #[tokio::test]

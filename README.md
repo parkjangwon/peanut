@@ -96,6 +96,7 @@ What this means for external frontend apps:
   - `PUT /api/s3/:bucket/*key` with `x-amz-copy-source: /src-bucket/src-key` to CopyObject into a new key
   - `x-amz-metadata-directive: COPY|REPLACE` is supported for CopyObject metadata behavior
   - copying an object onto itself now requires `x-amz-metadata-directive: REPLACE`
+  - `x-amz-copy-source-range` is rejected for CopyObject and only supported for CopyPart
   - `PUT /api/s3/:bucket/*key?partNumber=N&uploadId=...` to upload parts
   - non-final multipart parts must be at least 5 MiB, matching the usual S3 minimum part-size rule
   - `PUT /api/s3/:bucket/*key?partNumber=N&uploadId=...` with `x-amz-copy-source: /src-bucket/src-key` to CopyPart from an existing object
