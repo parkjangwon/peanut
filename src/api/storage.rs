@@ -254,9 +254,35 @@ pub async fn head_bucket_object(
     State(state): State<crate::AppState>,
     Extension(claims): Extension<Claims>,
     Path((bucket, key)): Path<(String, String)>,
+    RawQuery(raw_query): RawQuery,
     headers: HeaderMap,
 ) -> Response {
     let scoped_bucket = scoped_bucket(&claims.sub, &bucket);
+    let multipart_query = match parse_multipart_query(raw_query.as_deref()) {
+        Ok(query) => query,
+        Err(message) => {
+            return s3_error_response(
+                StatusCode::BAD_REQUEST,
+                "InvalidRequest",
+                &message,
+                &format!("/{bucket}/{key}"),
+                Some(&key),
+            )
+        }
+    };
+    if is_tagging_subresource(raw_query.as_deref())
+        || multipart_query.uploads
+        || multipart_query.upload_id.is_some()
+        || multipart_query.part_number.is_some()
+    {
+        return s3_error_response(
+            StatusCode::BAD_REQUEST,
+            "InvalidRequest",
+            "HEAD does not support tagging or multipart subresources",
+            &format!("/{bucket}/{key}"),
+            Some(&key),
+        );
+    }
     match state.storage.head_object(&scoped_bucket, &key).await {
         Ok(metadata) => {
             if let Some(response) = evaluate_read_preconditions(&headers, &metadata) {
@@ -2333,6 +2359,7 @@ mod tests {
             State(state.clone()),
             Extension(claims.clone()),
             axum::extract::Path(("assets".to_string(), "avatars/me.txt".to_string())),
+            RawQuery(None),
             HeaderMap::new(),
         )
         .await;
@@ -2506,6 +2533,8 @@ mod tests {
             method: "GET".to_string(),
             expires_in: Some(300),
             subresource: None,
+            upload_id: None,
+            part_number: None,
         };
         let generated = build_presigned_url(
             "https://example.com",
@@ -2543,6 +2572,8 @@ mod tests {
             method: "GET".to_string(),
             expires_in: Some(300),
             subresource: None,
+            upload_id: None,
+            part_number: None,
         };
         let generated = build_presigned_url(
             "https://example.com",
@@ -2579,6 +2610,63 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_presigned_head_round_trip_uses_sigv4_query_auth() {
+        let (state, _dir) = test_support::make_test_state().await;
+        let user = register_user(state.clone(), "presign-head@example.com").await;
+        let claims = claims_for(&user.user.id);
+
+        let put_response = put_bucket_object(
+            State(state.clone()),
+            Extension(claims),
+            axum::extract::Path(("assets".to_string(), "notes/presigned-head.txt".to_string())),
+            RawQuery(None),
+            HeaderMap::new(),
+            Bytes::from("hello presigned head"),
+        )
+        .await;
+        assert_eq!(put_response.status(), StatusCode::OK);
+
+        let request = crate::middleware::s3_auth::PresignRequest {
+            method: "HEAD".to_string(),
+            expires_in: Some(300),
+            subresource: None,
+            upload_id: None,
+            part_number: None,
+        };
+        let generated = build_presigned_url(
+            "https://example.com",
+            &user.user.id,
+            "assets",
+            "notes/presigned-head.txt",
+            &request,
+            state.jwt_secret.as_str(),
+        )
+        .unwrap();
+
+        let app = axum::Router::new()
+            .route("/api/s3/:bucket/*key", axum::routing::head(head_bucket_object))
+            .layer(axum::middleware::from_fn_with_state(
+                state.clone(),
+                crate::middleware::s3_auth::s3_auth_middleware,
+            ))
+            .with_state(state);
+
+        let response = tower::ServiceExt::oneshot(
+            app,
+            axum::http::Request::builder()
+                .method("HEAD")
+                .uri(generated.url.replace("https://example.com", ""))
+                .header("host", "example.com")
+                .body(axum::body::Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(response.headers().get(header::CONTENT_LENGTH).unwrap(), "20");
+    }
+
+    #[tokio::test]
     async fn test_create_presigned_url_returns_json_payload() {
         let (state, _dir) = test_support::make_test_state().await;
         let user = register_user(state.clone(), "presign-json@example.com").await;
@@ -2593,6 +2681,8 @@ mod tests {
                 method: "GET".to_string(),
                 expires_in: Some(300),
                 subresource: None,
+                upload_id: None,
+                part_number: None,
             }),
         )
         .await;
@@ -2609,6 +2699,8 @@ mod tests {
             method: "PUT".to_string(),
             expires_in: Some(300),
             subresource: Some("tagging".to_string()),
+            upload_id: None,
+            part_number: None,
         };
         let generated = build_presigned_url(
             "https://example.com",
@@ -2639,12 +2731,39 @@ mod tests {
                 method: "GET".to_string(),
                 expires_in: Some(300),
                 subresource: Some("acl".to_string()),
+                upload_id: None,
+                part_number: None,
             }),
         )
         .await;
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
         let body = response_text(response).await;
-        assert!(body.contains("subresource must be tagging when provided"));
+        assert!(body.contains("subresource must be tagging or uploads when provided"));
+    }
+
+    #[tokio::test]
+    async fn test_create_presigned_url_rejects_part_number_without_upload_id() {
+        let (state, _dir) = test_support::make_test_state().await;
+        let user = register_user(state.clone(), "presign-part-number-bad@example.com").await;
+        let claims = claims_for(&user.user.id);
+
+        let response = create_presigned_url(
+            Extension(claims),
+            axum::extract::Path(("assets".to_string(), "notes/file.txt".to_string())),
+            HeaderMap::new(),
+            State(state),
+            Json(crate::middleware::s3_auth::PresignRequest {
+                method: "PUT".to_string(),
+                expires_in: Some(300),
+                subresource: None,
+                upload_id: None,
+                part_number: Some(1),
+            }),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        let body = response_text(response).await;
+        assert!(body.contains("part_number requires upload_id"));
     }
 
     #[tokio::test]
@@ -2668,6 +2787,8 @@ mod tests {
             method: "PUT".to_string(),
             expires_in: Some(300),
             subresource: Some("tagging".to_string()),
+            upload_id: None,
+            part_number: None,
         };
         let put_generated = build_presigned_url(
             "https://example.com",
@@ -2709,6 +2830,8 @@ mod tests {
             method: "GET".to_string(),
             expires_in: Some(300),
             subresource: Some("tagging".to_string()),
+            upload_id: None,
+            part_number: None,
         };
         let get_generated = build_presigned_url(
             "https://example.com",
@@ -2780,6 +2903,8 @@ mod tests {
             method: "DELETE".to_string(),
             expires_in: Some(300),
             subresource: Some("tagging".to_string()),
+            upload_id: None,
+            part_number: None,
         };
         let delete_generated = build_presigned_url(
             "https://example.com",
@@ -2808,6 +2933,8 @@ mod tests {
             method: "GET".to_string(),
             expires_in: Some(300),
             subresource: Some("tagging".to_string()),
+            upload_id: None,
+            part_number: None,
         };
         let get_generated = build_presigned_url(
             "https://example.com",
@@ -2835,6 +2962,178 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_presigned_multipart_round_trip_uses_sigv4_query_auth() {
+        let (state, _dir) = test_support::make_test_state().await;
+        let user = register_user(state.clone(), "presign-multipart@example.com").await;
+
+        let app = axum::Router::new()
+            .route(
+                "/api/s3/:bucket/*key",
+                axum::routing::post(post_bucket_object)
+                    .put(put_bucket_object)
+                    .get(get_bucket_object)
+                    .delete(delete_bucket_object),
+            )
+            .layer(axum::middleware::from_fn_with_state(
+                state.clone(),
+                crate::middleware::s3_auth::s3_auth_middleware,
+            ))
+            .with_state(state.clone());
+
+        let create_request = crate::middleware::s3_auth::PresignRequest {
+            method: "POST".to_string(),
+            expires_in: Some(300),
+            subresource: Some("uploads".to_string()),
+            upload_id: None,
+            part_number: None,
+        };
+        let create_generated = build_presigned_url(
+            "https://example.com",
+            &user.user.id,
+            "assets",
+            "videos/presigned-multipart.txt",
+            &create_request,
+            state.jwt_secret.as_str(),
+        )
+        .unwrap();
+        let create_response = tower::ServiceExt::oneshot(
+            app.clone(),
+            axum::http::Request::builder()
+                .method("POST")
+                .uri(create_generated.url.replace("https://example.com", ""))
+                .header("host", "example.com")
+                .body(axum::body::Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(create_response.status(), StatusCode::OK);
+        let upload_id = xml_tag_value(&response_text(create_response).await, "UploadId").unwrap();
+
+        let upload_part_request = crate::middleware::s3_auth::PresignRequest {
+            method: "PUT".to_string(),
+            expires_in: Some(300),
+            subresource: None,
+            upload_id: Some(upload_id.clone()),
+            part_number: Some(1),
+        };
+        let upload_part_generated = build_presigned_url(
+            "https://example.com",
+            &user.user.id,
+            "assets",
+            "videos/presigned-multipart.txt",
+            &upload_part_request,
+            state.jwt_secret.as_str(),
+        )
+        .unwrap();
+        let upload_part_response = tower::ServiceExt::oneshot(
+            app.clone(),
+            axum::http::Request::builder()
+                .method("PUT")
+                .uri(upload_part_generated.url.replace("https://example.com", ""))
+                .header("host", "example.com")
+                .body(axum::body::Body::from("one-part"))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(upload_part_response.status(), StatusCode::OK);
+        let part_etag = upload_part_response.headers().get(header::ETAG).unwrap().to_str().unwrap().to_string();
+
+        let list_parts_request = crate::middleware::s3_auth::PresignRequest {
+            method: "GET".to_string(),
+            expires_in: Some(300),
+            subresource: None,
+            upload_id: Some(upload_id.clone()),
+            part_number: None,
+        };
+        let list_parts_generated = build_presigned_url(
+            "https://example.com",
+            &user.user.id,
+            "assets",
+            "videos/presigned-multipart.txt",
+            &list_parts_request,
+            state.jwt_secret.as_str(),
+        )
+        .unwrap();
+        let list_parts_response = tower::ServiceExt::oneshot(
+            app.clone(),
+            axum::http::Request::builder()
+                .uri(list_parts_generated.url.replace("https://example.com", ""))
+                .header("host", "example.com")
+                .body(axum::body::Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(list_parts_response.status(), StatusCode::OK);
+        let list_parts_xml = response_text(list_parts_response).await;
+        assert!(list_parts_xml.contains("<ListPartsResult"));
+        assert!(list_parts_xml.contains("<PartNumber>1</PartNumber>"));
+
+        let complete_body = format!(
+            "<CompleteMultipartUpload><Part><PartNumber>1</PartNumber><ETag>{part_etag}</ETag></Part></CompleteMultipartUpload>"
+        );
+        let complete_request = crate::middleware::s3_auth::PresignRequest {
+            method: "POST".to_string(),
+            expires_in: Some(300),
+            subresource: None,
+            upload_id: Some(upload_id.clone()),
+            part_number: None,
+        };
+        let complete_generated = build_presigned_url(
+            "https://example.com",
+            &user.user.id,
+            "assets",
+            "videos/presigned-multipart.txt",
+            &complete_request,
+            state.jwt_secret.as_str(),
+        )
+        .unwrap();
+        let complete_response = tower::ServiceExt::oneshot(
+            app.clone(),
+            axum::http::Request::builder()
+                .method("POST")
+                .uri(complete_generated.url.replace("https://example.com", ""))
+                .header("host", "example.com")
+                .body(axum::body::Body::from(complete_body))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(complete_response.status(), StatusCode::OK);
+
+        let get_request = crate::middleware::s3_auth::PresignRequest {
+            method: "GET".to_string(),
+            expires_in: Some(300),
+            subresource: None,
+            upload_id: None,
+            part_number: None,
+        };
+        let get_generated = build_presigned_url(
+            "https://example.com",
+            &user.user.id,
+            "assets",
+            "videos/presigned-multipart.txt",
+            &get_request,
+            state.jwt_secret.as_str(),
+        )
+        .unwrap();
+        let get_response = tower::ServiceExt::oneshot(
+            app,
+            axum::http::Request::builder()
+                .uri(get_generated.url.replace("https://example.com", ""))
+                .header("host", "example.com")
+                .body(axum::body::Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(get_response.status(), StatusCode::OK);
+        assert_eq!(response_text(get_response).await, "one-part");
+    }
+
+    #[tokio::test]
     async fn test_presigned_put_round_trip_uses_sigv4_query_auth() {
         let (state, _dir) = test_support::make_test_state().await;
         let user = register_user(state.clone(), "presign-put@example.com").await;
@@ -2843,6 +3142,8 @@ mod tests {
             method: "PUT".to_string(),
             expires_in: Some(300),
             subresource: None,
+            upload_id: None,
+            part_number: None,
         };
         let generated = build_presigned_url(
             "https://example.com",
@@ -4232,6 +4533,7 @@ mod tests {
             State(state.clone()),
             Extension(claims.clone()),
             axum::extract::Path(("assets".to_string(), "headers/demo.txt".to_string())),
+            RawQuery(None),
             HeaderMap::new(),
         )
         .await;
@@ -4906,6 +5208,7 @@ mod tests {
             State(state.clone()),
             Extension(claims.clone()),
             axum::extract::Path(("assets".to_string(), "meta/checksum.txt".to_string())),
+            RawQuery(None),
             HeaderMap::new(),
         )
         .await;
@@ -5224,6 +5527,7 @@ mod tests {
             State(state.clone()),
             Extension(claims.clone()),
             axum::extract::Path(("assets".to_string(), "meta/sha1.txt".to_string())),
+            RawQuery(None),
             HeaderMap::new(),
         )
         .await;

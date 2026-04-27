@@ -14,6 +14,10 @@ pub struct PresignRequest {
     pub expires_in: Option<u32>,
     #[serde(default)]
     pub subresource: Option<String>,
+    #[serde(default)]
+    pub upload_id: Option<String>,
+    #[serde(default)]
+    pub part_number: Option<u32>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -100,7 +104,7 @@ pub fn build_presigned_url(
             "expires_in must be between 1 and {MAX_PRESIGN_EXPIRES} seconds"
         ));
     }
-    let subresource = normalize_presign_subresource(request.subresource.as_deref())?;
+    let query_params = build_presign_query_params(request, &method)?;
 
     let base_url = base_url.trim_end_matches('/');
     if base_url.is_empty() {
@@ -119,10 +123,7 @@ pub fn build_presigned_url(
     let credential_scope = format!("{short_date}/{REGION}/{SERVICE}/{TERMINATOR}");
     let credential = format!("{access_key}/{credential_scope}");
 
-    let mut params = Vec::new();
-    if let Some(subresource) = subresource {
-        params.push((subresource.to_string(), String::new()));
-    }
+    let mut params = query_params;
     params.extend(vec![
         ("X-Amz-Algorithm".to_string(), SUPPORTED_ALGORITHM.to_string()),
         ("X-Amz-Credential".to_string(), credential),
@@ -412,7 +413,73 @@ fn normalize_presign_subresource(value: Option<&str>) -> Result<Option<&'static 
     match value.map(str::trim).filter(|value| !value.is_empty()) {
         None => Ok(None),
         Some(value) if value.eq_ignore_ascii_case("tagging") => Ok(Some("tagging")),
-        Some(_) => Err("subresource must be tagging when provided".to_string()),
+        Some(value) if value.eq_ignore_ascii_case("uploads") => Ok(Some("uploads")),
+        Some(_) => Err("subresource must be tagging or uploads when provided".to_string()),
+    }
+}
+
+fn build_presign_query_params(
+    request: &PresignRequest,
+    method: &str,
+) -> Result<Vec<(String, String)>, String> {
+    let subresource = normalize_presign_subresource(request.subresource.as_deref())?;
+    let upload_id = request
+        .upload_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    let part_number = request.part_number;
+
+    if part_number.is_some() && upload_id.is_none() {
+        return Err("part_number requires upload_id".to_string());
+    }
+
+    match subresource {
+        Some("tagging") => {
+            if upload_id.is_some() || part_number.is_some() {
+                return Err("tagging subresource cannot be combined with upload_id or part_number".to_string());
+            }
+            if !matches!(method, "GET" | "PUT" | "DELETE") {
+                return Err("tagging subresource supports only GET, PUT, or DELETE".to_string());
+            }
+            Ok(vec![("tagging".to_string(), String::new())])
+        }
+        Some("uploads") => {
+            if upload_id.is_some() || part_number.is_some() {
+                return Err("uploads subresource cannot be combined with upload_id or part_number".to_string());
+            }
+            if method != "POST" {
+                return Err("uploads subresource supports only POST".to_string());
+            }
+            Ok(vec![("uploads".to_string(), String::new())])
+        }
+        None => {
+            if let Some(upload_id) = upload_id {
+                match method {
+                    "PUT" => {
+                        let Some(part_number) = part_number else {
+                            return Err("multipart part presign requires part_number".to_string());
+                        };
+                        Ok(vec![
+                            ("partNumber".to_string(), part_number.to_string()),
+                            ("uploadId".to_string(), upload_id.to_string()),
+                        ])
+                    }
+                    "GET" | "POST" | "DELETE" => {
+                        if part_number.is_some() {
+                            return Err("part_number is only supported for PUT multipart part presign".to_string());
+                        }
+                        Ok(vec![("uploadId".to_string(), upload_id.to_string())])
+                    }
+                    _ => Err("multipart presign supports GET, POST, PUT, or DELETE".to_string()),
+                }
+            } else if part_number.is_some() {
+                Err("part_number requires upload_id".to_string())
+            } else {
+                Ok(Vec::new())
+            }
+        }
+        Some(_) => unreachable!(),
     }
 }
 

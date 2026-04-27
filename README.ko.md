@@ -91,7 +91,13 @@ Peanut은 아래 원칙을 지향한다.
 - `/api/s3/:bucket/*key` 아래에 S3-like path-style endpoint를 추가했다
 - 인증된 클라이언트는 `POST /api/s3/:bucket/*key/presign` 으로 presigned S3-like URL을 만들 수 있다
 - presign helper는 이제 `PUT/GET/DELETE ...?tagging` 같은 object tagging subresource URL도 만들 수 있다
-- presign helper에 `subresource`를 줄 때는 현재 `tagging`만 허용한다
+- presign helper는 이제 아래 multipart 호환 query 계약도 최소 범위로 지원한다:
+  - `POST ...?uploads`
+  - `PUT ...?partNumber=N&uploadId=...`
+  - `GET ...?uploadId=...`
+  - `POST ...?uploadId=...`
+  - `DELETE ...?uploadId=...`
+- presign helper에 `subresource`를 줄 때는 현재 `tagging`과 `uploads`만 허용한다
 - S3-like object route는 bearer auth, SigV4-style `Authorization` header auth, 또는 presigned URL용 SigV4-style query auth를 받을 수 있다
 - S3-like multipart upload는 이제 더 강한 S3 호환 계약을 지원한다:
   - `POST /api/s3/:bucket/*key?uploads` 로 `UploadId`를 발급받는다
@@ -114,9 +120,13 @@ Peanut은 아래 원칙을 지향한다.
 - S3-like GET은 이제 단일 `Range: bytes=...` 요청을 지원하고 `206 Partial Content` + `Content-Range`로 응답한다
 - S3-like range 처리는 open-ended(`bytes=start-`)와 suffix(`bytes=-N`) 요청도 다루며, invalid/multi-range 요청은 `416 InvalidRange`로 거부한다
 - S3-like GET과 HEAD는 이제 `If-Match`, `If-None-Match`, `If-Modified-Since`, `If-Unmodified-Since` 같은 기본 conditional request header를 처리한다
+- `HEAD /api/s3/:bucket/*key` 는 object metadata 전용 경로로 유지되며, tagging/multipart subresource 스타일 query는 명시적으로 거부한다
 - ETag validator가 있는 경우 date validator는 일반적인 HTTP precondition 우선순위에 따라 무시된다 (`If-Match` > `If-Unmodified-Since`, `If-None-Match` > `If-Modified-Since`)
 - `Cache-Control`, `Content-Disposition`, `Content-Encoding`, `Content-Language`, `Expires` 같은 object response header는 PUT 시 저장되고 이후 PUT/GET/HEAD 응답에 다시 반영된다
 - `x-amz-metadata-directive: REPLACE` 를 사용하는 CopyObject는 source object의 표준 response header를 기본 유지하면서, 명시적으로 전달한 값만 치환한다
+- CopyObject는 이제 tagging/checksum 상호작용 계약을 문서화하고 현재 구현과 맞춘다:
+  - 기본 `COPY` 는 저장된 tagging과 checksum header를 유지한다
+  - `REPLACE` 는 tagging을 덮어쓸 수 있지만 source checksum 계약은 유지한다
 - CopyObject에서는 `x-amz-copy-source-if-*` 조건부 헤더를 아직 지원하지 않으며, 전달 시 `InvalidRequest`로 거부한다
 - PUT 시 `x-amz-checksum-sha256` 를 보내면 payload와 일치하는지 검증하고, 저장된 object 응답(이후 PUT/GET/HEAD)에도 다시 내려준다
 - PUT 시 `x-amz-checksum-sha1` 도 같은 최소 계약으로 지원한다

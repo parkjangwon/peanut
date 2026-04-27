@@ -90,7 +90,13 @@ What this means for external frontend apps:
 - S3-like path-style endpoints are now also available under `/api/s3/:bucket/*key`
 - authenticated clients can now mint presigned S3-like URLs through `POST /api/s3/:bucket/*key/presign`
 - the presign helper now also supports object tagging subresource URLs for flows like `PUT/GET/DELETE ...?tagging`
-- when `subresource` is provided to the presign helper, Peanut currently accepts only `tagging`
+- the presign helper now also supports a minimal multipart-compatible query contract:
+  - `POST ...?uploads`
+  - `PUT ...?partNumber=N&uploadId=...`
+  - `GET ...?uploadId=...`
+  - `POST ...?uploadId=...`
+  - `DELETE ...?uploadId=...`
+- when `subresource` is provided to the presign helper, Peanut currently accepts only `tagging` and `uploads`
 - S3-like object routes now accept either bearer auth, SigV4-style `Authorization` header auth, or SigV4-style query auth from presigned URLs
 - S3-like multipart upload now supports a stronger S3-compatible contract:
   - `POST /api/s3/:bucket/*key?uploads` to initiate and receive an `UploadId`
@@ -113,9 +119,13 @@ What this means for external frontend apps:
 - S3-like GET now supports single `Range: bytes=...` requests and returns `206 Partial Content` with `Content-Range`
 - S3-like range handling now also covers open-ended (`bytes=start-`) and suffix (`bytes=-N`) requests, while invalid and multi-range requests return `416 InvalidRange`
 - S3-like GET and HEAD now honor basic conditional request headers: `If-Match`, `If-None-Match`, `If-Modified-Since`, `If-Unmodified-Since`
+- `HEAD /api/s3/:bucket/*key` remains an object-metadata route only; tagging or multipart subresource-style queries are rejected explicitly
 - when ETag validators are present, date validators are ignored in the usual HTTP precondition order (`If-Match` over `If-Unmodified-Since`, `If-None-Match` over `If-Modified-Since`)
 - object response headers `Cache-Control`, `Content-Disposition`, `Content-Encoding`, `Content-Language`, and `Expires` are now persisted on PUT and replayed on subsequent PUT/GET/HEAD responses
 - CopyObject with `x-amz-metadata-directive: REPLACE` now preserves unspecified standard response headers from the source object while applying any explicitly provided replacements
+- CopyObject tagging/checksum interactions are now documented and aligned with the current contract:
+  - default `COPY` preserves stored tagging and checksum headers
+  - `REPLACE` can override tagging while still preserving the source checksum contract
 - CopyObject does not yet support `x-amz-copy-source-if-*` conditional headers; Peanut now rejects them explicitly with `InvalidRequest`
 - when `x-amz-checksum-sha256` is sent on PUT, Peanut validates it against the payload and replays it on subsequent object responses (PUT/GET/HEAD)
 - Peanut now also accepts `x-amz-checksum-sha1` on PUT under the same minimal contract
