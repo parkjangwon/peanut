@@ -91,6 +91,8 @@ pub struct PushQueueSummary {
     pub sent: i64,
     pub failed: i64,
     pub partial_success: i64,
+    pub ntfy_subscriptions: i64,
+    pub web_push_subscriptions: i64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -157,6 +159,8 @@ struct PushQueueSummaryRow {
     sent: i64,
     failed: i64,
     partial_success: i64,
+    ntfy_subscriptions: i64,
+    web_push_subscriptions: i64,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -430,7 +434,9 @@ pub async fn list_queue(
                 COALESCE(SUM(CASE WHEN status = 'processing' THEN 1 ELSE 0 END), 0) AS processing,
                 COALESCE(SUM(CASE WHEN status = 'sent' THEN 1 ELSE 0 END), 0) AS sent,
                 COALESCE(SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END), 0) AS failed,
-                COALESCE(SUM(CASE WHEN status = 'sent' AND partial_failure_count > 0 THEN 1 ELSE 0 END), 0) AS partial_success
+                COALESCE(SUM(CASE WHEN status = 'sent' AND partial_failure_count > 0 THEN 1 ELSE 0 END), 0) AS partial_success,
+                (SELECT COUNT(*) FROM push_subscriptions WHERE p256dh = '' AND auth = '') AS ntfy_subscriptions,
+                (SELECT COUNT(*) FROM push_subscriptions WHERE NOT (p256dh = '' AND auth = '')) AS web_push_subscriptions
             FROM push_queue
             "#,
         )
@@ -445,11 +451,15 @@ pub async fn list_queue(
                 COALESCE(SUM(CASE WHEN status = 'processing' THEN 1 ELSE 0 END), 0) AS processing,
                 COALESCE(SUM(CASE WHEN status = 'sent' THEN 1 ELSE 0 END), 0) AS sent,
                 COALESCE(SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END), 0) AS failed,
-                COALESCE(SUM(CASE WHEN status = 'sent' AND partial_failure_count > 0 THEN 1 ELSE 0 END), 0) AS partial_success
+                COALESCE(SUM(CASE WHEN status = 'sent' AND partial_failure_count > 0 THEN 1 ELSE 0 END), 0) AS partial_success,
+                (SELECT COUNT(*) FROM push_subscriptions WHERE user_id = ? AND p256dh = '' AND auth = '') AS ntfy_subscriptions,
+                (SELECT COUNT(*) FROM push_subscriptions WHERE user_id = ? AND NOT (p256dh = '' AND auth = '')) AS web_push_subscriptions
             FROM push_queue
             WHERE user_id = ?
             "#,
         )
+        .bind(&claims.sub)
+        .bind(&claims.sub)
         .bind(&claims.sub)
         .fetch_one(&state.pool)
         .await
@@ -467,6 +477,8 @@ pub async fn list_queue(
                     sent: summary.sent,
                     failed: summary.failed,
                     partial_success: summary.partial_success,
+                    ntfy_subscriptions: summary.ntfy_subscriptions,
+                    web_push_subscriptions: summary.web_push_subscriptions,
                 },
             }),
         )
@@ -620,6 +632,51 @@ mod tests {
         assert_eq!(queue_body.summary.sent, 0);
         assert_eq!(queue_body.summary.failed, 0);
         assert_eq!(queue_body.summary.partial_success, 0);
+        assert_eq!(queue_body.summary.ntfy_subscriptions, 1);
+        assert_eq!(queue_body.summary.web_push_subscriptions, 0);
+    }
+
+    #[tokio::test]
+    async fn test_queue_summary_counts_delivery_kinds() {
+        let (state, _dir) = test_support::make_test_state().await;
+        let admin = auth::register(
+            State(state.clone()),
+            Json(auth::RegisterRequest {
+                email: "admin@example.com".to_string(),
+                password: "secret123".to_string(),
+            }),
+        )
+        .await;
+        let admin: auth::RegisterResponse = test_support::response_json(admin).await;
+
+        let _ = create_subscription(
+            State(state.clone()),
+            Extension(claims(&admin.user.id, true)),
+            Json(CreateSubscriptionRequest::Ntfy {
+                topic: "alerts_main".to_string(),
+            }),
+        )
+        .await;
+
+        let _ = create_subscription(
+            State(state.clone()),
+            Extension(claims(&admin.user.id, true)),
+            Json(CreateSubscriptionRequest::WebPush {
+                endpoint: "https://example.invalid/mock-web-push".to_string(),
+                keys: WebPushSubscriptionKeysRequest {
+                    p256dh: "BH1HTeKM7-NwaLGHEqxeu2IamQaVVLkcsFHPIHmsCnqxcBHPQBprF41bEMOr3O1hUQ2jU1opNEm1F_lZV_sxMP8"
+                        .to_string(),
+                    auth: "sBXU5_tIYz-5w7G2B25BEw".to_string(),
+                },
+            }),
+        )
+        .await;
+
+        let queue_response =
+            list_queue(State(state), Extension(claims(&admin.user.id, true))).await;
+        let queue_body: PushQueueResponse = test_support::response_json(queue_response).await;
+        assert_eq!(queue_body.summary.ntfy_subscriptions, 1);
+        assert_eq!(queue_body.summary.web_push_subscriptions, 1);
     }
 
     #[tokio::test]

@@ -249,6 +249,7 @@ Peanut은 현재 실용적인 hybrid push 레이어를 제공한다.
 - queue 상태, retry 횟수, 마지막 에러를 API/콘솔에서 볼 수 있다
 - 404/410 성격의 terminal Web Push 에러를 돌려주는 죽은 subscription은 subscription 테이블에서 자동 정리된다
 - partial delivery 메타데이터도 구조화되어서, queue item은 이제 `last_error`와 함께 `partial_failure_count`, `failed_destinations[]`를 노출한다
+- queue summary는 현재 `ntfy_subscriptions`, `web_push_subscriptions` 수도 함께 노출해서 delivery kind별 운영 가시성을 높인다
 - queue item이 `sent`로 끝나더라도 partial delivery failure는 `last_error`에 남겨서, 성공 전달은 유지하면서도 죽은 destination을 운영에서 바로 찾을 수 있다
 
 아직 아닌 것:
