@@ -312,6 +312,9 @@ pub async fn get_bucket_object(
 
     match state.storage.get_object(&scoped_bucket, &key).await {
         Ok(object) => {
+            if let Some(response) = evaluate_get_preconditions(&headers, &object.metadata) {
+                return response;
+            }
             let range = match parse_range_header(
                 headers
                     .get(header::RANGE)
@@ -1582,6 +1585,68 @@ fn parse_range_header(value: Option<&str>, len: usize) -> Result<Option<(usize, 
     };
 
     Ok(Some((start, end)))
+}
+
+fn etag_matches(value: &str, etag: &str) -> bool {
+    value
+        .split(',')
+        .map(str::trim)
+        .any(|candidate| candidate == "*" || candidate.trim_matches('"') == etag)
+}
+
+fn parse_http_date(value: Option<&axum::http::HeaderValue>) -> Option<chrono::DateTime<chrono::Utc>> {
+    value
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| chrono::DateTime::parse_from_rfc2822(value).ok())
+        .map(|value| value.with_timezone(&chrono::Utc))
+}
+
+fn build_conditional_response(
+    status: StatusCode,
+    metadata: &crate::storage::local::StorageObjectMetadata,
+) -> Response {
+    let mut response = apply_s3_response_headers(Response::builder().status(status));
+    response = response.header(header::ETAG, format!("\"{}\"", metadata.etag));
+    response = response.header(
+        header::LAST_MODIFIED,
+        format_last_modified_header(metadata.updated_at.as_str()),
+    );
+    response.body(axum::body::Body::empty()).unwrap()
+}
+
+fn evaluate_get_preconditions(
+    headers: &HeaderMap,
+    metadata: &crate::storage::local::StorageObjectMetadata,
+) -> Option<Response> {
+    let updated_at = chrono::DateTime::parse_from_rfc3339(metadata.updated_at.as_str())
+        .ok()?
+        .with_timezone(&chrono::Utc);
+
+    if let Some(value) = headers.get(header::IF_MATCH).and_then(|value| value.to_str().ok()) {
+        if !etag_matches(value, metadata.etag.as_str()) {
+            return Some(build_conditional_response(StatusCode::PRECONDITION_FAILED, metadata));
+        }
+    }
+
+    if let Some(value) = parse_http_date(headers.get(header::IF_UNMODIFIED_SINCE)) {
+        if updated_at.timestamp() > value.timestamp() {
+            return Some(build_conditional_response(StatusCode::PRECONDITION_FAILED, metadata));
+        }
+    }
+
+    if let Some(value) = headers.get(header::IF_NONE_MATCH).and_then(|value| value.to_str().ok()) {
+        if etag_matches(value, metadata.etag.as_str()) {
+            return Some(build_conditional_response(StatusCode::NOT_MODIFIED, metadata));
+        }
+    }
+
+    if let Some(value) = parse_http_date(headers.get(header::IF_MODIFIED_SINCE)) {
+        if updated_at.timestamp() <= value.timestamp() {
+            return Some(build_conditional_response(StatusCode::NOT_MODIFIED, metadata));
+        }
+    }
+
+    None
 }
 
 fn xml_escape(value: &str) -> String {
@@ -2889,6 +2954,219 @@ mod tests {
         assert_eq!(get_response.headers().get(header::CONTENT_RANGE).unwrap(), "bytes 6-10/17");
         assert_eq!(get_response.headers().get(header::CONTENT_LENGTH).unwrap(), "5");
         assert_eq!(response_text(get_response).await, "range");
+    }
+
+    #[tokio::test]
+    async fn test_s3_like_get_object_rejects_invalid_range_requests() {
+        let (state, _dir) = test_support::make_test_state().await;
+        let user = register_user(state.clone(), "range-invalid@example.com").await;
+
+        let app = axum::Router::new()
+            .route(
+                "/api/s3/:bucket/*key",
+                axum::routing::put(put_bucket_object).get(get_bucket_object),
+            )
+            .layer(axum::middleware::from_fn_with_state(
+                state.clone(),
+                crate::middleware::s3_auth::s3_auth_middleware,
+            ))
+            .with_state(state.clone());
+
+        let put_signed = crate::middleware::s3_auth::build_signed_header_auth(
+            "PUT",
+            "https://example.com/api/s3/assets/range-invalid.txt",
+            &user.user.id,
+            state.jwt_secret.as_str(),
+            None,
+        )
+        .unwrap();
+        let put_response = tower::ServiceExt::oneshot(
+            app.clone(),
+            axum::http::Request::builder()
+                .method("PUT")
+                .uri("/api/s3/assets/range-invalid.txt")
+                .header("host", "example.com")
+                .header("authorization", put_signed.authorization)
+                .header("x-amz-date", put_signed.amz_date)
+                .header("x-amz-content-sha256", put_signed.payload_hash)
+                .body(axum::body::Body::from("hello"))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(put_response.status(), StatusCode::OK);
+
+        let get_signed = crate::middleware::s3_auth::build_signed_header_auth(
+            "GET",
+            "https://example.com/api/s3/assets/range-invalid.txt",
+            &user.user.id,
+            state.jwt_secret.as_str(),
+            None,
+        )
+        .unwrap();
+        let invalid_response = tower::ServiceExt::oneshot(
+            app.clone(),
+            axum::http::Request::builder()
+                .uri("/api/s3/assets/range-invalid.txt")
+                .header("host", "example.com")
+                .header("authorization", get_signed.authorization.clone())
+                .header("x-amz-date", get_signed.amz_date.clone())
+                .header("x-amz-content-sha256", get_signed.payload_hash.clone())
+                .header(header::RANGE, "bytes=999-1000")
+                .body(axum::body::Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(invalid_response.status(), StatusCode::RANGE_NOT_SATISFIABLE);
+        let invalid_xml = response_text(invalid_response).await;
+        assert!(invalid_xml.contains("<Code>InvalidRange</Code>"));
+
+        let multi_response = tower::ServiceExt::oneshot(
+            app,
+            axum::http::Request::builder()
+                .uri("/api/s3/assets/range-invalid.txt")
+                .header("host", "example.com")
+                .header("authorization", get_signed.authorization)
+                .header("x-amz-date", get_signed.amz_date)
+                .header("x-amz-content-sha256", get_signed.payload_hash)
+                .header(header::RANGE, "bytes=0-1,3-4")
+                .body(axum::body::Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(multi_response.status(), StatusCode::RANGE_NOT_SATISFIABLE);
+        let multi_xml = response_text(multi_response).await;
+        assert!(multi_xml.contains("<Code>InvalidRange</Code>"));
+        assert!(multi_xml.contains("multiple byte ranges are not supported"));
+    }
+
+    #[tokio::test]
+    async fn test_s3_like_get_object_honors_conditional_headers() {
+        let (state, _dir) = test_support::make_test_state().await;
+        let user = register_user(state.clone(), "conditional-get@example.com").await;
+
+        let app = axum::Router::new()
+            .route(
+                "/api/s3/:bucket/*key",
+                axum::routing::put(put_bucket_object).get(get_bucket_object),
+            )
+            .layer(axum::middleware::from_fn_with_state(
+                state.clone(),
+                crate::middleware::s3_auth::s3_auth_middleware,
+            ))
+            .with_state(state.clone());
+
+        let put_signed = crate::middleware::s3_auth::build_signed_header_auth(
+            "PUT",
+            "https://example.com/api/s3/assets/conditional.txt",
+            &user.user.id,
+            state.jwt_secret.as_str(),
+            None,
+        )
+        .unwrap();
+        let put_response = tower::ServiceExt::oneshot(
+            app.clone(),
+            axum::http::Request::builder()
+                .method("PUT")
+                .uri("/api/s3/assets/conditional.txt")
+                .header("host", "example.com")
+                .header("authorization", put_signed.authorization)
+                .header("x-amz-date", put_signed.amz_date)
+                .header("x-amz-content-sha256", put_signed.payload_hash)
+                .body(axum::body::Body::from("hello conditional"))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(put_response.status(), StatusCode::OK);
+        let etag = put_response.headers().get(header::ETAG).unwrap().to_str().unwrap().to_string();
+        let last_modified = put_response
+            .headers()
+            .get(header::LAST_MODIFIED)
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .to_string();
+
+        let get_signed = crate::middleware::s3_auth::build_signed_header_auth(
+            "GET",
+            "https://example.com/api/s3/assets/conditional.txt",
+            &user.user.id,
+            state.jwt_secret.as_str(),
+            None,
+        )
+        .unwrap();
+
+        let none_match_response = tower::ServiceExt::oneshot(
+            app.clone(),
+            axum::http::Request::builder()
+                .uri("/api/s3/assets/conditional.txt")
+                .header("host", "example.com")
+                .header("authorization", get_signed.authorization.clone())
+                .header("x-amz-date", get_signed.amz_date.clone())
+                .header("x-amz-content-sha256", get_signed.payload_hash.clone())
+                .header(header::IF_NONE_MATCH, etag.clone())
+                .body(axum::body::Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(none_match_response.status(), StatusCode::NOT_MODIFIED);
+
+        let match_fail_response = tower::ServiceExt::oneshot(
+            app.clone(),
+            axum::http::Request::builder()
+                .uri("/api/s3/assets/conditional.txt")
+                .header("host", "example.com")
+                .header("authorization", get_signed.authorization.clone())
+                .header("x-amz-date", get_signed.amz_date.clone())
+                .header("x-amz-content-sha256", get_signed.payload_hash.clone())
+                .header(header::IF_MATCH, "\"different\"")
+                .body(axum::body::Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(match_fail_response.status(), StatusCode::PRECONDITION_FAILED);
+
+        let modified_since_response = tower::ServiceExt::oneshot(
+            app.clone(),
+            axum::http::Request::builder()
+                .uri("/api/s3/assets/conditional.txt")
+                .header("host", "example.com")
+                .header("authorization", get_signed.authorization.clone())
+                .header("x-amz-date", get_signed.amz_date.clone())
+                .header("x-amz-content-sha256", get_signed.payload_hash.clone())
+                .header(header::IF_MODIFIED_SINCE, last_modified.clone())
+                .body(axum::body::Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(modified_since_response.status(), StatusCode::NOT_MODIFIED);
+
+        let past = chrono::DateTime::parse_from_rfc2822(&last_modified)
+            .unwrap()
+            .checked_sub_signed(chrono::TimeDelta::seconds(1))
+            .unwrap()
+            .to_rfc2822();
+        let unmodified_since_response = tower::ServiceExt::oneshot(
+            app,
+            axum::http::Request::builder()
+                .uri("/api/s3/assets/conditional.txt")
+                .header("host", "example.com")
+                .header("authorization", get_signed.authorization)
+                .header("x-amz-date", get_signed.amz_date)
+                .header("x-amz-content-sha256", get_signed.payload_hash)
+                .header(header::IF_UNMODIFIED_SINCE, past)
+                .body(axum::body::Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(unmodified_since_response.status(), StatusCode::PRECONDITION_FAILED);
     }
 
     #[tokio::test]
