@@ -66,6 +66,12 @@ Peanut은 아래 원칙을 지향한다.
   - admin 전용 승인 처리
 - `PUT /api/admin/users/:user_id/deactivate`
   - admin 전용 비활성화 처리이며 해당 유저의 보호 API 접근을 즉시 차단한다
+- `GET /api/admin/service-tokens`
+  - server-to-server 자동화를 위한 admin service token 목록 조회
+- `POST /api/admin/service-tokens`
+  - opaque service token을 생성하고 plaintext token을 1회 반환
+- `DELETE /api/admin/service-tokens/:token_id`
+  - service token을 즉시 revoke
 
 외부 프론트 앱 관점에서 의미하는 것:
 - Peanut이 이제 signup, login, session refresh, logout, password change, password reset을 제공하는 auth backend로 동작할 수 있다
@@ -74,12 +80,17 @@ Peanut은 아래 원칙을 지향한다.
 - 앱은 `GET /api/auth/events` 로 최근 auth event를 조회해 login/session/reset 흐름을 디버깅할 수 있다
 - 운영자는 app-facing auth route를 특정 browser origin/client id로 제한할 수 있다
 - 앱은 auth session 목록 조회, 단일 세션 revoke, 전체 세션 revoke까지 Peanut API로 처리할 수 있다
+- 운영자는 protected API용 admin service token도 발급할 수 있다
 - 자세한 연동 가이드는 `docs/auth-client.ko.md`, 브라우저 예제는 `examples/auth-client-web/` 참고
 
 ### 외부 auth client 가이드
 - 한국어 가이드: `docs/auth-client.ko.md`
 - English guide: `docs/auth-client.md`
 - 브라우저 예제: `examples/auth-client-web/`
+
+### Service token 가이드
+- 한국어 가이드: `docs/service-tokens.ko.md`
+- English guide: `docs/service-tokens.md`
 
 ### Storage
 - 유저 단위로 격리된 object storage
@@ -611,6 +622,7 @@ curl -s "$BASE_URL/api/data/tables/todos/rows?search=buy&filter_field=title&filt
 - `AUTH_ALLOWED_CLIENT_IDS` 를 켠 경우 위 예시처럼 auth route에 `x-peanut-client-id` 를 계속 보내야 한다
 - `owner_private` row는 인증 유저 기준으로 격리된다
 - 같은 bearer token으로 storage, data, push, session 엔드포인트를 함께 호출할 수 있다
+- server-to-server admin 자동화는 `docs/service-tokens.ko.md` 참고
 - Data API를 조금 더 실전적으로 보려면 `docs/data-api.ko.md` 참고
 - 바로 보낼 수 있는 payload 예제는 `examples/data-api/` 참고
 - 외부 프론트 auth 전체 흐름은 `docs/auth-client.ko.md`와 `examples/auth-client-web/` 참고

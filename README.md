@@ -66,6 +66,12 @@ Peanut is built around a few constraints:
   - admin-only activation flow
 - `PUT /api/admin/users/:user_id/deactivate`
   - admin-only suspension flow that immediately blocks protected API access for that user
+- `GET /api/admin/service-tokens`
+  - lists admin-managed service tokens for server-to-server automation
+- `POST /api/admin/service-tokens`
+  - creates an opaque service token and returns the plaintext token once
+- `DELETE /api/admin/service-tokens/:token_id`
+  - revokes a service token immediately
 
 What this means for external frontend apps:
 - Peanut can now act as the app's auth backend for signup, login, session refresh, logout, password change, and password reset
@@ -73,12 +79,17 @@ What this means for external frontend apps:
 - refresh sessions are server-tracked and revoked on logout, password change, password reset, or admin deactivation
 - apps can inspect recent auth events through `GET /api/auth/events` to debug login/session/reset activity
 - operators can optionally lock app-facing auth routes to specific browser origins and client ids
+- operators can also mint admin-only service tokens for server-to-server automation on protected APIs
 - see `docs/auth-client.md` for the integration guide and `examples/auth-client-web/` for a minimal browser example
 
 ### External auth client guide
 - English guide: `docs/auth-client.md`
 - Korean guide: `docs/auth-client.ko.md`
 - browser example: `examples/auth-client-web/`
+
+### Service token guide
+- English guide: `docs/service-tokens.md`
+- Korean guide: `docs/service-tokens.ko.md`
 
 ### Storage
 - user-scoped object storage
@@ -617,6 +628,7 @@ Quick notes:
 - if `AUTH_ALLOWED_CLIENT_IDS` is enabled, keep sending `x-peanut-client-id` on auth routes like the example above
 - `owner_private` rows are scoped to the authenticated user
 - the same bearer token works for storage, data, push, and session endpoints
+- for server-to-server admin automation, see `docs/service-tokens.md`
 - for a fuller Data API walkthrough, see `docs/data-api.md`
 - for ready-to-send payload files, see `examples/data-api/`
 - for a full external frontend auth flow, see `docs/auth-client.md` and `examples/auth-client-web/`

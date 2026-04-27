@@ -226,6 +226,12 @@ async fn main() {
 
     let protected_routes = Router::new()
         .route("/admin/users", get(api::admin::list_users))
+        .route("/admin/service-tokens", get(api::admin::list_service_tokens))
+        .route("/admin/service-tokens", post(api::admin::create_service_token))
+        .route(
+            "/admin/service-tokens/:token_id",
+            delete(api::admin::revoke_service_token),
+        )
         .route(
             "/admin/users/:user_id/activate",
             put(api::admin::activate_user),

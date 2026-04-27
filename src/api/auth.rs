@@ -910,13 +910,13 @@ async fn load_user_with_password_by_id(
         .await
 }
 
-fn generate_opaque_token() -> String {
+pub(crate) fn generate_opaque_token() -> String {
     let mut bytes = [0u8; 32];
     rand::thread_rng().fill_bytes(&mut bytes);
     URL_SAFE_NO_PAD.encode(bytes)
 }
 
-fn hash_opaque_token(token: &str) -> String {
+pub(crate) fn hash_opaque_token(token: &str) -> String {
     sha256(token.as_bytes())
         .iter()
         .map(|byte| format!("{byte:02x}"))

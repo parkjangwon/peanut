@@ -46,6 +46,7 @@ mod tests {
             "refresh_tokens",
             "password_reset_tokens",
             "auth_events",
+            "service_tokens",
             "function_versions",
             "function_version_secrets",
         ] {
