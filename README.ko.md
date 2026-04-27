@@ -153,6 +153,10 @@ Peanut은 아래 원칙을 지향한다.
 ### Data API (SQLite 기반)
 Peanut은 이제 Peanut이 관리하는 logical table용 제한된 SQLite 기반 data API를 제공한다.
 
+상세 가이드:
+- English guide: `docs/data-api.md`
+- 한국어 가이드: `docs/data-api.ko.md`
+
 현재 가능한 것:
 - `GET /api/data/tables`
 - `POST /api/data/tables`
@@ -604,6 +608,7 @@ curl -s "$BASE_URL/api/data/tables/todos/rows?search=buy&filter_field=title&filt
 - `AUTH_ALLOWED_CLIENT_IDS` 를 켠 경우 위 예시처럼 auth route에 `x-peanut-client-id` 를 계속 보내야 한다
 - `owner_private` row는 인증 유저 기준으로 격리된다
 - 같은 bearer token으로 storage, data, push, session 엔드포인트를 함께 호출할 수 있다
+- Data API를 조금 더 실전적으로 보려면 `docs/data-api.ko.md` 참고
 - 외부 프론트 auth 전체 흐름은 `docs/auth-client.ko.md`와 `examples/auth-client-web/` 참고
 
 ## 로컬 개발

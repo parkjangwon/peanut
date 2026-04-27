@@ -152,6 +152,10 @@ What this means for external frontend apps:
 ### Data API (SQLite-backed)
 Peanut now exposes a constrained SQLite-backed data API for Peanut-managed logical tables.
 
+Detailed guide:
+- English guide: `docs/data-api.md`
+- Korean guide: `docs/data-api.ko.md`
+
 Current capabilities:
 - `GET /api/data/tables`
 - `POST /api/data/tables`
@@ -610,6 +614,7 @@ Quick notes:
 - if `AUTH_ALLOWED_CLIENT_IDS` is enabled, keep sending `x-peanut-client-id` on auth routes like the example above
 - `owner_private` rows are scoped to the authenticated user
 - the same bearer token works for storage, data, push, and session endpoints
+- for a fuller Data API walkthrough, see `docs/data-api.md`
 - for a full external frontend auth flow, see `docs/auth-client.md` and `examples/auth-client-web/`
 
 ## Local development
