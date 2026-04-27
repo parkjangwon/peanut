@@ -33,6 +33,10 @@ pub struct S3ListQuery {
     pub max_uploads: Option<usize>,
     #[serde(rename = "continuation-token")]
     pub continuation_token: Option<String>,
+    #[serde(rename = "start-after")]
+    pub start_after: Option<String>,
+    #[serde(rename = "encoding-type")]
+    pub encoding_type: Option<String>,
     #[serde(rename = "key-marker")]
     pub key_marker: Option<String>,
     #[serde(rename = "upload-id-marker")]
@@ -187,6 +191,21 @@ pub async fn list_bucket_objects(
             )
         }
     };
+    let decoded_start_after = match normalize_list_start_after(query.start_after.as_deref()) {
+        Ok(value) => value,
+        Err(message) => {
+            return s3_error_response(
+                StatusCode::BAD_REQUEST,
+                "InvalidArgument",
+                &message,
+                &format!("/{bucket}"),
+                None,
+            )
+        }
+    };
+    let list_anchor = decoded_continuation_token
+        .as_deref()
+        .or(decoded_start_after.as_deref());
 
     match state
         .storage
@@ -195,7 +214,7 @@ pub async fn list_bucket_objects(
             query.prefix.as_deref(),
             query.delimiter.as_deref(),
             query.max_keys,
-            decoded_continuation_token.as_deref(),
+            list_anchor,
         )
         .await
     {
@@ -221,10 +240,16 @@ pub async fn head_bucket_object(
     State(state): State<crate::AppState>,
     Extension(claims): Extension<Claims>,
     Path((bucket, key)): Path<(String, String)>,
+    headers: HeaderMap,
 ) -> Response {
     let scoped_bucket = scoped_bucket(&claims.sub, &bucket);
     match state.storage.head_object(&scoped_bucket, &key).await {
-        Ok(metadata) => build_head_response(StatusCode::OK, &metadata),
+        Ok(metadata) => {
+            if let Some(response) = evaluate_read_preconditions(&headers, &metadata) {
+                return response;
+            }
+            build_head_response(StatusCode::OK, &metadata)
+        }
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => s3_error_response(
             StatusCode::NOT_FOUND,
             "NoSuchKey",
@@ -312,7 +337,7 @@ pub async fn get_bucket_object(
 
     match state.storage.get_object(&scoped_bucket, &key).await {
         Ok(object) => {
-            if let Some(response) = evaluate_get_preconditions(&headers, &object.metadata) {
+            if let Some(response) = evaluate_read_preconditions(&headers, &object.metadata) {
                 return response;
             }
             let range = match parse_range_header(
@@ -560,16 +585,22 @@ pub async fn put_bucket_object(
         }
         return match state.storage.get_object(&source_scoped_bucket, &source_key).await {
             Ok(source_object) => {
-                let (target_content_type, target_custom_metadata) = match metadata_directive {
+                let request_response_headers = extract_standard_response_headers(&headers);
+                let (target_content_type, target_custom_metadata, target_response_headers) = match metadata_directive {
                     MetadataDirective::Copy => (
                         source_object.metadata.content_type.clone(),
                         source_object.metadata.custom_metadata.clone(),
+                        source_object.metadata.response_headers.clone(),
                     ),
                     MetadataDirective::Replace => (
                         content_type_header
                             .map(str::to_string)
                             .unwrap_or_else(|| source_object.metadata.content_type.clone()),
                         custom_metadata,
+                        merge_response_headers(
+                            source_object.metadata.response_headers.clone(),
+                            request_response_headers,
+                        ),
                     ),
                 };
                 match state
@@ -580,6 +611,7 @@ pub async fn put_bucket_object(
                         &source_object.data,
                         Some(target_content_type.as_str()),
                         target_custom_metadata,
+                        target_response_headers,
                     )
                     .await
                 {
@@ -774,6 +806,7 @@ pub async fn put_bucket_object(
             &body,
             Some(content_type),
             custom_metadata,
+            extract_standard_response_headers(&headers),
         )
         .await
     {
@@ -1355,6 +1388,65 @@ fn format_last_modified_header(timestamp: &str) -> String {
         .unwrap_or_else(|_| timestamp.to_string())
 }
 
+fn normalize_list_start_after(value: Option<&str>) -> Result<Option<String>, String> {
+    value
+        .filter(|raw| !raw.trim().is_empty())
+        .map(|raw| {
+            let decoded = percent_decode(raw.trim())?;
+            let normalized = std::path::Path::new(decoded.trim().trim_start_matches('/'))
+                .to_string_lossy()
+                .replace('\\', "/");
+            if normalized.is_empty() || normalized.contains("..") {
+                Err("start-after must be a valid object key".to_string())
+            } else {
+                Ok(normalized)
+            }
+        })
+        .transpose()
+}
+
+fn percent_decode(value: &str) -> Result<String, String> {
+    let bytes = value.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%' {
+            if i + 2 >= bytes.len() {
+                return Err("invalid percent encoding".to_string());
+            }
+            let hex = std::str::from_utf8(&bytes[i + 1..i + 3])
+                .map_err(|_| "invalid percent encoding".to_string())?;
+            let value = u8::from_str_radix(hex, 16)
+                .map_err(|_| "invalid percent encoding".to_string())?;
+            out.push(value);
+            i += 3;
+        } else {
+            out.push(bytes[i]);
+            i += 1;
+        }
+    }
+    String::from_utf8(out).map_err(|_| "invalid percent encoding".to_string())
+}
+
+fn percent_encode_s3(value: &str) -> String {
+    let mut encoded = String::new();
+    for byte in value.as_bytes() {
+        match byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => encoded.push(*byte as char),
+            _ => encoded.push_str(&format!("%{:02X}", byte)),
+        }
+    }
+    encoded
+}
+
+fn encode_for_list_xml(value: &str, encoding_type: Option<&str>) -> String {
+    if matches!(encoding_type, Some(value) if value.eq_ignore_ascii_case("url")) {
+        percent_encode_s3(value)
+    } else {
+        value.to_string()
+    }
+}
+
 fn extract_custom_metadata_headers(headers: &HeaderMap) -> BTreeMap<String, String> {
     headers
         .iter()
@@ -1373,11 +1465,67 @@ fn extract_custom_metadata_headers(headers: &HeaderMap) -> BTreeMap<String, Stri
         .collect()
 }
 
+fn extract_standard_response_headers(
+    headers: &HeaderMap,
+) -> crate::storage::local::StorageObjectResponseHeaders {
+    fn optional_header(headers: &HeaderMap, name: axum::http::header::HeaderName) -> Option<String> {
+        headers
+            .get(name)
+            .and_then(|value| value.to_str().ok())
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_string)
+    }
+
+    crate::storage::local::StorageObjectResponseHeaders {
+        cache_control: optional_header(headers, header::CACHE_CONTROL),
+        content_disposition: optional_header(headers, header::CONTENT_DISPOSITION),
+        content_encoding: optional_header(headers, header::CONTENT_ENCODING),
+        content_language: optional_header(headers, header::CONTENT_LANGUAGE),
+        expires: optional_header(headers, header::EXPIRES),
+    }
+}
+
+fn merge_response_headers(
+    base: crate::storage::local::StorageObjectResponseHeaders,
+    overrides: crate::storage::local::StorageObjectResponseHeaders,
+) -> crate::storage::local::StorageObjectResponseHeaders {
+    crate::storage::local::StorageObjectResponseHeaders {
+        cache_control: overrides.cache_control.or(base.cache_control),
+        content_disposition: overrides.content_disposition.or(base.content_disposition),
+        content_encoding: overrides.content_encoding.or(base.content_encoding),
+        content_language: overrides.content_language.or(base.content_language),
+        expires: overrides.expires.or(base.expires),
+    }
+}
+
 fn apply_s3_response_headers(
     mut response: axum::http::response::Builder,
 ) -> axum::http::response::Builder {
     response = response.header("x-amz-request-id", uuid::Uuid::new_v4().to_string());
     response = response.header("accept-ranges", "bytes");
+    response
+}
+
+fn apply_standard_object_response_headers(
+    mut response: axum::http::response::Builder,
+    metadata: &crate::storage::local::StorageObjectMetadata,
+) -> axum::http::response::Builder {
+    if let Some(value) = metadata.response_headers.cache_control.as_deref() {
+        response = response.header(header::CACHE_CONTROL, value);
+    }
+    if let Some(value) = metadata.response_headers.content_disposition.as_deref() {
+        response = response.header(header::CONTENT_DISPOSITION, value);
+    }
+    if let Some(value) = metadata.response_headers.content_encoding.as_deref() {
+        response = response.header(header::CONTENT_ENCODING, value);
+    }
+    if let Some(value) = metadata.response_headers.content_language.as_deref() {
+        response = response.header(header::CONTENT_LANGUAGE, value);
+    }
+    if let Some(value) = metadata.response_headers.expires.as_deref() {
+        response = response.header(header::EXPIRES, value);
+    }
     response
 }
 
@@ -1418,6 +1566,7 @@ fn build_head_response(
         header::LAST_MODIFIED,
         format_last_modified_header(metadata.updated_at.as_str()),
     );
+    response = apply_standard_object_response_headers(response, metadata);
     for (name, value) in &metadata.custom_metadata {
         response = response.header(format!("x-amz-meta-{name}"), value);
     }
@@ -1441,6 +1590,7 @@ fn build_object_response(
     );
     response = response.header("x-amz-meta-created-at", metadata.created_at.as_str());
     response = response.header("x-amz-meta-key", key);
+    response = apply_standard_object_response_headers(response, metadata);
     for (name, value) in &metadata.custom_metadata {
         response = response.header(format!("x-amz-meta-{name}"), value);
     }
@@ -1473,6 +1623,7 @@ fn build_ranged_object_response(
     );
     response = response.header("x-amz-meta-created-at", metadata.created_at.as_str());
     response = response.header("x-amz-meta-key", key);
+    response = apply_standard_object_response_headers(response, metadata);
     for (name, value) in &metadata.custom_metadata {
         response = response.header(format!("x-amz-meta-{name}"), value);
     }
@@ -1485,15 +1636,28 @@ fn s3_list_xml_response(
     page: crate::storage::local::StorageListPage,
 ) -> Response {
     let key_count = page.objects.len() + page.common_prefixes.len();
+    let encoding_type = query.encoding_type.as_deref().filter(|value| value.eq_ignore_ascii_case("url"));
     let mut body = String::from("<?xml version=\"1.0\" encoding=\"UTF-8\"?>");
     body.push_str("<ListBucketResult xmlns=\"http://s3.amazonaws.com/doc/2006-03-01/\">");
     body.push_str(&format!("<Name>{}</Name>", xml_escape(bucket)));
     body.push_str(&format!(
         "<Prefix>{}</Prefix>",
-        xml_escape(query.prefix.as_deref().unwrap_or(""))
+        xml_escape(&encode_for_list_xml(query.prefix.as_deref().unwrap_or(""), encoding_type))
     ));
     if let Some(delimiter) = query.delimiter.as_deref() {
-        body.push_str(&format!("<Delimiter>{}</Delimiter>", xml_escape(delimiter)));
+        body.push_str(&format!(
+            "<Delimiter>{}</Delimiter>",
+            xml_escape(&encode_for_list_xml(delimiter, encoding_type))
+        ));
+    }
+    if let Some(start_after) = query.start_after.as_deref() {
+        body.push_str(&format!(
+            "<StartAfter>{}</StartAfter>",
+            xml_escape(&encode_for_list_xml(start_after, encoding_type))
+        ));
+    }
+    if let Some(value) = encoding_type {
+        body.push_str(&format!("<EncodingType>{}</EncodingType>", xml_escape(value)));
     }
     body.push_str(&format!("<KeyCount>{key_count}</KeyCount>"));
     body.push_str(&format!(
@@ -1515,7 +1679,10 @@ fn s3_list_xml_response(
     }
     for object in page.objects {
         body.push_str("<Contents>");
-        body.push_str(&format!("<Key>{}</Key>", xml_escape(&object.key)));
+        body.push_str(&format!(
+            "<Key>{}</Key>",
+            xml_escape(&encode_for_list_xml(&object.key, encoding_type))
+        ));
         body.push_str(&format!(
             "<LastModified>{}</LastModified>",
             xml_escape(&object.last_modified)
@@ -1527,7 +1694,10 @@ fn s3_list_xml_response(
     }
     for prefix in page.common_prefixes {
         body.push_str("<CommonPrefixes>");
-        body.push_str(&format!("<Prefix>{}</Prefix>", xml_escape(&prefix)));
+        body.push_str(&format!(
+            "<Prefix>{}</Prefix>",
+            xml_escape(&encode_for_list_xml(&prefix, encoding_type))
+        ));
         body.push_str("</CommonPrefixes>");
     }
     body.push_str("</ListBucketResult>");
@@ -1614,7 +1784,7 @@ fn build_conditional_response(
     response.body(axum::body::Body::empty()).unwrap()
 }
 
-fn evaluate_get_preconditions(
+fn evaluate_read_preconditions(
     headers: &HeaderMap,
     metadata: &crate::storage::local::StorageObjectMetadata,
 ) -> Option<Response> {
@@ -1784,6 +1954,7 @@ mod tests {
             State(state.clone()),
             Extension(claims.clone()),
             axum::extract::Path(("assets".to_string(), "avatars/me.txt".to_string())),
+            HeaderMap::new(),
         )
         .await;
         assert_eq!(head_response.status(), StatusCode::OK);
@@ -1877,6 +2048,8 @@ mod tests {
                 max_keys: Some(1),
                 max_uploads: None,
                 continuation_token: None,
+                start_after: None,
+                encoding_type: None,
                 key_marker: None,
                 upload_id_marker: None,
             }),
@@ -1902,6 +2075,8 @@ mod tests {
                 max_keys: Some(10),
                 max_uploads: None,
                 continuation_token: Some(next_token),
+                start_after: None,
+                encoding_type: None,
                 key_marker: None,
                 upload_id_marker: None,
             }),
@@ -1931,6 +2106,8 @@ mod tests {
                 max_keys: Some(10),
                 max_uploads: None,
                 continuation_token: Some("not-a-valid-token".to_string()),
+                start_after: None,
+                encoding_type: None,
                 key_marker: None,
                 upload_id_marker: None,
             }),
@@ -3167,6 +3344,372 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(unmodified_since_response.status(), StatusCode::PRECONDITION_FAILED);
+    }
+
+    #[tokio::test]
+    async fn test_s3_like_head_object_honors_conditional_headers() {
+        let (state, _dir) = test_support::make_test_state().await;
+        let user = register_user(state.clone(), "conditional-head@example.com").await;
+
+        let app = axum::Router::new()
+            .route(
+                "/api/s3/:bucket/*key",
+                axum::routing::put(put_bucket_object)
+                    .get(get_bucket_object)
+                    .head(head_bucket_object),
+            )
+            .layer(axum::middleware::from_fn_with_state(
+                state.clone(),
+                crate::middleware::s3_auth::s3_auth_middleware,
+            ))
+            .with_state(state.clone());
+
+        let put_signed = crate::middleware::s3_auth::build_signed_header_auth(
+            "PUT",
+            "https://example.com/api/s3/assets/conditional-head.txt",
+            &user.user.id,
+            state.jwt_secret.as_str(),
+            None,
+        )
+        .unwrap();
+        let put_response = tower::ServiceExt::oneshot(
+            app.clone(),
+            axum::http::Request::builder()
+                .method("PUT")
+                .uri("/api/s3/assets/conditional-head.txt")
+                .header("host", "example.com")
+                .header("authorization", put_signed.authorization)
+                .header("x-amz-date", put_signed.amz_date)
+                .header("x-amz-content-sha256", put_signed.payload_hash)
+                .body(axum::body::Body::from("hello conditional head"))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(put_response.status(), StatusCode::OK);
+        let etag = put_response.headers().get(header::ETAG).unwrap().to_str().unwrap().to_string();
+        let last_modified = put_response
+            .headers()
+            .get(header::LAST_MODIFIED)
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .to_string();
+
+        let head_signed = crate::middleware::s3_auth::build_signed_header_auth(
+            "HEAD",
+            "https://example.com/api/s3/assets/conditional-head.txt",
+            &user.user.id,
+            state.jwt_secret.as_str(),
+            None,
+        )
+        .unwrap();
+
+        let none_match_response = tower::ServiceExt::oneshot(
+            app.clone(),
+            axum::http::Request::builder()
+                .method("HEAD")
+                .uri("/api/s3/assets/conditional-head.txt")
+                .header("host", "example.com")
+                .header("authorization", head_signed.authorization.clone())
+                .header("x-amz-date", head_signed.amz_date.clone())
+                .header("x-amz-content-sha256", head_signed.payload_hash.clone())
+                .header(header::IF_NONE_MATCH, etag.clone())
+                .body(axum::body::Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(none_match_response.status(), StatusCode::NOT_MODIFIED);
+
+        let match_fail_response = tower::ServiceExt::oneshot(
+            app.clone(),
+            axum::http::Request::builder()
+                .method("HEAD")
+                .uri("/api/s3/assets/conditional-head.txt")
+                .header("host", "example.com")
+                .header("authorization", head_signed.authorization.clone())
+                .header("x-amz-date", head_signed.amz_date.clone())
+                .header("x-amz-content-sha256", head_signed.payload_hash.clone())
+                .header(header::IF_MATCH, "\"different\"")
+                .body(axum::body::Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(match_fail_response.status(), StatusCode::PRECONDITION_FAILED);
+
+        let modified_since_response = tower::ServiceExt::oneshot(
+            app.clone(),
+            axum::http::Request::builder()
+                .method("HEAD")
+                .uri("/api/s3/assets/conditional-head.txt")
+                .header("host", "example.com")
+                .header("authorization", head_signed.authorization.clone())
+                .header("x-amz-date", head_signed.amz_date.clone())
+                .header("x-amz-content-sha256", head_signed.payload_hash.clone())
+                .header(header::IF_MODIFIED_SINCE, last_modified.clone())
+                .body(axum::body::Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(modified_since_response.status(), StatusCode::NOT_MODIFIED);
+
+        let past = chrono::DateTime::parse_from_rfc2822(&last_modified)
+            .unwrap()
+            .checked_sub_signed(chrono::TimeDelta::seconds(1))
+            .unwrap()
+            .to_rfc2822();
+        let unmodified_since_response = tower::ServiceExt::oneshot(
+            app,
+            axum::http::Request::builder()
+                .method("HEAD")
+                .uri("/api/s3/assets/conditional-head.txt")
+                .header("host", "example.com")
+                .header("authorization", head_signed.authorization)
+                .header("x-amz-date", head_signed.amz_date)
+                .header("x-amz-content-sha256", head_signed.payload_hash)
+                .header(header::IF_UNMODIFIED_SINCE, past)
+                .body(axum::body::Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(unmodified_since_response.status(), StatusCode::PRECONDITION_FAILED);
+    }
+
+    #[tokio::test]
+    async fn test_s3_like_get_object_supports_open_ended_and_suffix_ranges() {
+        let (state, _dir) = test_support::make_test_state().await;
+        let user = register_user(state.clone(), "range-edges@example.com").await;
+
+        let app = axum::Router::new()
+            .route(
+                "/api/s3/:bucket/*key",
+                axum::routing::put(put_bucket_object).get(get_bucket_object),
+            )
+            .layer(axum::middleware::from_fn_with_state(
+                state.clone(),
+                crate::middleware::s3_auth::s3_auth_middleware,
+            ))
+            .with_state(state.clone());
+
+        let put_signed = crate::middleware::s3_auth::build_signed_header_auth(
+            "PUT",
+            "https://example.com/api/s3/assets/range-edges.txt",
+            &user.user.id,
+            state.jwt_secret.as_str(),
+            None,
+        )
+        .unwrap();
+        let put_response = tower::ServiceExt::oneshot(
+            app.clone(),
+            axum::http::Request::builder()
+                .method("PUT")
+                .uri("/api/s3/assets/range-edges.txt")
+                .header("host", "example.com")
+                .header("authorization", put_signed.authorization)
+                .header("x-amz-date", put_signed.amz_date)
+                .header("x-amz-content-sha256", put_signed.payload_hash)
+                .body(axum::body::Body::from("hello range edges"))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(put_response.status(), StatusCode::OK);
+
+        let get_signed = crate::middleware::s3_auth::build_signed_header_auth(
+            "GET",
+            "https://example.com/api/s3/assets/range-edges.txt",
+            &user.user.id,
+            state.jwt_secret.as_str(),
+            None,
+        )
+        .unwrap();
+
+        let open_ended = tower::ServiceExt::oneshot(
+            app.clone(),
+            axum::http::Request::builder()
+                .uri("/api/s3/assets/range-edges.txt")
+                .header("host", "example.com")
+                .header("authorization", get_signed.authorization.clone())
+                .header("x-amz-date", get_signed.amz_date.clone())
+                .header("x-amz-content-sha256", get_signed.payload_hash.clone())
+                .header(header::RANGE, "bytes=6-")
+                .body(axum::body::Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(open_ended.status(), StatusCode::PARTIAL_CONTENT);
+        assert_eq!(open_ended.headers().get(header::CONTENT_RANGE).unwrap(), "bytes 6-16/17");
+        assert_eq!(response_text(open_ended).await, "range edges");
+
+        let suffix = tower::ServiceExt::oneshot(
+            app.clone(),
+            axum::http::Request::builder()
+                .uri("/api/s3/assets/range-edges.txt")
+                .header("host", "example.com")
+                .header("authorization", get_signed.authorization.clone())
+                .header("x-amz-date", get_signed.amz_date.clone())
+                .header("x-amz-content-sha256", get_signed.payload_hash.clone())
+                .header(header::RANGE, "bytes=-5")
+                .body(axum::body::Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(suffix.status(), StatusCode::PARTIAL_CONTENT);
+        assert_eq!(suffix.headers().get(header::CONTENT_RANGE).unwrap(), "bytes 12-16/17");
+        assert_eq!(response_text(suffix).await, "edges");
+
+        let zero_suffix = tower::ServiceExt::oneshot(
+            app,
+            axum::http::Request::builder()
+                .uri("/api/s3/assets/range-edges.txt")
+                .header("host", "example.com")
+                .header("authorization", get_signed.authorization)
+                .header("x-amz-date", get_signed.amz_date)
+                .header("x-amz-content-sha256", get_signed.payload_hash)
+                .header(header::RANGE, "bytes=-0")
+                .body(axum::body::Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(zero_suffix.status(), StatusCode::RANGE_NOT_SATISFIABLE);
+    }
+
+    #[tokio::test]
+    async fn test_s3_like_object_responses_preserve_standard_content_headers() {
+        let (state, _dir) = test_support::make_test_state().await;
+        let user = register_user(state.clone(), "standard-headers@example.com").await;
+        let claims = claims_for(&user.user.id);
+
+        let mut headers = HeaderMap::new();
+        headers.insert(header::CONTENT_TYPE, HeaderValue::from_static("text/plain"));
+        headers.insert(header::CACHE_CONTROL, HeaderValue::from_static("public, max-age=60"));
+        headers.insert(header::CONTENT_DISPOSITION, HeaderValue::from_static("inline; filename=demo.txt"));
+        headers.insert(header::CONTENT_ENCODING, HeaderValue::from_static("gzip"));
+        headers.insert(header::CONTENT_LANGUAGE, HeaderValue::from_static("ko-KR"));
+        headers.insert(header::EXPIRES, HeaderValue::from_static("Wed, 21 Oct 2026 07:28:00 +0000"));
+
+        let put_response = put_bucket_object(
+            State(state.clone()),
+            Extension(claims.clone()),
+            axum::extract::Path(("assets".to_string(), "headers/demo.txt".to_string())),
+            RawQuery(None),
+            headers,
+            Bytes::from("hello headers"),
+        )
+        .await;
+        assert_eq!(put_response.status(), StatusCode::OK);
+        assert_eq!(put_response.headers().get(header::CACHE_CONTROL).unwrap(), "public, max-age=60");
+        assert_eq!(put_response.headers().get(header::CONTENT_DISPOSITION).unwrap(), "inline; filename=demo.txt");
+        assert_eq!(put_response.headers().get(header::CONTENT_ENCODING).unwrap(), "gzip");
+        assert_eq!(put_response.headers().get(header::CONTENT_LANGUAGE).unwrap(), "ko-KR");
+        assert_eq!(put_response.headers().get(header::EXPIRES).unwrap(), "Wed, 21 Oct 2026 07:28:00 +0000");
+
+        let head_response = head_bucket_object(
+            State(state.clone()),
+            Extension(claims.clone()),
+            axum::extract::Path(("assets".to_string(), "headers/demo.txt".to_string())),
+            HeaderMap::new(),
+        )
+        .await;
+        assert_eq!(head_response.status(), StatusCode::OK);
+        assert_eq!(head_response.headers().get(header::CACHE_CONTROL).unwrap(), "public, max-age=60");
+        assert_eq!(head_response.headers().get(header::CONTENT_DISPOSITION).unwrap(), "inline; filename=demo.txt");
+        assert_eq!(head_response.headers().get(header::CONTENT_ENCODING).unwrap(), "gzip");
+        assert_eq!(head_response.headers().get(header::CONTENT_LANGUAGE).unwrap(), "ko-KR");
+        assert_eq!(head_response.headers().get(header::EXPIRES).unwrap(), "Wed, 21 Oct 2026 07:28:00 +0000");
+
+        let get_response = get_bucket_object(
+            State(state),
+            Extension(claims),
+            axum::extract::Path(("assets".to_string(), "headers/demo.txt".to_string())),
+            RawQuery(None),
+            HeaderMap::new(),
+        )
+        .await;
+        assert_eq!(get_response.status(), StatusCode::OK);
+        assert_eq!(get_response.headers().get(header::CACHE_CONTROL).unwrap(), "public, max-age=60");
+        assert_eq!(get_response.headers().get(header::CONTENT_DISPOSITION).unwrap(), "inline; filename=demo.txt");
+        assert_eq!(get_response.headers().get(header::CONTENT_ENCODING).unwrap(), "gzip");
+        assert_eq!(get_response.headers().get(header::CONTENT_LANGUAGE).unwrap(), "ko-KR");
+        assert_eq!(get_response.headers().get(header::EXPIRES).unwrap(), "Wed, 21 Oct 2026 07:28:00 +0000");
+    }
+
+    #[tokio::test]
+    async fn test_s3_like_list_objects_v2_supports_start_after_and_encoding_type_url() {
+        let (state, _dir) = test_support::make_test_state().await;
+        let user = register_user(state.clone(), "list-precision@example.com").await;
+
+        let app = axum::Router::new()
+            .route("/api/s3/:bucket", axum::routing::get(list_bucket_objects))
+            .route("/api/s3/:bucket/*key", axum::routing::put(put_bucket_object))
+            .layer(axum::middleware::from_fn_with_state(
+                state.clone(),
+                crate::middleware::s3_auth::s3_auth_middleware,
+            ))
+            .with_state(state.clone());
+
+        for key in ["notes/a file.txt", "notes/b file.txt", "notes/c file.txt"] {
+            let encoded_key = key.replace(' ', "%20");
+            let put_signed = crate::middleware::s3_auth::build_signed_header_auth(
+                "PUT",
+                &format!("https://example.com/api/s3/assets/{encoded_key}"),
+                &user.user.id,
+                state.jwt_secret.as_str(),
+                None,
+            )
+            .unwrap();
+            let response = tower::ServiceExt::oneshot(
+                app.clone(),
+                axum::http::Request::builder()
+                    .method("PUT")
+                    .uri(format!("/api/s3/assets/{encoded_key}"))
+                    .header("host", "example.com")
+                    .header("authorization", put_signed.authorization)
+                    .header("x-amz-date", put_signed.amz_date)
+                    .header("x-amz-content-sha256", put_signed.payload_hash)
+                    .body(axum::body::Body::from(key.to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+            assert_eq!(response.status(), StatusCode::OK);
+        }
+
+        let list_signed = crate::middleware::s3_auth::build_signed_header_auth(
+            "GET",
+            "https://example.com/api/s3/assets?list-type=2&prefix=notes/&start-after=notes/a%20file.txt&encoding-type=url",
+            &user.user.id,
+            state.jwt_secret.as_str(),
+            None,
+        )
+        .unwrap();
+        let response = tower::ServiceExt::oneshot(
+            app,
+            axum::http::Request::builder()
+                .uri("/api/s3/assets?list-type=2&prefix=notes/&start-after=notes/a%20file.txt&encoding-type=url")
+                .header("host", "example.com")
+                .header("authorization", list_signed.authorization)
+                .header("x-amz-date", list_signed.amz_date)
+                .header("x-amz-content-sha256", list_signed.payload_hash)
+                .body(axum::body::Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let xml = response_text(response).await;
+        assert!(xml.contains("<StartAfter>notes%2Fa%20file.txt</StartAfter>"));
+        assert!(xml.contains("<EncodingType>url</EncodingType>"));
+        assert!(!xml.contains("<Key>notes%2Fa%20file.txt</Key>"));
+        assert!(xml.contains("<Key>notes%2Fb%20file.txt</Key>"));
+        assert!(xml.contains("<Key>notes%2Fc%20file.txt</Key>"));
     }
 
     #[tokio::test]
@@ -4802,6 +5345,8 @@ mod tests {
                 max_keys: Some(10),
                 max_uploads: None,
                 continuation_token: None,
+                start_after: None,
+                encoding_type: None,
                 key_marker: None,
                 upload_id_marker: None,
             }),
@@ -4849,6 +5394,8 @@ mod tests {
                 max_keys: None,
                 max_uploads: None,
                 continuation_token: None,
+                start_after: None,
+                encoding_type: None,
                 key_marker: None,
                 upload_id_marker: None,
             }),

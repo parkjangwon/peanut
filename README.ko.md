@@ -110,10 +110,12 @@ Peanut은 아래 원칙을 지향한다.
 - ranged CopyPart 흐름에 대한 SDK-style smoke coverage도 추가했다
 - S3-like object 응답은 content-type, content-length, ETag, last-modified 메타데이터를 포함한다
 - S3-like GET은 이제 단일 `Range: bytes=...` 요청을 지원하고 `206 Partial Content` + `Content-Range`로 응답한다
-- S3-like GET은 이제 `If-Match`, `If-None-Match`, `If-Modified-Since`, `If-Unmodified-Since` 같은 기본 conditional request header도 처리한다
+- S3-like range 처리는 open-ended(`bytes=start-`)와 suffix(`bytes=-N`) 요청도 다루며, invalid/multi-range 요청은 `416 InvalidRange`로 거부한다
+- S3-like GET과 HEAD는 이제 `If-Match`, `If-None-Match`, `If-Modified-Since`, `If-Unmodified-Since` 같은 기본 conditional request header를 처리한다
+- `Cache-Control`, `Content-Disposition`, `Content-Encoding`, `Content-Language`, `Expires` 같은 object response header는 PUT 시 저장되고 이후 PUT/GET/HEAD 응답에 다시 반영된다
 - PUT 시 전달한 `x-amz-meta-*` custom object metadata는 이제 저장되며, 이후 PUT/GET/HEAD 응답에서도 다시 내려간다
 - S3-like 성공/에러 응답은 `x-amz-request-id` 헤더를 포함하고, object `Last-Modified` 헤더는 HTTP-date 형식으로 내려간다
-- S3-like bucket listing은 `list-type=2`, `prefix`, `delimiter`, `max-keys`, `continuation-token`을 지원한다
+- S3-like bucket listing은 `list-type=2`, `prefix`, `delimiter`, `max-keys`, `continuation-token`, `start-after`, `encoding-type=url`을 지원한다
 - continuation token은 raw key 대신 opaque base64url 스타일 토큰으로 내려간다
 - `delimiter=/` 사용 시 `CommonPrefixes` XML 블록도 함께 내려준다
 - S3-like storage 에러는 이제 `NoSuchKey`, `InvalidRequest` 같은 XML error envelope로 응답한다

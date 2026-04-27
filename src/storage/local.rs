@@ -16,6 +16,15 @@ pub struct LocalStorage {
     root: PathBuf,
 }
 
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct StorageObjectResponseHeaders {
+    pub cache_control: Option<String>,
+    pub content_disposition: Option<String>,
+    pub content_encoding: Option<String>,
+    pub content_language: Option<String>,
+    pub expires: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct StorageObjectMetadata {
     pub content_type: String,
@@ -25,6 +34,8 @@ pub struct StorageObjectMetadata {
     pub updated_at: String,
     #[serde(default)]
     pub custom_metadata: BTreeMap<String, String>,
+    #[serde(default)]
+    pub response_headers: StorageObjectResponseHeaders,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -115,8 +126,15 @@ impl LocalStorage {
         data: &[u8],
         content_type: Option<&str>,
     ) -> io::Result<StorageObjectMetadata> {
-        self.put_object_with_metadata(bucket, key, data, content_type, BTreeMap::new())
-            .await
+        self.put_object_with_metadata(
+            bucket,
+            key,
+            data,
+            content_type,
+            BTreeMap::new(),
+            StorageObjectResponseHeaders::default(),
+        )
+        .await
     }
 
     pub async fn put_object_with_metadata(
@@ -126,6 +144,7 @@ impl LocalStorage {
         data: &[u8],
         content_type: Option<&str>,
         custom_metadata: BTreeMap<String, String>,
+        response_headers: StorageObjectResponseHeaders,
     ) -> io::Result<StorageObjectMetadata> {
         let path = self.resolve_object_path(bucket, key)?;
         let metadata_path = self.resolve_metadata_path(bucket, key)?;
@@ -152,6 +171,7 @@ impl LocalStorage {
                 .unwrap_or_else(|| now.clone()),
             updated_at: now,
             custom_metadata,
+            response_headers,
         };
 
         tokio::fs::write(&path, data).await?;

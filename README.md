@@ -109,10 +109,12 @@ What this means for external frontend apps:
 - multipart compatibility now has additional SDK-style smoke coverage for ranged CopyPart flows
 - S3-like object responses now include content-type, content-length, ETag, and last-modified metadata
 - S3-like GET now supports single `Range: bytes=...` requests and returns `206 Partial Content` with `Content-Range`
-- S3-like GET now also honors basic conditional request headers: `If-Match`, `If-None-Match`, `If-Modified-Since`, `If-Unmodified-Since`
+- S3-like range handling now also covers open-ended (`bytes=start-`) and suffix (`bytes=-N`) requests, while invalid and multi-range requests return `416 InvalidRange`
+- S3-like GET and HEAD now honor basic conditional request headers: `If-Match`, `If-None-Match`, `If-Modified-Since`, `If-Unmodified-Since`
+- object response headers `Cache-Control`, `Content-Disposition`, `Content-Encoding`, `Content-Language`, and `Expires` are now persisted on PUT and replayed on subsequent PUT/GET/HEAD responses
 - custom object metadata sent as `x-amz-meta-*` on PUT is now persisted and returned again on subsequent PUT/GET/HEAD responses
 - S3-like success/error responses now also include `x-amz-request-id` headers, and object `Last-Modified` headers are emitted as HTTP-date strings
-- S3-like bucket listing supports `list-type=2`, `prefix`, `delimiter`, `max-keys`, and `continuation-token`
+- S3-like bucket listing supports `list-type=2`, `prefix`, `delimiter`, `max-keys`, `continuation-token`, `start-after`, and `encoding-type=url`
 - continuation tokens are now opaque base64url-style tokens instead of raw object keys
 - S3-like listing now emits `CommonPrefixes` XML blocks when `delimiter=/` is used
 - S3-like storage errors now return XML error envelopes such as `NoSuchKey` and `InvalidRequest`
