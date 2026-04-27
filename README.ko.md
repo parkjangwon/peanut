@@ -243,6 +243,9 @@ Peanut은 현재 실용적인 hybrid push 레이어를 제공한다.
 - 클라이언트는 `GET /api/push/vapid-public-key`로 browser `PushManager.subscribe(...)`에 필요한 public key를 가져올 수 있다
 - push 메시지는 SQLite queue에 쌓인다
 - 백그라운드 워커가 ntfy 또는 Web Push subscription으로 전달한다
+- `GET /api/push/queue`는 이제 total/pending/processing/sent/failed 집계를 담은 `summary` 블록도 함께 반환한다
+- 여러 destination 중 하나만 성공해도 queue item 전체는 sent로 처리해서, 하나의 죽은 subscription 때문에 전체 전송이 막히지 않는다
+- subscription이 하나도 없는 item은 의미 없는 재시도 대신 즉시 terminal failure로 정리한다
 - queue 상태, retry 횟수, 마지막 에러를 API/콘솔에서 볼 수 있다
 
 아직 아닌 것:

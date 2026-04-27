@@ -18,8 +18,18 @@ pub struct PushSubscriptionsResponse {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PushQueueSummary {
+    pub total: i64,
+    pub pending: i64,
+    pub processing: i64,
+    pub sent: i64,
+    pub failed: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PushQueueResponse {
     pub items: Vec<PushQueueEntry>,
+    pub summary: PushQueueSummary,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -47,6 +57,15 @@ pub struct PushQueueEntry {
     pub last_error: Option<String>,
     pub created_at: String,
     pub processed_at: Option<String>,
+}
+
+#[derive(Debug, Clone, FromRow)]
+struct PushQueueSummaryRow {
+    total: i64,
+    pending: i64,
+    processing: i64,
+    sent: i64,
+    failed: i64,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -265,7 +284,7 @@ pub async fn list_queue(
     State(state): State<crate::AppState>,
     Extension(claims): Extension<Claims>,
 ) -> Response {
-    let query = if claims.is_admin {
+    let items_result = if claims.is_admin {
         sqlx::query_as::<_, PushQueueEntry>(
             "SELECT id, user_id, title, body, status, retry_count, last_error, created_at, processed_at FROM push_queue ORDER BY id DESC LIMIT 50",
         )
@@ -280,9 +299,54 @@ pub async fn list_queue(
         .await
     };
 
-    match query {
-        Ok(items) => (StatusCode::OK, Json(PushQueueResponse { items })).into_response(),
-        Err(_) => json_error(StatusCode::INTERNAL_SERVER_ERROR, "failed to list push queue"),
+    let summary_result = if claims.is_admin {
+        sqlx::query_as::<_, PushQueueSummaryRow>(
+            r#"
+            SELECT
+                COUNT(*) AS total,
+                COALESCE(SUM(CASE WHEN status = 'pending' THEN 1 ELSE 0 END), 0) AS pending,
+                COALESCE(SUM(CASE WHEN status = 'processing' THEN 1 ELSE 0 END), 0) AS processing,
+                COALESCE(SUM(CASE WHEN status = 'sent' THEN 1 ELSE 0 END), 0) AS sent,
+                COALESCE(SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END), 0) AS failed
+            FROM push_queue
+            "#,
+        )
+        .fetch_one(&state.pool)
+        .await
+    } else {
+        sqlx::query_as::<_, PushQueueSummaryRow>(
+            r#"
+            SELECT
+                COUNT(*) AS total,
+                COALESCE(SUM(CASE WHEN status = 'pending' THEN 1 ELSE 0 END), 0) AS pending,
+                COALESCE(SUM(CASE WHEN status = 'processing' THEN 1 ELSE 0 END), 0) AS processing,
+                COALESCE(SUM(CASE WHEN status = 'sent' THEN 1 ELSE 0 END), 0) AS sent,
+                COALESCE(SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END), 0) AS failed
+            FROM push_queue
+            WHERE user_id = ?
+            "#,
+        )
+        .bind(&claims.sub)
+        .fetch_one(&state.pool)
+        .await
+    };
+
+    match (items_result, summary_result) {
+        (Ok(items), Ok(summary)) => (
+            StatusCode::OK,
+            Json(PushQueueResponse {
+                items,
+                summary: PushQueueSummary {
+                    total: summary.total,
+                    pending: summary.pending,
+                    processing: summary.processing,
+                    sent: summary.sent,
+                    failed: summary.failed,
+                },
+            }),
+        )
+            .into_response(),
+        _ => json_error(StatusCode::INTERNAL_SERVER_ERROR, "failed to list push queue"),
     }
 }
 
@@ -406,6 +470,11 @@ mod tests {
         let queue_body: PushQueueResponse = test_support::response_json(queue_response).await;
         assert_eq!(queue_body.items.len(), 1);
         assert_eq!(queue_body.items[0].status, "pending");
+        assert_eq!(queue_body.summary.total, 1);
+        assert_eq!(queue_body.summary.pending, 1);
+        assert_eq!(queue_body.summary.processing, 0);
+        assert_eq!(queue_body.summary.sent, 0);
+        assert_eq!(queue_body.summary.failed, 0);
     }
 
     #[tokio::test]
@@ -536,6 +605,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_returns_vapid_public_key_when_configured() {
+        let _guard = crate::push::webpush::test_env_lock();
         unsafe {
             std::env::set_var(
                 "WEB_PUSH_VAPID_PRIVATE_KEY",
@@ -553,6 +623,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_returns_not_found_when_vapid_public_key_unavailable() {
+        let _guard = crate::push::webpush::test_env_lock();
         unsafe {
             std::env::remove_var("WEB_PUSH_VAPID_PRIVATE_KEY");
             std::env::remove_var("WEB_PUSH_VAPID_SUBJECT");

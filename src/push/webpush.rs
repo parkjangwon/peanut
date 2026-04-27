@@ -68,11 +68,20 @@ fn load_web_push_config() -> Result<WebPushConfig, Box<dyn std::error::Error>> {
 }
 
 #[cfg(test)]
+pub(crate) fn test_env_lock() -> std::sync::MutexGuard<'static, ()> {
+    use std::sync::{Mutex, OnceLock};
+
+    static ENV_MUTEX: OnceLock<Mutex<()>> = OnceLock::new();
+    ENV_MUTEX.get_or_init(|| Mutex::new(())).lock().unwrap()
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
     fn test_load_web_push_config_requires_env() {
+        let _guard = test_env_lock();
         unsafe {
             env::remove_var(WEB_PUSH_VAPID_PRIVATE_KEY);
             env::remove_var(WEB_PUSH_VAPID_SUBJECT);
@@ -83,6 +92,7 @@ mod tests {
 
     #[test]
     fn test_load_web_push_config_validates_subject() {
+        let _guard = test_env_lock();
         unsafe {
             env::set_var(
                 WEB_PUSH_VAPID_PRIVATE_KEY,
@@ -102,6 +112,7 @@ mod tests {
 
     #[test]
     fn test_public_vapid_key_returns_base64url() {
+        let _guard = test_env_lock();
         unsafe {
             env::set_var(
                 WEB_PUSH_VAPID_PRIVATE_KEY,

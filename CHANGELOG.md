@@ -19,7 +19,9 @@ This project does not have a formal release history yet, so the notes below act 
 - release-oriented documentation for Data API, Web Push smoke tests, curl quickstart, and Docker Compose operations
 
 ### Changed
-- auth responses were normalized around a stricter JSON contract
+- push queue worker now treats delivery as successful when at least one subscription succeeds, instead of failing the whole item on the first broken destination
+- queue items with no subscriptions configured now fail terminally instead of burning retry cycles
+- `GET /api/push/queue` now returns queue summary counts for operator visibility
 - `JWT_SECRET` is now treated as required runtime configuration
 - storage is enforced as user-scoped isolation
 - README and README.ko now document current product scope, operational flow, and API usage more explicitly

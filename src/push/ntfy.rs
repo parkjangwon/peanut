@@ -25,20 +25,7 @@ fn build_ntfy_request(
     title: &str,
     body: &str,
 ) -> Result<Request, Box<dyn std::error::Error>> {
-    let url = ntfy_topic_url(topic)?;
-    let mut request = client
-        .post(url)
-        .header("Title", title)
-        .body(body.to_string());
-
-    if let Some(token) = ntfy_auth_token() {
-        request = request.header(
-            AUTHORIZATION,
-            HeaderValue::from_str(&format!("Bearer {token}"))?,
-        );
-    }
-
-    Ok(request.build()?)
+    build_ntfy_request_with_config(client, &ntfy_base_url()?, ntfy_auth_token().as_deref(), topic, title, body)
 }
 
 fn build_ntfy_request_with_config(
@@ -63,11 +50,6 @@ fn build_ntfy_request_with_config(
     }
 
     Ok(request.build()?)
-}
-
-fn ntfy_topic_url(topic: &str) -> Result<String, Box<dyn std::error::Error>> {
-    let base = ntfy_base_url()?;
-    ntfy_topic_url_with_base(&base, topic)
 }
 
 fn ntfy_topic_url_with_base(
