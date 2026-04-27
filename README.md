@@ -95,6 +95,7 @@ What this means for external frontend apps:
   - `GET /api/s3/:bucket?uploads=1&prefix=...&max-uploads=...&key-marker=...&upload-id-marker=...` to list active multipart uploads in a bucket with marker pagination
   - `PUT /api/s3/:bucket/*key` with `x-amz-copy-source: /src-bucket/src-key` to CopyObject into a new key
   - `x-amz-metadata-directive: COPY|REPLACE` is supported for CopyObject metadata behavior
+  - copying an object onto itself now requires `x-amz-metadata-directive: REPLACE`
   - `PUT /api/s3/:bucket/*key?partNumber=N&uploadId=...` to upload parts
   - non-final multipart parts must be at least 5 MiB, matching the usual S3 minimum part-size rule
   - `PUT /api/s3/:bucket/*key?partNumber=N&uploadId=...` with `x-amz-copy-source: /src-bucket/src-key` to CopyPart from an existing object

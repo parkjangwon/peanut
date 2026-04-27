@@ -512,6 +512,18 @@ pub async fn put_bucket_object(
             }
         };
         let source_scoped_bucket = self::scoped_bucket(&claims.sub, &source_bucket);
+        if source_bucket == bucket
+            && source_key == key
+            && metadata_directive == MetadataDirective::Copy
+        {
+            return s3_error_response(
+                StatusCode::BAD_REQUEST,
+                "InvalidRequest",
+                "copying an object onto itself requires x-amz-metadata-directive: REPLACE",
+                &format!("/{bucket}/{key}"),
+                Some(&key),
+            );
+        }
         return match state.storage.get_object(&source_scoped_bucket, &source_key).await {
             Ok(source_object) => {
                 let (target_content_type, target_custom_metadata) = match metadata_directive {
@@ -2944,6 +2956,177 @@ mod tests {
         .unwrap();
         assert_eq!(get_response.status(), StatusCode::OK);
         assert_eq!(response_text(get_response).await, "replace source body");
+    }
+
+    #[tokio::test]
+    async fn test_s3_like_copy_object_rejects_self_copy_without_metadata_change() {
+        let (state, _dir) = test_support::make_test_state().await;
+        let user = register_user(state.clone(), "copy-object-self@example.com").await;
+
+        let app = axum::Router::new()
+            .route(
+                "/api/s3/:bucket/*key",
+                axum::routing::put(put_bucket_object)
+                    .get(get_bucket_object)
+                    .head(head_bucket_object),
+            )
+            .layer(axum::middleware::from_fn_with_state(
+                state.clone(),
+                crate::middleware::s3_auth::s3_auth_middleware,
+            ))
+            .with_state(state.clone());
+
+        let put_signed = crate::middleware::s3_auth::build_signed_header_auth(
+            "PUT",
+            "https://example.com/api/s3/assets/self-copy.txt",
+            &user.user.id,
+            state.jwt_secret.as_str(),
+            None,
+        )
+        .unwrap();
+        let put_response = tower::ServiceExt::oneshot(
+            app.clone(),
+            axum::http::Request::builder()
+                .method("PUT")
+                .uri("/api/s3/assets/self-copy.txt")
+                .header("host", "example.com")
+                .header("authorization", put_signed.authorization)
+                .header("x-amz-date", put_signed.amz_date)
+                .header("x-amz-content-sha256", put_signed.payload_hash)
+                .header(header::CONTENT_TYPE, "text/plain")
+                .header("x-amz-meta-color", "blue")
+                .body(axum::body::Body::from("self copy body"))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(put_response.status(), StatusCode::OK);
+
+        let copy_signed = crate::middleware::s3_auth::build_signed_header_auth(
+            "PUT",
+            "https://example.com/api/s3/assets/self-copy.txt",
+            &user.user.id,
+            state.jwt_secret.as_str(),
+            None,
+        )
+        .unwrap();
+        let copy_response = tower::ServiceExt::oneshot(
+            app,
+            axum::http::Request::builder()
+                .method("PUT")
+                .uri("/api/s3/assets/self-copy.txt")
+                .header("host", "example.com")
+                .header("authorization", copy_signed.authorization)
+                .header("x-amz-date", copy_signed.amz_date)
+                .header("x-amz-content-sha256", copy_signed.payload_hash)
+                .header("x-amz-copy-source", "/assets/self-copy.txt")
+                .body(axum::body::Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(copy_response.status(), StatusCode::BAD_REQUEST);
+        let copy_xml = response_text(copy_response).await;
+        assert!(copy_xml.contains("<Code>InvalidRequest</Code>"));
+    }
+
+    #[tokio::test]
+    async fn test_s3_like_copy_object_allows_self_copy_with_metadata_replace() {
+        let (state, _dir) = test_support::make_test_state().await;
+        let user = register_user(state.clone(), "copy-object-self-replace@example.com").await;
+
+        let app = axum::Router::new()
+            .route(
+                "/api/s3/:bucket/*key",
+                axum::routing::put(put_bucket_object)
+                    .get(get_bucket_object)
+                    .head(head_bucket_object),
+            )
+            .layer(axum::middleware::from_fn_with_state(
+                state.clone(),
+                crate::middleware::s3_auth::s3_auth_middleware,
+            ))
+            .with_state(state.clone());
+
+        let put_signed = crate::middleware::s3_auth::build_signed_header_auth(
+            "PUT",
+            "https://example.com/api/s3/assets/self-copy-replace.txt",
+            &user.user.id,
+            state.jwt_secret.as_str(),
+            None,
+        )
+        .unwrap();
+        let put_response = tower::ServiceExt::oneshot(
+            app.clone(),
+            axum::http::Request::builder()
+                .method("PUT")
+                .uri("/api/s3/assets/self-copy-replace.txt")
+                .header("host", "example.com")
+                .header("authorization", put_signed.authorization)
+                .header("x-amz-date", put_signed.amz_date)
+                .header("x-amz-content-sha256", put_signed.payload_hash)
+                .header(header::CONTENT_TYPE, "text/plain")
+                .header("x-amz-meta-color", "blue")
+                .body(axum::body::Body::from("self copy replace body"))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(put_response.status(), StatusCode::OK);
+
+        let copy_signed = crate::middleware::s3_auth::build_signed_header_auth(
+            "PUT",
+            "https://example.com/api/s3/assets/self-copy-replace.txt",
+            &user.user.id,
+            state.jwt_secret.as_str(),
+            None,
+        )
+        .unwrap();
+        let copy_response = tower::ServiceExt::oneshot(
+            app.clone(),
+            axum::http::Request::builder()
+                .method("PUT")
+                .uri("/api/s3/assets/self-copy-replace.txt")
+                .header("host", "example.com")
+                .header("authorization", copy_signed.authorization)
+                .header("x-amz-date", copy_signed.amz_date)
+                .header("x-amz-content-sha256", copy_signed.payload_hash)
+                .header("x-amz-copy-source", "/assets/self-copy-replace.txt")
+                .header("x-amz-metadata-directive", "REPLACE")
+                .header(header::CONTENT_TYPE, "application/json")
+                .header("x-amz-meta-color", "red")
+                .body(axum::body::Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(copy_response.status(), StatusCode::OK);
+
+        let head_signed = crate::middleware::s3_auth::build_signed_header_auth(
+            "HEAD",
+            "https://example.com/api/s3/assets/self-copy-replace.txt",
+            &user.user.id,
+            state.jwt_secret.as_str(),
+            None,
+        )
+        .unwrap();
+        let head_response = tower::ServiceExt::oneshot(
+            app,
+            axum::http::Request::builder()
+                .method("HEAD")
+                .uri("/api/s3/assets/self-copy-replace.txt")
+                .header("host", "example.com")
+                .header("authorization", head_signed.authorization)
+                .header("x-amz-date", head_signed.amz_date)
+                .header("x-amz-content-sha256", head_signed.payload_hash)
+                .body(axum::body::Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(head_response.status(), StatusCode::OK);
+        assert_eq!(head_response.headers().get(header::CONTENT_TYPE).unwrap(), "application/json");
+        assert_eq!(head_response.headers().get("x-amz-meta-color").unwrap(), "red");
     }
 
     #[tokio::test]

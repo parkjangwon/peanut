@@ -96,6 +96,7 @@ Peanut은 아래 원칙을 지향한다.
   - `GET /api/s3/:bucket?uploads=1&prefix=...&max-uploads=...&key-marker=...&upload-id-marker=...` 로 active multipart upload를 marker pagination과 함께 조회한다
   - `PUT /api/s3/:bucket/*key` 에 `x-amz-copy-source: /src-bucket/src-key` 헤더를 주면 새 key로 CopyObject 한다
   - `x-amz-metadata-directive: COPY|REPLACE` 로 CopyObject 메타데이터 동작을 제어할 수 있다
+  - 같은 object를 자기 자신에게 CopyObject 하는 경우는 `x-amz-metadata-directive: REPLACE` 가 필요하다
   - `PUT /api/s3/:bucket/*key?partNumber=N&uploadId=...` 로 part를 업로드한다
   - 마지막 part를 제외한 multipart part는 S3 관례에 맞춰 최소 5 MiB 이상이어야 한다
   - `PUT /api/s3/:bucket/*key?partNumber=N&uploadId=...` 에 `x-amz-copy-source: /src-bucket/src-key` 헤더를 주면 기존 object에서 CopyPart 한다
