@@ -14,6 +14,7 @@ use crate::api::common::{json_error, json_message};
 use crate::auth::jwt::Claims;
 
 const DEFAULT_STORAGE_BUCKET: &str = "default";
+const TAGGING_STORAGE_V2_PREFIX: &str = "__peanut_tagging_v2__:";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StorageListResponse {
@@ -630,7 +631,18 @@ pub async fn put_bucket_object(
             )
         }
     };
-    let tagging = extract_object_tagging(&headers);
+    let tagging = match extract_object_tagging(&headers) {
+        Ok(value) => value,
+        Err(message) => {
+            return s3_error_response(
+                StatusCode::BAD_REQUEST,
+                "InvalidRequest",
+                &message,
+                &format!("/{bucket}/{key}"),
+                Some(&key),
+            )
+        }
+    };
 
     if let Some(copy_source) = headers
         .get("x-amz-copy-source")
@@ -699,7 +711,18 @@ pub async fn put_bucket_object(
         return match state.storage.get_object(&source_scoped_bucket, &source_key).await {
             Ok(source_object) => {
                 let request_response_headers = extract_standard_response_headers(&headers);
-                let request_tagging = extract_object_tagging(&headers);
+                let request_tagging = match extract_object_tagging(&headers) {
+                    Ok(value) => value,
+                    Err(message) => {
+                        return s3_error_response(
+                            StatusCode::BAD_REQUEST,
+                            "InvalidRequest",
+                            &message,
+                            &format!("/{bucket}/{key}"),
+                            Some(&key),
+                        )
+                    }
+                };
                 let (target_content_type, target_custom_metadata, target_response_headers, target_checksum_sha256, target_checksum_sha1, target_tagging) = match metadata_directive {
                     MetadataDirective::Copy => (
                         source_object.metadata.content_type.clone(),
@@ -1128,7 +1151,6 @@ fn parse_tagging_xml(body: &[u8]) -> Result<Option<String>, String> {
         return Err("missing Tagging root element".to_string());
     }
     let mut pairs = Vec::new();
-    let mut seen_keys = std::collections::BTreeSet::new();
     for chunk in xml.split("<Tag>").skip(1) {
         let Some(inner) = chunk.split_once("</Tag>").map(|(part, _)| part) else {
             return Err("tagging entry is missing </Tag>".to_string());
@@ -1137,8 +1159,19 @@ fn parse_tagging_xml(body: &[u8]) -> Result<Option<String>, String> {
             .ok_or_else(|| "tagging entry is missing Key".to_string())?;
         let value = find_xml_tag_value(inner, "Value")
             .ok_or_else(|| "tagging entry is missing Value".to_string())?;
-        let key = key.trim();
-        let value = value.trim();
+        pairs.push((key.trim().to_string(), value.trim().to_string()));
+    }
+    canonicalize_tagging_pairs(pairs)
+}
+
+fn canonicalize_tagging_pairs(pairs: Vec<(String, String)>) -> Result<Option<String>, String> {
+    if pairs.len() > 10 {
+        return Err("tagging supports at most 10 tags".to_string());
+    }
+
+    let mut normalized = Vec::with_capacity(pairs.len());
+    let mut seen_keys = std::collections::BTreeSet::new();
+    for (key, value) in pairs {
         if key.is_empty() {
             return Err("tagging key must not be empty".to_string());
         }
@@ -1148,26 +1181,55 @@ fn parse_tagging_xml(body: &[u8]) -> Result<Option<String>, String> {
         if value.len() > 256 {
             return Err("tagging value must be 256 characters or fewer".to_string());
         }
-        if !seen_keys.insert(key.to_string()) {
+        if !seen_keys.insert(key.clone()) {
             return Err("duplicate tagging keys are not allowed".to_string());
         }
-        pairs.push(format!("{}={}", key, value));
+        normalized.push((key, value));
     }
-    if pairs.len() > 10 {
-        return Err("tagging supports at most 10 tags".to_string());
-    }
-    Ok((!pairs.is_empty()).then(|| pairs.join("&")))
+
+    Ok((!normalized.is_empty()).then(|| {
+        format!(
+            "{TAGGING_STORAGE_V2_PREFIX}{}",
+            normalized
+                .into_iter()
+                .map(|(key, value)| format!("{}={}", percent_encode_s3(&key), percent_encode_s3(&value)))
+                .collect::<Vec<_>>()
+                .join("&")
+        )
+    }))
+}
+
+fn parse_stored_tagging_pairs(value: &str) -> Vec<(String, String)> {
+    let (stored_value, should_decode) = if let Some(stripped) = value.strip_prefix(TAGGING_STORAGE_V2_PREFIX) {
+        (stripped, true)
+    } else {
+        (value, false)
+    };
+
+    stored_value
+        .split('&')
+        .filter(|pair| !pair.trim().is_empty())
+        .map(|pair| {
+            let (raw_key, raw_value) = pair.split_once('=').unwrap_or((pair, ""));
+            if should_decode {
+                let key = percent_decode(raw_key).unwrap_or_else(|_| raw_key.to_string());
+                let value = percent_decode(raw_value).unwrap_or_else(|_| raw_value.to_string());
+                (key, value)
+            } else {
+                (raw_key.to_string(), raw_value.to_string())
+            }
+        })
+        .collect()
 }
 
 fn s3_get_object_tagging_response(metadata: &crate::storage::local::StorageObjectMetadata) -> Response {
     let mut body = String::from("<?xml version=\"1.0\" encoding=\"UTF-8\"?>");
     body.push_str("<Tagging xmlns=\"http://s3.amazonaws.com/doc/2006-03-01/\"><TagSet>");
     if let Some(tagging) = metadata.tagging.as_deref() {
-        for pair in tagging.split('&').filter(|value| !value.trim().is_empty()) {
-            let (key, value) = pair.split_once('=').unwrap_or((pair, ""));
+        for (key, value) in parse_stored_tagging_pairs(tagging) {
             body.push_str("<Tag>");
-            body.push_str(&format!("<Key>{}</Key>", xml_escape(key)));
-            body.push_str(&format!("<Value>{}</Value>", xml_escape(value)));
+            body.push_str(&format!("<Key>{}</Key>", xml_escape(&key)));
+            body.push_str(&format!("<Value>{}</Value>", xml_escape(&value)));
             body.push_str("</Tag>");
         }
     }
@@ -1740,19 +1802,28 @@ fn validate_checksum_header(
     }
 }
 
-fn extract_object_tagging(headers: &HeaderMap) -> Option<String> {
-    headers
+fn extract_object_tagging(headers: &HeaderMap) -> Result<Option<String>, String> {
+    let Some(value) = headers
         .get("x-amz-tagging")
         .and_then(|value| value.to_str().ok())
         .map(str::trim)
         .filter(|value| !value.is_empty())
-        .map(str::to_string)
+    else {
+        return Ok(None);
+    };
+
+    let mut pairs = Vec::new();
+    for pair in value.split('&').filter(|pair| !pair.trim().is_empty()) {
+        let (raw_key, raw_value) = pair.split_once('=').unwrap_or((pair, ""));
+        let key = percent_decode(raw_key.trim())?;
+        let value = percent_decode(raw_value.trim())?;
+        pairs.push((key, value));
+    }
+    canonicalize_tagging_pairs(pairs)
 }
 
 fn tagging_count(value: Option<&str>) -> usize {
-    value
-        .map(|value| value.split('&').filter(|pair| !pair.trim().is_empty()).count())
-        .unwrap_or(0)
+    value.map(parse_stored_tagging_pairs).map(|pairs| pairs.len()).unwrap_or(0)
 }
 
 fn extract_standard_response_headers(
@@ -4997,6 +5068,123 @@ mod tests {
         assert_eq!(too_many_response.status(), StatusCode::BAD_REQUEST);
         let too_many_body = response_text(too_many_response).await;
         assert!(too_many_body.contains("tagging supports at most 10 tags"));
+    }
+
+    #[tokio::test]
+    async fn test_s3_like_put_object_normalizes_url_encoded_tagging_header_and_get_tagging_decodes_values() {
+        let (state, _dir) = test_support::make_test_state().await;
+        let user = register_user(state.clone(), "tagging-header-encoding@example.com").await;
+        let claims = claims_for(&user.user.id);
+
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            "x-amz-tagging",
+            HeaderValue::from_static("env=dev%20blue&team=peanut%2Fops"),
+        );
+
+        let put_response = put_bucket_object(
+            State(state.clone()),
+            Extension(claims.clone()),
+            axum::extract::Path(("assets".to_string(), "tags/header-encoding.txt".to_string())),
+            RawQuery(None),
+            headers,
+            Bytes::from("hello tagging header"),
+        )
+        .await;
+        assert_eq!(put_response.status(), StatusCode::OK);
+        assert_eq!(put_response.headers().get("x-amz-tagging-count").unwrap(), "2");
+
+        let get_tagging_response = get_bucket_object(
+            State(state.clone()),
+            Extension(claims.clone()),
+            axum::extract::Path(("assets".to_string(), "tags/header-encoding.txt".to_string())),
+            RawQuery(Some("tagging".to_string())),
+            HeaderMap::new(),
+        )
+        .await;
+        assert_eq!(get_tagging_response.status(), StatusCode::OK);
+        let tagging_xml = response_text(get_tagging_response).await;
+        assert!(tagging_xml.contains("<Key>env</Key><Value>dev blue</Value>"));
+        assert!(tagging_xml.contains("<Key>team</Key><Value>peanut/ops</Value>"));
+        assert!(!tagging_xml.contains("dev%20blue"));
+        assert!(!tagging_xml.contains("peanut%2Fops"));
+    }
+
+    #[tokio::test]
+    async fn test_s3_like_put_object_rejects_invalid_percent_encoded_tagging_header() {
+        let (state, _dir) = test_support::make_test_state().await;
+        let user = register_user(state.clone(), "tagging-header-invalid@example.com").await;
+        let claims = claims_for(&user.user.id);
+
+        let mut headers = HeaderMap::new();
+        headers.insert("x-amz-tagging", HeaderValue::from_static("env=bad%ZZvalue"));
+
+        let response = put_bucket_object(
+            State(state),
+            Extension(claims),
+            axum::extract::Path(("assets".to_string(), "tags/header-invalid.txt".to_string())),
+            RawQuery(None),
+            headers,
+            Bytes::from("hello invalid tagging"),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        let xml = response_text(response).await;
+        assert!(xml.contains("invalid percent encoding"));
+    }
+
+    #[tokio::test]
+    async fn test_s3_like_put_object_preserves_leading_and_trailing_spaces_in_encoded_tagging_values() {
+        let (state, _dir) = test_support::make_test_state().await;
+        let user = register_user(state.clone(), "tagging-header-padding@example.com").await;
+        let claims = claims_for(&user.user.id);
+
+        let mut headers = HeaderMap::new();
+        headers.insert("x-amz-tagging", HeaderValue::from_static("label=%20padded%20"));
+
+        let put_response = put_bucket_object(
+            State(state.clone()),
+            Extension(claims.clone()),
+            axum::extract::Path(("assets".to_string(), "tags/header-padding.txt".to_string())),
+            RawQuery(None),
+            headers,
+            Bytes::from("hello padded tagging"),
+        )
+        .await;
+        assert_eq!(put_response.status(), StatusCode::OK);
+
+        let get_tagging_response = get_bucket_object(
+            State(state),
+            Extension(claims),
+            axum::extract::Path(("assets".to_string(), "tags/header-padding.txt".to_string())),
+            RawQuery(Some("tagging".to_string())),
+            HeaderMap::new(),
+        )
+        .await;
+        assert_eq!(get_tagging_response.status(), StatusCode::OK);
+        let tagging_xml = response_text(get_tagging_response).await;
+        assert!(tagging_xml.contains("<Key>label</Key><Value> padded </Value>"));
+    }
+
+    #[test]
+    fn test_s3_get_object_tagging_response_preserves_legacy_raw_percent_sequences() {
+        let metadata = crate::storage::local::StorageObjectMetadata {
+            content_type: "text/plain".to_string(),
+            content_length: 0,
+            etag: "etag".to_string(),
+            created_at: "2026-01-01T00:00:00Z".to_string(),
+            updated_at: "2026-01-01T00:00:00Z".to_string(),
+            custom_metadata: BTreeMap::new(),
+            response_headers: crate::storage::local::StorageObjectResponseHeaders::default(),
+            checksum_sha256: None,
+            checksum_sha1: None,
+            tagging: Some("env=keep%2Fraw".to_string()),
+        };
+
+        let response = s3_get_object_tagging_response(&metadata);
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let xml = runtime.block_on(response_text(response));
+        assert!(xml.contains("<Key>env</Key><Value>keep%2Fraw</Value>"));
     }
 
     #[tokio::test]

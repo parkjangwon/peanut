@@ -119,6 +119,8 @@ What this means for external frontend apps:
 - Peanut now also accepts `x-amz-checksum-sha1` on PUT under the same minimal contract
 - multiple checksum headers on the same PUT are rejected explicitly
 - when `x-amz-tagging` is sent on PUT, Peanut stores a minimal tagging contract and replays the derived `x-amz-tagging-count` on subsequent object responses
+- `x-amz-tagging` is now normalized as URL-encoded query-string style key/value pairs, so values such as spaces or `/` survive round trips through `GET ?tagging`
+- invalid percent-encoding in `x-amz-tagging` is rejected explicitly instead of being stored verbatim
 - Peanut now also supports the object tagging subresource at a minimal level:
   - `GET /api/s3/:bucket/*key?tagging`
   - `PUT /api/s3/:bucket/*key?tagging` with `Tagging` XML

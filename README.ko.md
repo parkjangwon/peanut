@@ -120,6 +120,8 @@ Peanut은 아래 원칙을 지향한다.
 - PUT 시 `x-amz-checksum-sha1` 도 같은 최소 계약으로 지원한다
 - 같은 PUT에 checksum header를 여러 개 보내면 명시적으로 거부한다
 - PUT 시 `x-amz-tagging` 을 보내면 최소 계약으로 tag count를 저장하고 이후 object 응답에서 `x-amz-tagging-count` 로 다시 내려준다
+- `x-amz-tagging` 은 이제 URL-encoded query-string 형태로 정규화되어, 공백이나 `/` 같은 값도 `GET ?tagging` 왕복에서 보존된다
+- `x-amz-tagging` 의 percent-encoding 이 잘못되면 그대로 저장하지 않고 명시적으로 거부한다
 - object tagging subresource도 최소 계약으로 지원한다:
   - `GET /api/s3/:bucket/*key?tagging`
   - `PUT /api/s3/:bucket/*key?tagging` + `Tagging` XML
