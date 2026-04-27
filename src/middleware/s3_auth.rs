@@ -12,6 +12,8 @@ use sqlx::FromRow;
 pub struct PresignRequest {
     pub method: String,
     pub expires_in: Option<u32>,
+    #[serde(default)]
+    pub subresource: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -98,6 +100,7 @@ pub fn build_presigned_url(
             "expires_in must be between 1 and {MAX_PRESIGN_EXPIRES} seconds"
         ));
     }
+    let subresource = normalize_presign_subresource(request.subresource.as_deref())?;
 
     let base_url = base_url.trim_end_matches('/');
     if base_url.is_empty() {
@@ -116,13 +119,17 @@ pub fn build_presigned_url(
     let credential_scope = format!("{short_date}/{REGION}/{SERVICE}/{TERMINATOR}");
     let credential = format!("{access_key}/{credential_scope}");
 
-    let mut params = vec![
+    let mut params = Vec::new();
+    if let Some(subresource) = subresource {
+        params.push((subresource.to_string(), String::new()));
+    }
+    params.extend(vec![
         ("X-Amz-Algorithm".to_string(), SUPPORTED_ALGORITHM.to_string()),
         ("X-Amz-Credential".to_string(), credential),
         ("X-Amz-Date".to_string(), amz_date.clone()),
         ("X-Amz-Expires".to_string(), expires_in.to_string()),
         ("X-Amz-SignedHeaders".to_string(), "host".to_string()),
-    ];
+    ]);
     let canonical_query = canonical_query_string(&params);
     let canonical_request = canonical_request(
         &method,
@@ -401,6 +408,14 @@ async fn load_active_user(
     Ok(user)
 }
 
+fn normalize_presign_subresource(value: Option<&str>) -> Result<Option<&'static str>, String> {
+    match value.map(str::trim).filter(|value| !value.is_empty()) {
+        None => Ok(None),
+        Some(value) if value.eq_ignore_ascii_case("tagging") => Ok(Some("tagging")),
+        Some(_) => Err("subresource must be tagging when provided".to_string()),
+    }
+}
+
 fn normalize_method(method: &str) -> Result<String, String> {
     let method = method.trim().to_uppercase();
     if matches!(method.as_str(), "GET" | "PUT" | "POST" | "HEAD" | "DELETE") {
@@ -518,7 +533,17 @@ fn canonical_query_string(params: &[(String, String)]) -> String {
     pairs.sort_by(|left, right| left.0.cmp(&right.0).then(left.1.cmp(&right.1)));
     pairs
         .into_iter()
-        .map(|(key, value)| format!("{}={}", percent_encode_query_component(&key), percent_encode_query_component(&value)))
+        .map(|(key, value)| {
+            if value.is_empty() {
+                percent_encode_query_component(&key)
+            } else {
+                format!(
+                    "{}={}",
+                    percent_encode_query_component(&key),
+                    percent_encode_query_component(&value)
+                )
+            }
+        })
         .collect::<Vec<_>>()
         .join("&")
 }

@@ -90,6 +90,7 @@ Peanut은 아래 원칙을 지향한다.
   - 삭제
 - `/api/s3/:bucket/*key` 아래에 S3-like path-style endpoint를 추가했다
 - 인증된 클라이언트는 `POST /api/s3/:bucket/*key/presign` 으로 presigned S3-like URL을 만들 수 있다
+- presign helper는 이제 `PUT/GET ...?tagging` 같은 object tagging subresource URL도 만들 수 있다
 - S3-like object route는 bearer auth, SigV4-style `Authorization` header auth, 또는 presigned URL용 SigV4-style query auth를 받을 수 있다
 - S3-like multipart upload는 이제 더 강한 S3 호환 계약을 지원한다:
   - `POST /api/s3/:bucket/*key?uploads` 로 `UploadId`를 발급받는다

@@ -2505,6 +2505,7 @@ mod tests {
         let request = crate::middleware::s3_auth::PresignRequest {
             method: "GET".to_string(),
             expires_in: Some(300),
+            subresource: None,
         };
         let generated = build_presigned_url(
             "https://example.com",
@@ -2541,6 +2542,7 @@ mod tests {
         let request = crate::middleware::s3_auth::PresignRequest {
             method: "GET".to_string(),
             expires_in: Some(300),
+            subresource: None,
         };
         let generated = build_presigned_url(
             "https://example.com",
@@ -2590,6 +2592,7 @@ mod tests {
             Json(crate::middleware::s3_auth::PresignRequest {
                 method: "GET".to_string(),
                 expires_in: Some(300),
+                subresource: None,
             }),
         )
         .await;
@@ -2600,6 +2603,115 @@ mod tests {
         assert!(payload.url.contains("X-Amz-Signature="));
     }
 
+    #[test]
+    fn test_presign_tagging_subresource_generates_query_before_sigv4_params() {
+        let request = crate::middleware::s3_auth::PresignRequest {
+            method: "PUT".to_string(),
+            expires_in: Some(300),
+            subresource: Some("tagging".to_string()),
+        };
+        let generated = build_presigned_url(
+            "https://example.com",
+            "user-123",
+            "assets",
+            "notes/file.txt",
+            &request,
+            "test-secret",
+        )
+        .unwrap();
+        assert!(generated.url.contains("/api/s3/assets/notes/file.txt?"));
+        assert!(generated.url.contains("tagging"));
+        assert!(generated.url.contains("X-Amz-Algorithm=AWS4-HMAC-SHA256"));
+    }
+
+    #[tokio::test]
+    async fn test_presigned_put_tagging_round_trip_uses_sigv4_query_auth() {
+        let (state, _dir) = test_support::make_test_state().await;
+        let user = register_user(state.clone(), "presign-tagging@example.com").await;
+        let claims = claims_for(&user.user.id);
+
+        let put_object_response = put_bucket_object(
+            State(state.clone()),
+            Extension(claims),
+            axum::extract::Path(("assets".to_string(), "notes/presigned-tagging.txt".to_string())),
+            RawQuery(None),
+            HeaderMap::new(),
+            Bytes::from("hello presigned tagging"),
+        )
+        .await;
+        assert_eq!(put_object_response.status(), StatusCode::OK);
+
+        let put_request = crate::middleware::s3_auth::PresignRequest {
+            method: "PUT".to_string(),
+            expires_in: Some(300),
+            subresource: Some("tagging".to_string()),
+        };
+        let put_generated = build_presigned_url(
+            "https://example.com",
+            &user.user.id,
+            "assets",
+            "notes/presigned-tagging.txt",
+            &put_request,
+            state.jwt_secret.as_str(),
+        )
+        .unwrap();
+
+        let app = axum::Router::new()
+            .route(
+                "/api/s3/:bucket/*key",
+                axum::routing::put(put_bucket_object).get(get_bucket_object),
+            )
+            .layer(axum::middleware::from_fn_with_state(
+                state.clone(),
+                crate::middleware::s3_auth::s3_auth_middleware,
+            ))
+            .with_state(state.clone());
+
+        let tagging_body = r#"<Tagging><TagSet><Tag><Key>env</Key><Value>presigned</Value></Tag></TagSet></Tagging>"#;
+        let put_uri = put_generated.url.replace("https://example.com", "");
+        let put_response = tower::ServiceExt::oneshot(
+            app.clone(),
+            axum::http::Request::builder()
+                .method("PUT")
+                .uri(put_uri)
+                .header("host", "example.com")
+                .body(axum::body::Body::from(tagging_body))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(put_response.status(), StatusCode::OK);
+
+        let get_request = crate::middleware::s3_auth::PresignRequest {
+            method: "GET".to_string(),
+            expires_in: Some(300),
+            subresource: Some("tagging".to_string()),
+        };
+        let get_generated = build_presigned_url(
+            "https://example.com",
+            &user.user.id,
+            "assets",
+            "notes/presigned-tagging.txt",
+            &get_request,
+            state.jwt_secret.as_str(),
+        )
+        .unwrap();
+        let get_uri = get_generated.url.replace("https://example.com", "");
+        let get_response = tower::ServiceExt::oneshot(
+            app,
+            axum::http::Request::builder()
+                .uri(get_uri)
+                .header("host", "example.com")
+                .body(axum::body::Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(get_response.status(), StatusCode::OK);
+        let xml = response_text(get_response).await;
+        assert!(xml.contains("<Key>env</Key><Value>presigned</Value>"));
+    }
+
     #[tokio::test]
     async fn test_presigned_put_round_trip_uses_sigv4_query_auth() {
         let (state, _dir) = test_support::make_test_state().await;
@@ -2608,6 +2720,7 @@ mod tests {
         let request = crate::middleware::s3_auth::PresignRequest {
             method: "PUT".to_string(),
             expires_in: Some(300),
+            subresource: None,
         };
         let generated = build_presigned_url(
             "https://example.com",
