@@ -13,6 +13,8 @@ See also:
 - `docs/auth-client.ko.md`
 - `examples/auth-client-web/`
 
+The browser example now includes an optional `x-peanut-client-id` field so you can test auth-client policy without adding your own frontend first.
+
 ## 1. Auth model
 
 Peanut currently provides:
@@ -43,6 +45,8 @@ If you enable auth client/origin policy:
 - send an `Origin` header from the browser or reverse proxy that exactly matches one of `AUTH_ALLOWED_ORIGINS`
 - send `x-peanut-client-id` on app-facing auth requests when `AUTH_ALLOWED_CLIENT_IDS` is configured
 - Peanut enforces this on `/api/register`, `/api/login`, `/api/me`, and `/api/auth/*`
+- the bundled browser example exposes a dedicated client-id input for this header
+- if `AUTH_ALLOWED_ORIGINS` is enabled, serve the example from one of those allowed origins instead of opening it as `file://`
 
 ### Good default for a simple prototype
 - keep the access token in memory

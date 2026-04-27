@@ -18,7 +18,7 @@ The goal is not to become a giant backend platform. The goal is to give a solo d
 Peanut is built around a few constraints:
 
 1. Single-binary deployment
-   - the Rust server serves both the API and the embedded admin console
+   - the Rust server ships the full backend in one binary and serves an API-first landing page at `/`
 2. Low operational complexity
    - SQLite + local storage instead of mandatory external services
 3. Honest feature scope
@@ -88,7 +88,7 @@ What this means for external frontend apps:
   - fetch objects
   - delete objects
 - S3-like path-style endpoints are now also available under `/api/s3/:bucket/*key`
-- authenticated clients can now mint presigned S3-like URLs through `POST /api/s3/:bucket/*key/presign`
+- authenticated clients can now mint presigned S3-like URLs through `POST /api/s3/:bucket/presign/*key`
 - the presign helper now also supports object tagging subresource URLs for flows like `PUT/GET/DELETE ...?tagging`
 - the presign helper now also supports a minimal multipart-compatible query contract:
   - `POST ...?uploads`
@@ -167,6 +167,7 @@ Current capabilities:
 - `GET /api/data/tables/:table/rows`
 - `POST /api/data/tables/:table/rows`
 - `GET /api/data/tables/:table/events`
+- `GET /api/data/tables/:table/events/checkpoint`
 - `GET /api/data/tables/:table/events/stream`
 - `GET /api/data/tables/:table/rows/:row_id`
 - `PATCH /api/data/tables/:table/rows/:row_id`
@@ -177,6 +178,7 @@ Current model:
 - rows are stored in Peanut-managed SQLite tables
 - `owner_private` policy isolates rows per authenticated user
 - row mutations are recorded in an internal event log
+- admin APIs can fetch the latest durable row-event checkpoint through `GET /api/data/tables/:table/events/checkpoint` before attaching a realtime consumer
 - admin APIs can replay row mutations from `GET /api/data/tables/:table/events?since_id=<event_id>` for resume/sync flows
 - admin APIs can subscribe to row mutation events through `GET /api/data/tables/:table/events/stream` (SSE), with event ids included in each payload
 - admin APIs can persist reusable query presets per table for repeated operator workflows
@@ -530,8 +532,7 @@ Admin snapshot import:
 │   ├── middleware/
 │   ├── push/
 │   └── storage/
-├── locales/
-└── peanut-console/
+└── locales/
 ```
 
 ## Configuration
@@ -557,24 +558,29 @@ See `.env.example` for a starter config.
 
 ## API quickstart with curl
 
-This is the fastest way to exercise Peanut without opening the console.
+This is the fastest way to exercise Peanut without relying on any browser UI.
 
 ```bash
 export BASE_URL=http://127.0.0.1:3000
+export CLIENT_ID=peanut-web-dev
 
 # 1) register first admin
 curl -s -X POST "$BASE_URL/api/register" \
   -H 'content-type: application/json' \
-  -d '{"email":"admin@example.com","password":"your-password"}'
+  -H "x-peanut-client-id: $CLIENT_ID" \
+  -d '{"email":"admin@example.com","password": "***"}'
 
 # 2) login
-curl -s -X POST "$BASE_URL/api/login" \
+LOGIN_JSON=$(curl -s -X POST "$BASE_URL/api/login" \
   -H 'content-type: application/json' \
-  -d '{"email":"admin@example.com","password":"your-password"}'
+  -H "x-peanut-client-id: $CLIENT_ID" \
+  -d '{"email":"admin@example.com","password": "***"}')
 
-# 3) copy access_token from the login response, then use it below
+# 3) copy access_token from the login response and paste it below
+
+# 4) create a table
 curl -s -X POST "$BASE_URL/api/data/tables" \
-  -H 'authorization: Bearer <ACCESS_TOKEN>' \
+  -H 'authorization: Bearer <PASTE_ACCESS_TOKEN_HERE>' \
   -H 'content-type: application/json' \
   -d '{
     "name": "todos",
@@ -588,19 +594,20 @@ curl -s -X POST "$BASE_URL/api/data/tables" \
     "access_policy": { "mode": "owner_private" }
   }'
 
-# 4) insert a row
+# 5) insert a row
 curl -s -X POST "$BASE_URL/api/data/tables/todos/rows" \
   -H "content-type: application/json" \
-  -H "authorization: Bearer YOUR_ACCESS_TOKEN" \
+  -H 'authorization: Bearer <PASTE_ACCESS_TOKEN_HERE>' \
   -d '{"title":"buy milk"}'
 
-# 5) query rows with filtering, search, and offset
+# 6) query rows with filtering, search, and offset
 curl -s "$BASE_URL/api/data/tables/todos/rows?search=buy&filter_field=title&filter_op=starts_with&filter_value=buy&order_by=title&order=asc&limit=10&offset=0" \
-  -H "authorization: Bearer YOUR_ACCESS_TOKEN"
+  -H 'authorization: Bearer <PASTE_ACCESS_TOKEN_HERE>'
 ```
 
 Quick notes:
 - the first registered user becomes active admin automatically
+- if `AUTH_ALLOWED_CLIENT_IDS` is enabled, keep sending `x-peanut-client-id` on auth routes like the example above
 - `owner_private` rows are scoped to the authenticated user
 - the same bearer token works for storage, data, push, and session endpoints
 - for a full external frontend auth flow, see `docs/auth-client.md` and `examples/auth-client-web/`
@@ -609,21 +616,11 @@ Quick notes:
 
 ### Prerequisites
 - Rust toolchain
-- Node.js + npm
 
 ### Run tests
 
 ```bash
 cargo test
-```
-
-### Build the console only
-
-```bash
-cd peanut-console
-npm install
-npm run lint
-npm run build
 ```
 
 ### Build the full project
@@ -720,12 +717,12 @@ Before shipping a change, verify:
 
 ```bash
 cargo test
-cd peanut-console && npm run lint && npm run build && cd ..
 ./scripts/build.sh
+node --check examples/auth-client-web/app.js
 ```
 
 Manual smoke test:
-1. open the console
+1. open `/` and confirm the API-first landing page renders
 2. register first admin
 3. login
 4. create a data table
@@ -733,6 +730,7 @@ Manual smoke test:
 6. verify title filter or generic field filter works
 7. subscribe an ntfy topic and enqueue a push message
 8. if VAPID is configured, confirm the public key auto-loads and try browser or manual Web Push subscription
+9. if auth client policy is enabled, verify `examples/auth-client-web/` works with `x-peanut-client-id`
 
 ## Backups and operations
 

@@ -18,7 +18,7 @@ Peanut은 거대한 범용 플랫폼이 아니라, 작고 이해 가능하며 �
 Peanut은 아래 원칙을 지향한다.
 
 1. 단일 바이너리 배포
-   - Rust 서버가 API와 콘솔을 함께 서빙한다
+   - Rust 서버 하나로 전체 백엔드를 제공하고 `/` 에 API-first 랜딩 페이지를 서빙한다
 2. 낮은 운영 복잡도
    - SQLite + local storage로 시작한다
 3. 정직한 기능 범위
@@ -89,7 +89,7 @@ Peanut은 아래 원칙을 지향한다.
   - 읽기
   - 삭제
 - `/api/s3/:bucket/*key` 아래에 S3-like path-style endpoint를 추가했다
-- 인증된 클라이언트는 `POST /api/s3/:bucket/*key/presign` 으로 presigned S3-like URL을 만들 수 있다
+- 인증된 클라이언트는 `POST /api/s3/:bucket/presign/*key` 으로 presigned S3-like URL을 만들 수 있다
 - presign helper는 이제 `PUT/GET/DELETE ...?tagging` 같은 object tagging subresource URL도 만들 수 있다
 - presign helper는 이제 아래 multipart 호환 query 계약도 최소 범위로 지원한다:
   - `POST ...?uploads`
@@ -168,6 +168,7 @@ Peanut은 이제 Peanut이 관리하는 logical table용 제한된 SQLite 기반
 - `GET /api/data/tables/:table/rows`
 - `POST /api/data/tables/:table/rows`
 - `GET /api/data/tables/:table/events`
+- `GET /api/data/tables/:table/events/checkpoint`
 - `GET /api/data/tables/:table/events/stream`
 - `GET /api/data/tables/:table/rows/:row_id`
 - `PATCH /api/data/tables/:table/rows/:row_id`
@@ -178,6 +179,7 @@ Peanut은 이제 Peanut이 관리하는 logical table용 제한된 SQLite 기반
 - row는 Peanut이 관리하는 SQLite 테이블에 저장된다
 - `owner_private` 정책은 인증 유저별 row 격리를 제공한다
 - row 변경은 내부 이벤트 로그에 기록된다
+- admin API는 `GET /api/data/tables/:table/events/checkpoint` 로 최신 durable row-event checkpoint를 먼저 확인한 뒤 realtime consumer를 붙일 수 있다
 - admin API는 `GET /api/data/tables/:table/events?since_id=<event_id>`로 row mutation을 재생해서 resume/sync 흐름에 사용할 수 있다
 - admin API로 `GET /api/data/tables/:table/events/stream`에서 row mutation 실시간 이벤트를 SSE로 구독할 수 있고, 각 payload에는 event id가 포함된다
 - admin API로 table별 reusable query preset을 저장해 반복 조회에 재사용할 수 있다
@@ -526,8 +528,7 @@ admin snapshot import:
 │   ├── middleware/
 │   ├── push/
 │   └── storage/
-├── locales/
-└── peanut-console/
+└── locales/
 ```
 
 ## 환경변수
@@ -555,20 +556,25 @@ admin snapshot import:
 
 ```bash
 export BASE_URL=http://127.0.0.1:3000
+export CLIENT_ID=peanut-web-dev
 
 # 1) 첫 admin 등록
 curl -s -X POST "$BASE_URL/api/register" \
   -H 'content-type: application/json' \
-  -d '{"email":"admin@example.com","password":"your-password"}'
+  -H "x-peanut-client-id: $CLIENT_ID" \
+  -d '{"email":"admin@example.com","password": "***"}'
 
 # 2) 로그인
-curl -s -X POST "$BASE_URL/api/login" \
+LOGIN_JSON=$(curl -s -X POST "$BASE_URL/api/login" \
   -H 'content-type: application/json' \
-  -d '{"email":"admin@example.com","password":"your-password"}'
+  -H "x-peanut-client-id: $CLIENT_ID" \
+  -d '{"email":"admin@example.com","password": "***"}')
 
-# 3) login 응답의 access_token 값을 아래에 넣어서 table 생성
+# 3) login 응답의 access_token 값을 복사해서 아래에 넣기
+
+# 4) access token으로 table 생성
 curl -s -X POST "$BASE_URL/api/data/tables" \
-  -H 'authorization: Bearer <ACCESS_TOKEN>' \
+  -H 'authorization: Bearer <PASTE_ACCESS_TOKEN_HERE>' \
   -H 'content-type: application/json' \
   -d '{
     "name": "todos",
@@ -582,19 +588,20 @@ curl -s -X POST "$BASE_URL/api/data/tables" \
     "access_policy": { "mode": "owner_private" }
   }'
 
-# 4) row 추가
+# 5) row 추가
 curl -s -X POST "$BASE_URL/api/data/tables/todos/rows" \
   -H "content-type: application/json" \
-  -H "authorization: Bearer YOUR_ACCESS_TOKEN" \
+  -H 'authorization: Bearer <PASTE_ACCESS_TOKEN_HERE>' \
   -d '{"title":"buy milk"}'
 
-# 5) filter/search/offset으로 row 조회
+# 6) filter/search/offset으로 row 조회
 curl -s "$BASE_URL/api/data/tables/todos/rows?search=buy&filter_field=title&filter_op=starts_with&filter_value=buy&order_by=title&order=asc&limit=10&offset=0" \
-  -H "authorization: Bearer YOUR_ACCESS_TOKEN"
+  -H 'authorization: Bearer <PASTE_ACCESS_TOKEN_HERE>'
 ```
 
 짧은 메모:
 - 첫 등록 유저는 자동으로 active admin이 된다
+- `AUTH_ALLOWED_CLIENT_IDS` 를 켠 경우 위 예시처럼 auth route에 `x-peanut-client-id` 를 계속 보내야 한다
 - `owner_private` row는 인증 유저 기준으로 격리된다
 - 같은 bearer token으로 storage, data, push, session 엔드포인트를 함께 호출할 수 있다
 - 외부 프론트 auth 전체 흐름은 `docs/auth-client.ko.md`와 `examples/auth-client-web/` 참고
@@ -603,21 +610,11 @@ curl -s "$BASE_URL/api/data/tables/todos/rows?search=buy&filter_field=title&filt
 
 ### 필요 조건
 - Rust toolchain
-- Node.js + npm
 
 ### 테스트
 
 ```bash
 cargo test
-```
-
-### 콘솔만 빌드
-
-```bash
-cd peanut-console
-npm install
-npm run lint
-npm run build
 ```
 
 ### 전체 빌드
@@ -712,12 +709,12 @@ docker compose start
 
 ```bash
 cargo test
-cd peanut-console && npm run lint && npm run build && cd ..
 ./scripts/build.sh
+node --check examples/auth-client-web/app.js
 ```
 
 수동 확인:
-1. 콘솔 열기
+1. `/` 를 열어 API-first 랜딩 페이지가 뜨는지 확인
 2. 첫 admin 유저 등록
 3. 로그인
 4. data table 생성
@@ -725,6 +722,7 @@ cd peanut-console && npm run lint && npm run build && cd ..
 6. title filter 또는 generic field filter 동작 확인
 7. ntfy topic 구독 후 push queue 메시지 전송
 8. VAPID가 설정돼 있으면 public key 자동 로드와 browser/manual Web Push subscription 확인
+9. auth client policy를 켰다면 `examples/auth-client-web/` 에서 `x-peanut-client-id` 연동까지 확인
 
 ## 백업과 운영
 

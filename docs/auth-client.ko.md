@@ -13,6 +13,8 @@ Peanut은 이제 외부 프론트 앱이 붙을 수 있는 auth backend로 사�
 - `docs/auth-client.md`
 - `examples/auth-client-web/`
 
+브라우저 예제는 이제 선택적인 `x-peanut-client-id` 입력도 제공해서, 별도 프론트를 만들기 전에도 auth client policy를 바로 검증할 수 있다.
+
 ## 1. 현재 Auth 모델
 
 Peanut이 현재 제공하는 엔드포인트:
@@ -43,6 +45,8 @@ auth client/origin policy를 켠 경우:
 - 브라우저 또는 리버스 프록시에서 `AUTH_ALLOWED_ORIGINS` 중 하나와 정확히 일치하는 `Origin` 헤더를 보내야 한다
 - `AUTH_ALLOWED_CLIENT_IDS` 를 설정했다면 앱 쪽 auth 요청에 `x-peanut-client-id` 헤더를 보내야 한다
 - Peanut은 `/api/register`, `/api/login`, `/api/me`, `/api/auth/*` 에 이 정책을 적용한다
+- 제공되는 브라우저 예제에도 이 헤더를 위한 client id 입력칸이 포함돼 있다
+- `AUTH_ALLOWED_ORIGINS` 를 켰다면 이 예제를 `file://` 로 직접 여는 대신 허용된 origin 중 하나에서 서빙해야 한다
 
 ### 간단한 프로토타입 기본값
 - access token은 메모리에 저장

@@ -5,6 +5,7 @@ This example is a tiny dependency-free browser client for Peanut Auth.
 It demonstrates:
 - register
 - login
+- optional `x-peanut-client-id` auth header for auth-client policy testing
 - authenticated `GET /api/me`
 - refresh token rotation
 - logout
@@ -18,6 +19,8 @@ It demonstrates:
 1. Start Peanut locally.
 2. Open `index.html` directly in a browser, or serve this directory with a static file server.
 3. Set the Peanut base URL, usually `http://127.0.0.1:3000`.
+4. If Peanut uses `AUTH_ALLOWED_CLIENT_IDS`, also set the client id field before using auth routes.
+5. If Peanut uses `AUTH_ALLOWED_ORIGINS`, serve this example from one of those allowed origins instead of opening it as `file://`.
 
 ## Why this example is intentionally simple
 

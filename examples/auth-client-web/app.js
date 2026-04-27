@@ -6,9 +6,11 @@ const authState = {
 };
 
 let baseUrl = 'http://127.0.0.1:3000';
+let clientId = 'peanut-web-dev';
 
 const els = {
   baseUrl: document.querySelector('#baseUrl'),
+  clientId: document.querySelector('#clientId'),
   email: document.querySelector('#email'),
   password: document.querySelector('#password'),
   currentPassword: document.querySelector('#currentPassword'),
@@ -18,6 +20,7 @@ const els = {
   stateOutput: document.querySelector('#stateOutput'),
   accessState: document.querySelector('#accessState'),
   refreshState: document.querySelector('#refreshState'),
+  clientIdState: document.querySelector('#clientIdState'),
 };
 
 function setOutput(value) {
@@ -27,9 +30,11 @@ function setOutput(value) {
 function renderState() {
   els.accessState.textContent = authState.accessToken ? 'present' : 'empty';
   els.refreshState.textContent = authState.refreshToken ? 'present' : 'empty';
+  els.clientIdState.textContent = clientId || 'empty';
   els.stateOutput.textContent = JSON.stringify(
     {
       baseUrl,
+      clientId: clientId || null,
       user: authState.user,
       sessions: authState.sessions,
       accessTokenPreview: authState.accessToken ? `${authState.accessToken.slice(0, 24)}...` : null,
@@ -68,6 +73,9 @@ async function rawRequest(path, init = {}) {
   const headers = new Headers(init.headers || {});
   if (!headers.has('Content-Type') && init.body) {
     headers.set('Content-Type', 'application/json');
+  }
+  if (clientId) {
+    headers.set('x-peanut-client-id', clientId);
   }
   if (authState.accessToken) {
     headers.set('Authorization', `Bearer ${authState.accessToken}`);
@@ -254,8 +262,9 @@ async function resetPassword() {
 
 function saveBaseUrl() {
   baseUrl = (els.baseUrl.value || '').trim().replace(/\/$/, '');
+  clientId = (els.clientId.value || '').trim();
   renderState();
-  setOutput({ ok: true, baseUrl });
+  setOutput({ ok: true, baseUrl, clientId: clientId || null });
 }
 
 document.querySelector('#saveBaseUrl').addEventListener('click', () => run('saveBaseUrl', saveBaseUrl));
@@ -274,5 +283,6 @@ document.querySelector('#resetPassword').addEventListener('click', () => run('re
 renderState();
 setOutput({
   message: 'Ready. Set the Peanut base URL, then register or login.',
+  auth_client_policy_hint: 'If AUTH_ALLOWED_CLIENT_IDS is enabled on the server, keep the client id field filled so the example sends x-peanut-client-id.',
   production_note: 'This example stores tokens in memory only. Prefer a BFF or secure cookie strategy for production refresh tokens.',
 });

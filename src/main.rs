@@ -16,10 +16,12 @@ rust_i18n::i18n!("locales", fallback = "en");
 
 use axum::{
     extract::DefaultBodyLimit,
+    http::{header, HeaderName, HeaderValue, Method},
     routing::{delete, get, head, patch, post, put},
     Router,
 };
 use std::sync::Arc;
+use tower_http::cors::{Any, CorsLayer};
 use tracing_subscriber;
 
 #[derive(Clone)]
@@ -42,6 +44,7 @@ async fn main() {
 
     let config = crate::config::load_config_from_env()
         .unwrap_or_else(|message| panic!("Invalid Peanut configuration: {message}"));
+    let cors_layer = build_cors_layer(&config.auth_allowed_origins);
 
     tokio::fs::create_dir_all(&config.storage_dir)
         .await
@@ -77,7 +80,7 @@ async fn main() {
         .route("/storage/*key", put(api::storage::put_object))
         .route("/storage/*key", delete(api::storage::delete_object))
         .route(
-            "/s3/:bucket/*key/presign",
+            "/s3/:bucket/presign/*key",
             post(api::storage::create_presigned_url),
         )
         .layer(DefaultBodyLimit::max(config.max_upload_bytes));
@@ -267,6 +270,7 @@ async fn main() {
         .layer(axum::middleware::from_fn(
             crate::middleware::request_id::request_id_middleware,
         ))
+        .layer(cors_layer)
         .with_state(state);
 
     tracing::info!("Listening on {}", config.bind_addr);
@@ -275,4 +279,34 @@ async fn main() {
         .await
         .unwrap();
     axum::serve(listener, app).await.unwrap();
+}
+
+fn build_cors_layer(auth_allowed_origins: &[String]) -> CorsLayer {
+    let allow_headers = [
+        header::AUTHORIZATION,
+        header::CONTENT_TYPE,
+        HeaderName::from_static("x-peanut-client-id"),
+    ];
+
+    let base = CorsLayer::new()
+        .allow_methods([
+            Method::GET,
+            Method::POST,
+            Method::PUT,
+            Method::PATCH,
+            Method::DELETE,
+            Method::OPTIONS,
+            Method::HEAD,
+        ])
+        .allow_headers(allow_headers);
+
+    if auth_allowed_origins.is_empty() {
+        base.allow_origin(Any)
+    } else {
+        let origins = auth_allowed_origins
+            .iter()
+            .filter_map(|origin| HeaderValue::from_str(origin).ok())
+            .collect::<Vec<_>>();
+        base.allow_origin(origins)
+    }
 }

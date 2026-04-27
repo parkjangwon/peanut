@@ -123,6 +123,8 @@
           <h2>Connection</h2>
           <label for="baseUrl">Peanut base URL</label>
           <input id="baseUrl" value="http://127.0.0.1:3000" />
+          <label for="clientId">Optional auth client id</label>
+          <input id="clientId" value="peanut-web-dev" placeholder="send x-peanut-client-id when needed" />
           <div class="row">
             <button id="saveBaseUrl" class="primary">Save base URL</button>
             <button id="loadMe">Load me</button>
@@ -174,6 +176,7 @@
           <h2>Current auth state</h2>
           <div class="pill">access token in memory: <strong id="accessState">empty</strong></div>
           <div class="pill">refresh token in memory: <strong id="refreshState">empty</strong></div>
+          <div class="pill">client id header: <strong id="clientIdState">empty</strong></div>
           <pre id="stateOutput"></pre>
         </section>
 
