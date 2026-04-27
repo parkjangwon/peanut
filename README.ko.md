@@ -91,14 +91,15 @@ Peanut은 아래 원칙을 지향한다.
 - `/api/s3/:bucket/*key` 아래에 S3-like path-style endpoint를 추가했다
 - 인증된 클라이언트는 `POST /api/s3/:bucket/*key/presign` 으로 presigned S3-like URL을 만들 수 있다
 - S3-like object route는 bearer auth, SigV4-style `Authorization` header auth, 또는 presigned URL용 SigV4-style query auth를 받을 수 있다
-- S3-like multipart upload 1차 계약도 추가했다:
+- S3-like multipart upload는 이제 더 강한 S3 호환 계약을 지원한다:
   - `POST /api/s3/:bucket/*key?uploads` 로 `UploadId`를 발급받는다
-  - `GET /api/s3/:bucket?uploads=1&prefix=...` 로 bucket의 active multipart upload를 조회한다
+  - `GET /api/s3/:bucket?uploads=1&prefix=...&max-uploads=...&key-marker=...&upload-id-marker=...` 로 active multipart upload를 marker pagination과 함께 조회한다
   - `PUT /api/s3/:bucket/*key?partNumber=N&uploadId=...` 로 part를 업로드한다
-  - `GET /api/s3/:bucket/*key?uploadId=...` 로 해당 upload의 staged part 목록을 조회한다
+  - `PUT /api/s3/:bucket/*key?partNumber=N&uploadId=...` 에 `x-amz-copy-source: /src-bucket/src-key` 헤더를 주면 기존 object에서 CopyPart 한다
+  - `GET /api/s3/:bucket/*key?uploadId=...&max-parts=...&part-number-marker=...` 로 staged part 목록을 marker pagination과 함께 조회한다
   - `POST /api/s3/:bucket/*key?uploadId=...` 에 `CompleteMultipartUpload` XML을 보내 최종 object를 조립한다
   - `DELETE /api/s3/:bucket/*key?uploadId=...` 로 staging upload를 중단한다
-- multipart complete 응답의 ETag는 현재 AWS의 multipart composite ETag가 아니라 최종 조립 object의 ETag를 돌려준다
+- multipart complete는 이제 최종 조립 object hash 대신 multipart composite ETag(`etag-partcount`)를 응답/저장한다
 - S3-like object 응답은 content-type, content-length, ETag, last-modified 메타데이터를 포함한다
 - S3-like 성공/에러 응답은 `x-amz-request-id` 헤더를 포함하고, object `Last-Modified` 헤더는 HTTP-date 형식으로 내려간다
 - S3-like bucket listing은 `list-type=2`, `prefix`, `delimiter`, `max-keys`, `continuation-token`을 지원한다

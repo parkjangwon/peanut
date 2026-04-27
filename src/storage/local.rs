@@ -129,7 +129,7 @@ impl LocalStorage {
                 .unwrap_or("application/octet-stream")
                 .to_string(),
             content_length: data.len() as u64,
-            etag: compute_etag(data),
+            etag: compute_sha256_etag(data),
             created_at: previous_metadata
                 .as_ref()
                 .map(|value| value.created_at.clone())
@@ -138,9 +138,7 @@ impl LocalStorage {
         };
 
         tokio::fs::write(&path, data).await?;
-        let encoded = serde_json::to_vec(&metadata)
-            .map_err(|err| io::Error::new(io::ErrorKind::Other, err.to_string()))?;
-        tokio::fs::write(&metadata_path, encoded).await?;
+        self.write_metadata(bucket, key, &metadata).await?;
         Ok(metadata)
     }
 
@@ -276,7 +274,7 @@ impl LocalStorage {
         }
         let metadata = MultipartUploadPart {
             part_number,
-            etag: compute_etag(data),
+            etag: compute_multipart_part_etag(data),
             size: data.len() as u64,
         };
         tokio::fs::write(&part_path, data).await?;
@@ -302,6 +300,7 @@ impl LocalStorage {
         let upload = self.read_multipart_upload(bucket, key, upload_id).await?;
         let mut assembled = Vec::new();
         let mut previous_part_number = 0;
+        let mut stored_parts = Vec::with_capacity(parts.len());
         for part in parts {
             if part.part_number == 0 {
                 return Err(io::Error::new(
@@ -324,10 +323,13 @@ impl LocalStorage {
                 ));
             }
             assembled.extend_from_slice(&stored_part.1);
+            stored_parts.push(stored_part.0);
         }
-        let metadata = self
+        let mut metadata = self
             .put_object(bucket, &upload.key, &assembled, Some(upload.content_type.as_str()))
             .await?;
+        metadata.etag = compute_multipart_composite_etag(&stored_parts)?;
+        self.write_metadata(bucket, &upload.key, &metadata).await?;
         self.abort_multipart_upload(bucket, key, upload_id).await?;
         Ok(metadata)
     }
@@ -418,6 +420,21 @@ impl LocalStorage {
         let raw = tokio::fs::read(metadata_path).await?;
         serde_json::from_slice(&raw)
             .map_err(|err| io::Error::new(io::ErrorKind::Other, err.to_string()))
+    }
+
+    async fn write_metadata(
+        &self,
+        bucket: &str,
+        key: &str,
+        metadata: &StorageObjectMetadata,
+    ) -> io::Result<()> {
+        let metadata_path = self.resolve_metadata_path(bucket, key)?;
+        if let Some(parent) = metadata_path.parent() {
+            tokio::fs::create_dir_all(parent).await?;
+        }
+        let encoded = serde_json::to_vec(metadata)
+            .map_err(|err| io::Error::new(io::ErrorKind::Other, err.to_string()))?;
+        tokio::fs::write(metadata_path, encoded).await
     }
 
     fn multipart_bucket_root(&self, bucket: &str) -> io::Result<PathBuf> {
@@ -659,9 +676,53 @@ fn build_list_entries(
     entries
 }
 
-fn compute_etag(data: &[u8]) -> String {
+fn compute_sha256_etag(data: &[u8]) -> String {
     let digest = openssl::sha::sha256(data);
-    digest.iter().map(|byte| format!("{byte:02x}")).collect()
+    hex_encode(&digest)
+}
+
+fn compute_multipart_part_etag(data: &[u8]) -> String {
+    let digest = openssl::hash::hash(openssl::hash::MessageDigest::md5(), data)
+        .expect("md5 hashing should succeed");
+    hex_encode(digest.as_ref())
+}
+
+fn compute_multipart_composite_etag(parts: &[MultipartUploadPart]) -> io::Result<String> {
+    let mut concatenated = Vec::with_capacity(parts.len() * 16);
+    for part in parts {
+        concatenated.extend_from_slice(&decode_hex(&part.etag)?);
+    }
+    let digest = openssl::hash::hash(openssl::hash::MessageDigest::md5(), &concatenated)
+        .expect("md5 hashing should succeed");
+    Ok(format!("{}-{}", hex_encode(digest.as_ref()), parts.len()))
+}
+
+fn hex_encode(bytes: &[u8]) -> String {
+    bytes.iter().map(|byte| format!("{byte:02x}")).collect()
+}
+
+fn decode_hex(value: &str) -> io::Result<Vec<u8>> {
+    if value.len() % 2 != 0 {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "multipart etag must be an even-length hex string",
+        ));
+    }
+
+    let mut decoded = Vec::with_capacity(value.len() / 2);
+    let mut chars = value.as_bytes().chunks_exact(2);
+    for chunk in &mut chars {
+        let pair = std::str::from_utf8(chunk)
+            .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "multipart etag must be valid UTF-8"))?;
+        let byte = u8::from_str_radix(pair, 16).map_err(|_| {
+            io::Error::new(
+                io::ErrorKind::InvalidData,
+                "multipart etag must be a valid hex string",
+            )
+        })?;
+        decoded.push(byte);
+    }
+    Ok(decoded)
 }
 
 fn collect_bucket_objects(

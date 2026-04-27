@@ -90,14 +90,15 @@ What this means for external frontend apps:
 - S3-like path-style endpoints are now also available under `/api/s3/:bucket/*key`
 - authenticated clients can now mint presigned S3-like URLs through `POST /api/s3/:bucket/*key/presign`
 - S3-like object routes now accept either bearer auth, SigV4-style `Authorization` header auth, or SigV4-style query auth from presigned URLs
-- S3-like multipart upload now supports a first-pass contract:
+- S3-like multipart upload now supports a stronger S3-compatible contract:
   - `POST /api/s3/:bucket/*key?uploads` to initiate and receive an `UploadId`
-  - `GET /api/s3/:bucket?uploads=1&prefix=...` to list active multipart uploads in a bucket
+  - `GET /api/s3/:bucket?uploads=1&prefix=...&max-uploads=...&key-marker=...&upload-id-marker=...` to list active multipart uploads in a bucket with marker pagination
   - `PUT /api/s3/:bucket/*key?partNumber=N&uploadId=...` to upload parts
-  - `GET /api/s3/:bucket/*key?uploadId=...` to list staged parts for an upload
+  - `PUT /api/s3/:bucket/*key?partNumber=N&uploadId=...` with `x-amz-copy-source: /src-bucket/src-key` to CopyPart from an existing object
+  - `GET /api/s3/:bucket/*key?uploadId=...&max-parts=...&part-number-marker=...` to list staged parts for an upload with marker pagination
   - `POST /api/s3/:bucket/*key?uploadId=...` with `CompleteMultipartUpload` XML to assemble the final object
   - `DELETE /api/s3/:bucket/*key?uploadId=...` to abort a staged upload
-- multipart completion currently returns the final assembled object ETag rather than AWS's multipart-composite ETag format
+- multipart completion now returns and persists a multipart-composite ETag (`etag-partcount`) instead of the final assembled object hash
 - S3-like object responses now include content-type, content-length, ETag, and last-modified metadata
 - S3-like success/error responses now also include `x-amz-request-id` headers, and object `Last-Modified` headers are emitted as HTTP-date strings
 - S3-like bucket listing supports `list-type=2`, `prefix`, `delimiter`, `max-keys`, and `continuation-token`
