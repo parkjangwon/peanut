@@ -202,6 +202,20 @@ impl LocalStorage {
         self.read_metadata(bucket, key).await
     }
 
+    pub async fn set_object_tagging(
+        &self,
+        bucket: &str,
+        key: &str,
+        tagging: Option<String>,
+    ) -> io::Result<StorageObjectMetadata> {
+        let path = self.resolve_object_path(bucket, key)?;
+        let _ = tokio::fs::metadata(path).await?;
+        let mut metadata = self.read_metadata(bucket, key).await?;
+        metadata.tagging = tagging;
+        self.write_metadata(bucket, key, &metadata).await?;
+        Ok(metadata)
+    }
+
     pub async fn delete_object(&self, bucket: &str, key: &str) -> io::Result<()> {
         let path = self.resolve_object_path(bucket, key)?;
         let metadata_path = self.resolve_metadata_path(bucket, key)?;

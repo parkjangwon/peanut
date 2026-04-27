@@ -295,6 +295,32 @@ pub async fn get_bucket_object(
     headers: HeaderMap,
 ) -> Response {
     let scoped_bucket = scoped_bucket(&claims.sub, &bucket);
+    if is_tagging_subresource(raw_query.as_deref()) {
+        return match state.storage.head_object(&scoped_bucket, &key).await {
+            Ok(metadata) => s3_get_object_tagging_response(&metadata),
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => s3_error_response(
+                StatusCode::NOT_FOUND,
+                "NoSuchKey",
+                "object not found",
+                &format!("/{bucket}/{key}"),
+                Some(&key),
+            ),
+            Err(err) if err.kind() == std::io::ErrorKind::InvalidInput => s3_error_response(
+                StatusCode::BAD_REQUEST,
+                "InvalidObjectName",
+                &err.to_string(),
+                &format!("/{bucket}/{key}"),
+                Some(&key),
+            ),
+            Err(_) => s3_error_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "InternalError",
+                "failed to read object tagging",
+                &format!("/{bucket}/{key}"),
+                Some(&key),
+            ),
+        };
+    }
     let query = match parse_multipart_query(raw_query.as_deref()) {
         Ok(query) => query,
         Err(message) => {
@@ -522,6 +548,47 @@ pub async fn put_bucket_object(
     headers: HeaderMap,
     body: Bytes,
 ) -> Response {
+    let scoped_bucket = scoped_bucket(&claims.sub, &bucket);
+    if is_tagging_subresource(raw_query.as_deref()) {
+        let tagging = match parse_tagging_xml(&body) {
+            Ok(value) => value,
+            Err(message) => {
+                return s3_error_response(
+                    StatusCode::BAD_REQUEST,
+                    "MalformedXML",
+                    &message,
+                    &format!("/{bucket}/{key}"),
+                    Some(&key),
+                )
+            }
+        };
+        return match state.storage.set_object_tagging(&scoped_bucket, &key, tagging).await {
+            Ok(_) => apply_s3_response_headers(Response::builder().status(StatusCode::OK))
+                .body(axum::body::Body::empty())
+                .unwrap(),
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => s3_error_response(
+                StatusCode::NOT_FOUND,
+                "NoSuchKey",
+                "object not found",
+                &format!("/{bucket}/{key}"),
+                Some(&key),
+            ),
+            Err(err) if err.kind() == std::io::ErrorKind::InvalidInput => s3_error_response(
+                StatusCode::BAD_REQUEST,
+                "InvalidObjectName",
+                &err.to_string(),
+                &format!("/{bucket}/{key}"),
+                Some(&key),
+            ),
+            Err(_) => s3_error_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "InternalError",
+                "failed to update object tagging",
+                &format!("/{bucket}/{key}"),
+                Some(&key),
+            ),
+        };
+    }
     let query = match parse_multipart_query(raw_query.as_deref()) {
         Ok(query) => query,
         Err(message) => {
@@ -534,7 +601,6 @@ pub async fn put_bucket_object(
             )
         }
     };
-    let scoped_bucket = scoped_bucket(&claims.sub, &bucket);
     let content_type_header = headers
         .get(header::CONTENT_TYPE)
         .and_then(|value| value.to_str().ok());
@@ -878,6 +944,33 @@ pub async fn delete_bucket_object(
     Path((bucket, key)): Path<(String, String)>,
     RawQuery(raw_query): RawQuery,
 ) -> Response {
+    let scoped_bucket = scoped_bucket(&claims.sub, &bucket);
+    if is_tagging_subresource(raw_query.as_deref()) {
+        return match state.storage.set_object_tagging(&scoped_bucket, &key, None).await {
+            Ok(_) => StatusCode::NO_CONTENT.into_response(),
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => s3_error_response(
+                StatusCode::NOT_FOUND,
+                "NoSuchKey",
+                "object not found",
+                &format!("/{bucket}/{key}"),
+                Some(&key),
+            ),
+            Err(err) if err.kind() == std::io::ErrorKind::InvalidInput => s3_error_response(
+                StatusCode::BAD_REQUEST,
+                "InvalidObjectName",
+                &err.to_string(),
+                &format!("/{bucket}/{key}"),
+                Some(&key),
+            ),
+            Err(_) => s3_error_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "InternalError",
+                "failed to delete object tagging",
+                &format!("/{bucket}/{key}"),
+                Some(&key),
+            ),
+        };
+    }
     let query = match parse_multipart_query(raw_query.as_deref()) {
         Ok(query) => query,
         Err(message) => {
@@ -890,7 +983,6 @@ pub async fn delete_bucket_object(
             )
         }
     };
-    let scoped_bucket = scoped_bucket(&claims.sub, &bucket);
 
     if let Some(upload_id) = query.upload_id.as_deref() {
         return match state
@@ -1004,6 +1096,56 @@ fn build_presigned_url(
         payload,
         jwt_secret,
     )
+}
+
+fn is_tagging_subresource(raw_query: Option<&str>) -> bool {
+    raw_query
+        .unwrap_or_default()
+        .split('&')
+        .filter(|value| !value.is_empty())
+        .any(|part| part == "tagging" || part.starts_with("tagging="))
+}
+
+fn parse_tagging_xml(body: &[u8]) -> Result<Option<String>, String> {
+    let xml = String::from_utf8(body.to_vec()).map_err(|_| "tagging body must be valid UTF-8".to_string())?;
+    if !xml.contains("<Tagging") {
+        return Err("missing Tagging root element".to_string());
+    }
+    let mut pairs = Vec::new();
+    for chunk in xml.split("<Tag>").skip(1) {
+        let Some(inner) = chunk.split_once("</Tag>").map(|(part, _)| part) else {
+            return Err("tagging entry is missing </Tag>".to_string());
+        };
+        let key = find_xml_tag_value(inner, "Key")
+            .ok_or_else(|| "tagging entry is missing Key".to_string())?;
+        let value = find_xml_tag_value(inner, "Value")
+            .ok_or_else(|| "tagging entry is missing Value".to_string())?;
+        if key.trim().is_empty() {
+            return Err("tagging key must not be empty".to_string());
+        }
+        pairs.push(format!("{}={}", key.trim(), value.trim()));
+    }
+    Ok((!pairs.is_empty()).then(|| pairs.join("&")))
+}
+
+fn s3_get_object_tagging_response(metadata: &crate::storage::local::StorageObjectMetadata) -> Response {
+    let mut body = String::from("<?xml version=\"1.0\" encoding=\"UTF-8\"?>");
+    body.push_str("<Tagging xmlns=\"http://s3.amazonaws.com/doc/2006-03-01/\"><TagSet>");
+    if let Some(tagging) = metadata.tagging.as_deref() {
+        for pair in tagging.split('&').filter(|value| !value.trim().is_empty()) {
+            let (key, value) = pair.split_once('=').unwrap_or((pair, ""));
+            body.push_str("<Tag>");
+            body.push_str(&format!("<Key>{}</Key>", xml_escape(key)));
+            body.push_str(&format!("<Value>{}</Value>", xml_escape(value)));
+            body.push_str("</Tag>");
+        }
+    }
+    body.push_str("</TagSet></Tagging>");
+
+    apply_s3_response_headers(Response::builder().status(StatusCode::OK))
+        .header(header::CONTENT_TYPE, "application/xml")
+        .body(axum::body::Body::from(body))
+        .unwrap()
 }
 
 #[derive(Debug, Default)]
@@ -4584,6 +4726,102 @@ mod tests {
         .unwrap();
         assert_eq!(head_response.status(), StatusCode::OK);
         assert!(head_response.headers().get(header::ETAG).is_some());
+    }
+
+    #[tokio::test]
+    async fn test_s3_like_object_tagging_subresource_round_trip() {
+        let (state, _dir) = test_support::make_test_state().await;
+        let user = register_user(state.clone(), "tagging-subresource@example.com").await;
+        let claims = claims_for(&user.user.id);
+
+        let put_response = put_bucket_object(
+            State(state.clone()),
+            Extension(claims.clone()),
+            axum::extract::Path(("assets".to_string(), "tags/demo.txt".to_string())),
+            RawQuery(None),
+            HeaderMap::new(),
+            Bytes::from("tag me"),
+        )
+        .await;
+        assert_eq!(put_response.status(), StatusCode::OK);
+
+        let tagging_xml = r#"<Tagging><TagSet><Tag><Key>color</Key><Value>blue</Value></Tag><Tag><Key>team</Key><Value>peanut</Value></Tag></TagSet></Tagging>"#;
+        let tagging_put = put_bucket_object(
+            State(state.clone()),
+            Extension(claims.clone()),
+            axum::extract::Path(("assets".to_string(), "tags/demo.txt".to_string())),
+            RawQuery(Some("tagging".to_string())),
+            HeaderMap::new(),
+            Bytes::from(tagging_xml),
+        )
+        .await;
+        assert_eq!(tagging_put.status(), StatusCode::OK);
+
+        let tagging_get = get_bucket_object(
+            State(state.clone()),
+            Extension(claims.clone()),
+            axum::extract::Path(("assets".to_string(), "tags/demo.txt".to_string())),
+            RawQuery(Some("tagging".to_string())),
+            HeaderMap::new(),
+        )
+        .await;
+        assert_eq!(tagging_get.status(), StatusCode::OK);
+        let tagging_xml = response_text(tagging_get).await;
+        assert!(tagging_xml.contains("<Tagging xmlns="));
+        assert!(tagging_xml.contains("<Key>color</Key><Value>blue</Value>"));
+        assert!(tagging_xml.contains("<Key>team</Key><Value>peanut</Value>"));
+
+        let delete_response = delete_bucket_object(
+            State(state.clone()),
+            Extension(claims.clone()),
+            axum::extract::Path(("assets".to_string(), "tags/demo.txt".to_string())),
+            RawQuery(Some("tagging".to_string())),
+        )
+        .await;
+        assert_eq!(delete_response.status(), StatusCode::NO_CONTENT);
+
+        let tagging_get_after_delete = get_bucket_object(
+            State(state),
+            Extension(claims),
+            axum::extract::Path(("assets".to_string(), "tags/demo.txt".to_string())),
+            RawQuery(Some("tagging".to_string())),
+            HeaderMap::new(),
+        )
+        .await;
+        assert_eq!(tagging_get_after_delete.status(), StatusCode::OK);
+        let empty_xml = response_text(tagging_get_after_delete).await;
+        assert!(empty_xml.contains("<TagSet></TagSet>") || empty_xml.contains("<TagSet/>"));
+    }
+
+    #[tokio::test]
+    async fn test_s3_like_put_object_rejects_invalid_tagging_xml() {
+        let (state, _dir) = test_support::make_test_state().await;
+        let user = register_user(state.clone(), "tagging-invalid@example.com").await;
+        let claims = claims_for(&user.user.id);
+
+        let put_response = put_bucket_object(
+            State(state.clone()),
+            Extension(claims.clone()),
+            axum::extract::Path(("assets".to_string(), "tags/invalid.txt".to_string())),
+            RawQuery(None),
+            HeaderMap::new(),
+            Bytes::from("tag me"),
+        )
+        .await;
+        assert_eq!(put_response.status(), StatusCode::OK);
+
+        let bad_tagging = put_bucket_object(
+            State(state),
+            Extension(claims),
+            axum::extract::Path(("assets".to_string(), "tags/invalid.txt".to_string())),
+            RawQuery(Some("tagging".to_string())),
+            HeaderMap::new(),
+            Bytes::from("<Tagging><TagSet><Tag><Key>color</Key></Tag></TagSet></Tagging>"),
+        )
+        .await;
+        assert_eq!(bad_tagging.status(), StatusCode::BAD_REQUEST);
+        let xml = response_text(bad_tagging).await;
+        assert!(xml.contains("<Code>MalformedXML</Code>"));
     }
 
     #[tokio::test]
