@@ -2,7 +2,7 @@ use crate::push::{ntfy::send_ntfy_notification, webpush::send_web_push};
 use sqlx::SqlitePool;
 use std::{future::Future, time::Duration};
 use tokio::time::sleep;
-use web_push::SubscriptionInfo;
+use web_push::{SubscriptionInfo, WebPushError};
 
 const MAX_RETRIES: i64 = 3;
 const CLAIM_TIMEOUT_SECONDS: i64 = 120;
@@ -40,6 +40,12 @@ pub async fn process_queue(pool: &SqlitePool) -> Result<(), Box<dyn std::error::
         |subscription, title, body| async move { send_web_push(subscription, &title, &body).await },
     )
     .await
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DeliveryOutcome {
+    SubscriptionGone,
+    Failure,
 }
 
 async fn process_queue_with_deliveries<NtfyFn, NtfyFuture, WebPushFn, WebPushFuture>(
@@ -94,6 +100,7 @@ where
 
         let mut success_count = 0usize;
         let mut errors = Vec::new();
+        let mut dead_subscription_endpoints = Vec::new();
         for subscription in subscriptions {
             let delivery_result = if is_web_push_subscription(&subscription) {
                 let subscription_info = SubscriptionInfo::new(
@@ -112,20 +119,35 @@ where
                 .await
             };
 
-            match delivery_result {
+            let delivery_error = match delivery_result {
                 Ok(()) => {
                     success_count += 1;
+                    None
                 }
-                Err(error) => {
-                    tracing::warn!(
-                        "Failed to send notification for queue item {} to subscription {}: {}",
-                        item.id,
-                        subscription.endpoint,
-                        error
-                    );
-                    errors.push(format!("{}: {}", subscription.endpoint, error));
+                Err(error) => Some({
+                    let outcome = classify_delivery_error(&error);
+                    let error_message = error.to_string();
+                    (outcome, error_message)
+                }),
+            };
+
+            if let Some((outcome, error_message)) = delivery_error {
+                tracing::warn!(
+                    "Failed to send notification for queue item {} to subscription {}: {}",
+                    item.id,
+                    subscription.endpoint,
+                    error_message
+                );
+                errors.push(format!("{}: {}", subscription.endpoint, error_message));
+
+                if outcome == DeliveryOutcome::SubscriptionGone {
+                    dead_subscription_endpoints.push(subscription.endpoint.clone());
                 }
             }
+        }
+
+        for endpoint in dead_subscription_endpoints {
+            delete_subscription_by_endpoint(pool, &item.user_id, &endpoint).await?;
         }
 
         if success_count > 0 {
@@ -151,6 +173,33 @@ where
 
 fn is_web_push_subscription(subscription: &SubscriptionRow) -> bool {
     !(subscription.p256dh.is_empty() && subscription.auth.is_empty())
+}
+
+fn classify_delivery_error(error: &Box<dyn std::error::Error>) -> DeliveryOutcome {
+    if let Some(web_push_error) = error.downcast_ref::<WebPushError>() {
+        match web_push_error {
+            WebPushError::EndpointNotValid | WebPushError::EndpointNotFound => {
+                return DeliveryOutcome::SubscriptionGone;
+            }
+            _ => {}
+        }
+    }
+
+    DeliveryOutcome::Failure
+}
+
+async fn delete_subscription_by_endpoint(
+    pool: &SqlitePool,
+    user_id: &str,
+    endpoint: &str,
+) -> Result<(), sqlx::Error> {
+    sqlx::query("DELETE FROM push_subscriptions WHERE user_id = ? AND endpoint = ?")
+        .bind(user_id)
+        .bind(endpoint)
+        .execute(pool)
+        .await?;
+
+    Ok(())
 }
 
 async fn reclaim_stale_processing_items(pool: &SqlitePool) -> Result<(), sqlx::Error> {
@@ -373,6 +422,114 @@ mod tests {
         assert_eq!(row.0, "sent");
         assert_eq!(row.1, 0);
         assert_eq!(row.2, None);
+    }
+
+    #[tokio::test]
+    async fn test_process_queue_deletes_dead_web_push_subscriptions() {
+        let pool = crate::db::init_db("sqlite::memory:").await.unwrap();
+        insert_user(&pool, "user-1").await;
+
+        sqlx::query(
+            "INSERT INTO push_subscriptions (user_id, endpoint, p256dh, auth) VALUES (?, ?, ?, ?)",
+        )
+        .bind("user-1")
+        .bind("https://example.invalid/dead-push")
+        .bind("p256dh")
+        .bind("auth")
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        sqlx::query(
+            "INSERT INTO push_queue (user_id, title, body, status, retry_count) VALUES (?, ?, ?, 'pending', 0)",
+        )
+        .bind("user-1")
+        .bind("hello")
+        .bind("world")
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        process_queue_with_deliveries(
+            &pool,
+            |_topic, _title, _body| async move { Ok(()) },
+            |_subscription, _title, _body| async move {
+                Err(Box::new(web_push::WebPushError::EndpointNotValid)
+                    as Box<dyn std::error::Error>)
+            },
+        )
+        .await
+        .unwrap();
+
+        let remaining_subscriptions: (i64,) = sqlx::query_as(
+            "SELECT COUNT(*) FROM push_subscriptions WHERE user_id = ? AND endpoint = ?",
+        )
+        .bind("user-1")
+        .bind("https://example.invalid/dead-push")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(remaining_subscriptions.0, 0);
+
+        let row: (String, Option<String>) =
+            sqlx::query_as("SELECT status, last_error FROM push_queue WHERE user_id = ?")
+                .bind("user-1")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(row.0, "pending");
+        assert_eq!(
+            row.1.as_deref(),
+            Some("https://example.invalid/dead-push: The URL specified is no longer valid and should no longer be used")
+        );
+    }
+
+    #[tokio::test]
+    async fn test_process_queue_deletes_not_found_web_push_subscriptions() {
+        let pool = crate::db::init_db("sqlite::memory:").await.unwrap();
+        insert_user(&pool, "user-1").await;
+
+        sqlx::query(
+            "INSERT INTO push_subscriptions (user_id, endpoint, p256dh, auth) VALUES (?, ?, ?, ?)",
+        )
+        .bind("user-1")
+        .bind("https://example.invalid/missing-push")
+        .bind("p256dh")
+        .bind("auth")
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        sqlx::query(
+            "INSERT INTO push_queue (user_id, title, body, status, retry_count) VALUES (?, ?, ?, 'pending', 0)",
+        )
+        .bind("user-1")
+        .bind("hello")
+        .bind("world")
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        process_queue_with_deliveries(
+            &pool,
+            |_topic, _title, _body| async move { Ok(()) },
+            |_subscription, _title, _body| async move {
+                Err(Box::new(web_push::WebPushError::EndpointNotFound)
+                    as Box<dyn std::error::Error>)
+            },
+        )
+        .await
+        .unwrap();
+
+        let remaining_subscriptions: (i64,) = sqlx::query_as(
+            "SELECT COUNT(*) FROM push_subscriptions WHERE user_id = ? AND endpoint = ?",
+        )
+        .bind("user-1")
+        .bind("https://example.invalid/missing-push")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(remaining_subscriptions.0, 0);
     }
 
     #[test]

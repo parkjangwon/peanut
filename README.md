@@ -242,10 +242,11 @@ What this means:
 - clients can fetch `GET /api/push/vapid-public-key` to bootstrap browser `PushManager.subscribe(...)`
 - push messages are queued in SQLite
 - a background worker delivers queue items to ntfy or Web Push subscriptions
-- `GET /api/push/queue` now also returns a `summary` block with total/pending/processing/sent/failed counts
+- `GET /api/push/queue` now also returns a `summary` block with total/pending/processing/sent/failed/partial_success counts
 - queue items no longer fail just because one destination failed; if at least one subscription accepts the delivery, the queue item is marked sent
 - queue items with no subscriptions configured now fail terminally instead of pointlessly retrying
 - queue status, retries, and last error are visible through the API and console
+- dead Web Push subscriptions that return terminal 404/410-style errors are automatically removed from the subscription table
 - even when a queue item is marked `sent`, partial-delivery failures are preserved in `last_error` so operators can spot dead destinations without losing the successful delivery
 
 What this does not mean yet:

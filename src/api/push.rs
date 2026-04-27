@@ -4,7 +4,9 @@ use axum::{
     response::{IntoResponse, Response},
     Extension, Json,
 };
-use base64::{engine::general_purpose::URL_SAFE, engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
+use base64::{
+    engine::general_purpose::URL_SAFE, engine::general_purpose::URL_SAFE_NO_PAD, Engine as _,
+};
 use serde::{Deserialize, Serialize};
 use sqlx::FromRow;
 use sqlx::SqlitePool;
@@ -24,6 +26,7 @@ pub struct PushQueueSummary {
     pub processing: i64,
     pub sent: i64,
     pub failed: i64,
+    pub partial_success: i64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -66,6 +69,7 @@ struct PushQueueSummaryRow {
     processing: i64,
     sent: i64,
     failed: i64,
+    partial_success: i64,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -123,10 +127,15 @@ pub async fn list_subscriptions(
     .fetch_all(&state.pool)
     .await
     {
-        Ok(subscriptions) => {
-            (StatusCode::OK, Json(PushSubscriptionsResponse { subscriptions })).into_response()
-        }
-        Err(_) => json_error(StatusCode::INTERNAL_SERVER_ERROR, "failed to list subscriptions"),
+        Ok(subscriptions) => (
+            StatusCode::OK,
+            Json(PushSubscriptionsResponse { subscriptions }),
+        )
+            .into_response(),
+        Err(_) => json_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "failed to list subscriptions",
+        ),
     }
 }
 
@@ -146,9 +155,15 @@ pub async fn create_subscription(
                 .await
                 .map(|created| {
                     if created {
-                        (StatusCode::CREATED, format!("subscribed to topic {}", topic))
+                        (
+                            StatusCode::CREATED,
+                            format!("subscribed to topic {}", topic),
+                        )
                     } else {
-                        (StatusCode::OK, format!("subscription already up to date for topic {}", topic))
+                        (
+                            StatusCode::OK,
+                            format!("subscription already up to date for topic {}", topic),
+                        )
                     }
                 })
         }
@@ -167,9 +182,15 @@ pub async fn create_subscription(
             .await
             .map(|created| {
                 if created {
-                    (StatusCode::CREATED, "saved web push subscription".to_string())
+                    (
+                        StatusCode::CREATED,
+                        "saved web push subscription".to_string(),
+                    )
                 } else {
-                    (StatusCode::OK, "updated existing web push subscription".to_string())
+                    (
+                        StatusCode::OK,
+                        "updated existing web push subscription".to_string(),
+                    )
                 }
             })
         }
@@ -177,7 +198,10 @@ pub async fn create_subscription(
 
     match result {
         Ok((status, message)) => json_message(status, message),
-        Err(_) => json_error(StatusCode::INTERNAL_SERVER_ERROR, "failed to save subscription"),
+        Err(_) => json_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "failed to save subscription",
+        ),
     }
 }
 
@@ -228,8 +252,14 @@ pub async fn delete_subscription(
         Ok(result) if result.rows_affected() == 0 => {
             json_error(StatusCode::NOT_FOUND, "subscription not found")
         }
-        Ok(_) => json_message(StatusCode::OK, format!("deleted subscription {}", subscription_id)),
-        Err(_) => json_error(StatusCode::INTERNAL_SERVER_ERROR, "failed to delete subscription"),
+        Ok(_) => json_message(
+            StatusCode::OK,
+            format!("deleted subscription {}", subscription_id),
+        ),
+        Err(_) => json_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "failed to delete subscription",
+        ),
     }
 }
 
@@ -259,7 +289,12 @@ pub async fn enqueue_message(
         .await
     {
         Ok(user) => user,
-        Err(_) => return json_error(StatusCode::INTERNAL_SERVER_ERROR, "failed to verify target user"),
+        Err(_) => {
+            return json_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "failed to verify target user",
+            )
+        }
     };
 
     if user_exists.is_none() {
@@ -307,7 +342,8 @@ pub async fn list_queue(
                 COALESCE(SUM(CASE WHEN status = 'pending' THEN 1 ELSE 0 END), 0) AS pending,
                 COALESCE(SUM(CASE WHEN status = 'processing' THEN 1 ELSE 0 END), 0) AS processing,
                 COALESCE(SUM(CASE WHEN status = 'sent' THEN 1 ELSE 0 END), 0) AS sent,
-                COALESCE(SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END), 0) AS failed
+                COALESCE(SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END), 0) AS failed,
+                COALESCE(SUM(CASE WHEN status = 'sent' AND last_error LIKE 'partial delivery failures:%' THEN 1 ELSE 0 END), 0) AS partial_success
             FROM push_queue
             "#,
         )
@@ -321,7 +357,8 @@ pub async fn list_queue(
                 COALESCE(SUM(CASE WHEN status = 'pending' THEN 1 ELSE 0 END), 0) AS pending,
                 COALESCE(SUM(CASE WHEN status = 'processing' THEN 1 ELSE 0 END), 0) AS processing,
                 COALESCE(SUM(CASE WHEN status = 'sent' THEN 1 ELSE 0 END), 0) AS sent,
-                COALESCE(SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END), 0) AS failed
+                COALESCE(SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END), 0) AS failed,
+                COALESCE(SUM(CASE WHEN status = 'sent' AND last_error LIKE 'partial delivery failures:%' THEN 1 ELSE 0 END), 0) AS partial_success
             FROM push_queue
             WHERE user_id = ?
             "#,
@@ -342,18 +379,27 @@ pub async fn list_queue(
                     processing: summary.processing,
                     sent: summary.sent,
                     failed: summary.failed,
+                    partial_success: summary.partial_success,
                 },
             }),
         )
             .into_response(),
-        _ => json_error(StatusCode::INTERNAL_SERVER_ERROR, "failed to list push queue"),
+        _ => json_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "failed to list push queue",
+        ),
     }
 }
 
 pub async fn get_vapid_public_key() -> Response {
     match crate::push::webpush::public_vapid_key() {
-        Ok(public_key) => (StatusCode::OK, Json(VapidPublicKeyResponse { public_key })).into_response(),
-        Err(_) => json_error(StatusCode::NOT_FOUND, "web push public key is not configured"),
+        Ok(public_key) => {
+            (StatusCode::OK, Json(VapidPublicKeyResponse { public_key })).into_response()
+        }
+        Err(_) => json_error(
+            StatusCode::NOT_FOUND,
+            "web push public key is not configured",
+        ),
     }
 }
 
@@ -368,7 +414,10 @@ pub fn validate_topic(topic: &str) -> Result<(), String> {
         .chars()
         .all(|ch| ch.is_ascii_lowercase() || ch.is_ascii_digit() || ch == '-' || ch == '_')
     {
-        return Err("topic may only contain lowercase letters, digits, hyphens, and underscores".to_string());
+        return Err(
+            "topic may only contain lowercase letters, digits, hyphens, and underscores"
+                .to_string(),
+        );
     }
     Ok(())
 }
@@ -448,11 +497,18 @@ mod tests {
         .await;
         assert_eq!(create_response.status(), StatusCode::CREATED);
 
-        let list_response = list_subscriptions(State(state.clone()), Extension(claims(&admin.user.id, true))).await;
+        let list_response = list_subscriptions(
+            State(state.clone()),
+            Extension(claims(&admin.user.id, true)),
+        )
+        .await;
         let list_body: PushSubscriptionsResponse = test_support::response_json(list_response).await;
         assert_eq!(list_body.subscriptions.len(), 1);
         assert_eq!(list_body.subscriptions[0].kind, "ntfy");
-        assert_eq!(list_body.subscriptions[0].topic.as_deref(), Some("alerts_main"));
+        assert_eq!(
+            list_body.subscriptions[0].topic.as_deref(),
+            Some("alerts_main")
+        );
 
         let enqueue_response = enqueue_message(
             State(state.clone()),
@@ -466,7 +522,8 @@ mod tests {
         .await;
         assert_eq!(enqueue_response.status(), StatusCode::CREATED);
 
-        let queue_response = list_queue(State(state), Extension(claims(&admin.user.id, true))).await;
+        let queue_response =
+            list_queue(State(state), Extension(claims(&admin.user.id, true))).await;
         let queue_body: PushQueueResponse = test_support::response_json(queue_response).await;
         assert_eq!(queue_body.items.len(), 1);
         assert_eq!(queue_body.items[0].status, "pending");
@@ -474,6 +531,39 @@ mod tests {
         assert_eq!(queue_body.summary.pending, 1);
         assert_eq!(queue_body.summary.processing, 0);
         assert_eq!(queue_body.summary.sent, 0);
+        assert_eq!(queue_body.summary.failed, 0);
+        assert_eq!(queue_body.summary.partial_success, 0);
+    }
+
+    #[tokio::test]
+    async fn test_queue_summary_counts_partial_success_items() {
+        let (state, _dir) = test_support::make_test_state().await;
+        let admin = auth::register(
+            State(state.clone()),
+            Json(auth::RegisterRequest {
+                email: "admin@example.com".to_string(),
+                password: "secret123".to_string(),
+            }),
+        )
+        .await;
+        let admin: auth::RegisterResponse = test_support::response_json(admin).await;
+
+        sqlx::query(
+            "INSERT INTO push_queue (user_id, title, body, status, retry_count, last_error) VALUES (?, ?, ?, 'sent', 0, 'partial delivery failures: https://example.invalid/push: gone')",
+        )
+        .bind(&admin.user.id)
+        .bind("hello")
+        .bind("world")
+        .execute(&state.pool)
+        .await
+        .unwrap();
+
+        let queue_response =
+            list_queue(State(state), Extension(claims(&admin.user.id, true))).await;
+        let queue_body: PushQueueResponse = test_support::response_json(queue_response).await;
+        assert_eq!(queue_body.summary.total, 1);
+        assert_eq!(queue_body.summary.sent, 1);
+        assert_eq!(queue_body.summary.partial_success, 1);
         assert_eq!(queue_body.summary.failed, 0);
     }
 
@@ -505,7 +595,8 @@ mod tests {
         .await;
         assert_eq!(response.status(), StatusCode::CREATED);
 
-        let list_response = list_subscriptions(State(state), Extension(claims(&admin.user.id, true))).await;
+        let list_response =
+            list_subscriptions(State(state), Extension(claims(&admin.user.id, true))).await;
         let list_body: PushSubscriptionsResponse = test_support::response_json(list_response).await;
         assert_eq!(list_body.subscriptions.len(), 1);
         assert_eq!(list_body.subscriptions[0].kind, "web_push");
@@ -559,7 +650,11 @@ mod tests {
         .await;
         assert_eq!(second_response.status(), StatusCode::OK);
 
-        let list_response = list_subscriptions(State(state.clone()), Extension(claims(&admin.user.id, true))).await;
+        let list_response = list_subscriptions(
+            State(state.clone()),
+            Extension(claims(&admin.user.id, true)),
+        )
+        .await;
         let list_body: PushSubscriptionsResponse = test_support::response_json(list_response).await;
         assert_eq!(list_body.subscriptions.len(), 1);
 
@@ -618,7 +713,10 @@ mod tests {
         assert_eq!(response.status(), StatusCode::OK);
         let body: VapidPublicKeyResponse = test_support::response_json(response).await;
         assert!(!body.public_key.is_empty());
-        assert!(body.public_key.chars().all(|ch| ch.is_ascii_alphanumeric() || ch == '-' || ch == '_'));
+        assert!(body
+            .public_key
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || ch == '-' || ch == '_'));
     }
 
     #[tokio::test]
