@@ -112,10 +112,13 @@ Peanut은 아래 원칙을 지향한다.
 - S3-like GET은 이제 단일 `Range: bytes=...` 요청을 지원하고 `206 Partial Content` + `Content-Range`로 응답한다
 - S3-like range 처리는 open-ended(`bytes=start-`)와 suffix(`bytes=-N`) 요청도 다루며, invalid/multi-range 요청은 `416 InvalidRange`로 거부한다
 - S3-like GET과 HEAD는 이제 `If-Match`, `If-None-Match`, `If-Modified-Since`, `If-Unmodified-Since` 같은 기본 conditional request header를 처리한다
+- ETag validator가 있는 경우 date validator는 일반적인 HTTP precondition 우선순위에 따라 무시된다 (`If-Match` > `If-Unmodified-Since`, `If-None-Match` > `If-Modified-Since`)
 - `Cache-Control`, `Content-Disposition`, `Content-Encoding`, `Content-Language`, `Expires` 같은 object response header는 PUT 시 저장되고 이후 PUT/GET/HEAD 응답에 다시 반영된다
+- `x-amz-metadata-directive: REPLACE` 를 사용하는 CopyObject는 source object의 표준 response header를 기본 유지하면서, 명시적으로 전달한 값만 치환한다
 - PUT 시 전달한 `x-amz-meta-*` custom object metadata는 이제 저장되며, 이후 PUT/GET/HEAD 응답에서도 다시 내려간다
 - S3-like 성공/에러 응답은 `x-amz-request-id` 헤더를 포함하고, object `Last-Modified` 헤더는 HTTP-date 형식으로 내려간다
-- S3-like bucket listing은 `list-type=2`, `prefix`, `delimiter`, `max-keys`, `continuation-token`, `start-after`, `encoding-type=url`을 지원한다
+- S3-like bucket listing은 `list-type=2`, `prefix`, `delimiter`, `max-keys`, `continuation-token`, `start-after`, `encoding-type=url`, `fetch-owner=true`를 지원한다
+- `max-keys=0` 요청은 실패하지 않고 빈 page + truncation metadata를 반환한다
 - continuation token은 raw key 대신 opaque base64url 스타일 토큰으로 내려간다
 - `delimiter=/` 사용 시 `CommonPrefixes` XML 블록도 함께 내려준다
 - S3-like storage 에러는 이제 `NoSuchKey`, `InvalidRequest` 같은 XML error envelope로 응답한다

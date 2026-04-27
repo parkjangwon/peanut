@@ -37,6 +37,8 @@ pub struct S3ListQuery {
     pub start_after: Option<String>,
     #[serde(rename = "encoding-type")]
     pub encoding_type: Option<String>,
+    #[serde(rename = "fetch-owner")]
+    pub fetch_owner: Option<bool>,
     #[serde(rename = "key-marker")]
     pub key_marker: Option<String>,
     #[serde(rename = "upload-id-marker")]
@@ -218,7 +220,7 @@ pub async fn list_bucket_objects(
         )
         .await
     {
-        Ok(page) => s3_list_xml_response(&bucket, &query, page).into_response(),
+        Ok(page) => s3_list_xml_response(&bucket, &query, page, Some(&claims.sub)).into_response(),
         Err(err) if err.kind() == std::io::ErrorKind::InvalidInput => s3_error_response(
             StatusCode::BAD_REQUEST,
             "InvalidRequest",
@@ -1634,6 +1636,7 @@ fn s3_list_xml_response(
     bucket: &str,
     query: &S3ListQuery,
     page: crate::storage::local::StorageListPage,
+    owner_id: Option<&str>,
 ) -> Response {
     let key_count = page.objects.len() + page.common_prefixes.len();
     let encoding_type = query.encoding_type.as_deref().filter(|value| value.eq_ignore_ascii_case("url"));
@@ -1658,6 +1661,10 @@ fn s3_list_xml_response(
     }
     if let Some(value) = encoding_type {
         body.push_str(&format!("<EncodingType>{}</EncodingType>", xml_escape(value)));
+    }
+    let fetch_owner = query.fetch_owner.unwrap_or(false);
+    if fetch_owner {
+        body.push_str("<FetchOwner>true</FetchOwner>");
     }
     body.push_str(&format!("<KeyCount>{key_count}</KeyCount>"));
     body.push_str(&format!(
@@ -1689,6 +1696,11 @@ fn s3_list_xml_response(
         ));
         body.push_str(&format!("<ETag>\"{}\"</ETag>", xml_escape(&object.etag)));
         body.push_str(&format!("<Size>{}</Size>", object.size));
+        if fetch_owner {
+            if let Some(owner_id) = owner_id {
+                body.push_str(&format!("<Owner><ID>{}</ID></Owner>", xml_escape(owner_id)));
+            }
+        }
         body.push_str("<StorageClass>STANDARD</StorageClass>");
         body.push_str("</Contents>");
     }
@@ -1792,25 +1804,23 @@ fn evaluate_read_preconditions(
         .ok()?
         .with_timezone(&chrono::Utc);
 
-    if let Some(value) = headers.get(header::IF_MATCH).and_then(|value| value.to_str().ok()) {
+    let if_match = headers.get(header::IF_MATCH).and_then(|value| value.to_str().ok());
+    if let Some(value) = if_match {
         if !etag_matches(value, metadata.etag.as_str()) {
             return Some(build_conditional_response(StatusCode::PRECONDITION_FAILED, metadata));
         }
-    }
-
-    if let Some(value) = parse_http_date(headers.get(header::IF_UNMODIFIED_SINCE)) {
+    } else if let Some(value) = parse_http_date(headers.get(header::IF_UNMODIFIED_SINCE)) {
         if updated_at.timestamp() > value.timestamp() {
             return Some(build_conditional_response(StatusCode::PRECONDITION_FAILED, metadata));
         }
     }
 
-    if let Some(value) = headers.get(header::IF_NONE_MATCH).and_then(|value| value.to_str().ok()) {
+    let if_none_match = headers.get(header::IF_NONE_MATCH).and_then(|value| value.to_str().ok());
+    if let Some(value) = if_none_match {
         if etag_matches(value, metadata.etag.as_str()) {
             return Some(build_conditional_response(StatusCode::NOT_MODIFIED, metadata));
         }
-    }
-
-    if let Some(value) = parse_http_date(headers.get(header::IF_MODIFIED_SINCE)) {
+    } else if let Some(value) = parse_http_date(headers.get(header::IF_MODIFIED_SINCE)) {
         if updated_at.timestamp() <= value.timestamp() {
             return Some(build_conditional_response(StatusCode::NOT_MODIFIED, metadata));
         }
@@ -2050,6 +2060,7 @@ mod tests {
                 continuation_token: None,
                 start_after: None,
                 encoding_type: None,
+                fetch_owner: None,
                 key_marker: None,
                 upload_id_marker: None,
             }),
@@ -2077,6 +2088,7 @@ mod tests {
                 continuation_token: Some(next_token),
                 start_after: None,
                 encoding_type: None,
+                fetch_owner: None,
                 key_marker: None,
                 upload_id_marker: None,
             }),
@@ -2108,6 +2120,7 @@ mod tests {
                 continuation_token: Some("not-a-valid-token".to_string()),
                 start_after: None,
                 encoding_type: None,
+                fetch_owner: None,
                 key_marker: None,
                 upload_id_marker: None,
             }),
@@ -3710,6 +3723,369 @@ mod tests {
         assert!(!xml.contains("<Key>notes%2Fa%20file.txt</Key>"));
         assert!(xml.contains("<Key>notes%2Fb%20file.txt</Key>"));
         assert!(xml.contains("<Key>notes%2Fc%20file.txt</Key>"));
+    }
+
+    #[tokio::test]
+    async fn test_s3_like_read_precondition_precedence_prefers_etag_validators_over_dates() {
+        let (state, _dir) = test_support::make_test_state().await;
+        let user = register_user(state.clone(), "conditional-precedence@example.com").await;
+
+        let app = axum::Router::new()
+            .route(
+                "/api/s3/:bucket/*key",
+                axum::routing::put(put_bucket_object)
+                    .get(get_bucket_object)
+                    .head(head_bucket_object),
+            )
+            .layer(axum::middleware::from_fn_with_state(
+                state.clone(),
+                crate::middleware::s3_auth::s3_auth_middleware,
+            ))
+            .with_state(state.clone());
+
+        let put_signed = crate::middleware::s3_auth::build_signed_header_auth(
+            "PUT",
+            "https://example.com/api/s3/assets/precedence.txt",
+            &user.user.id,
+            state.jwt_secret.as_str(),
+            None,
+        )
+        .unwrap();
+        let put_response = tower::ServiceExt::oneshot(
+            app.clone(),
+            axum::http::Request::builder()
+                .method("PUT")
+                .uri("/api/s3/assets/precedence.txt")
+                .header("host", "example.com")
+                .header("authorization", put_signed.authorization)
+                .header("x-amz-date", put_signed.amz_date)
+                .header("x-amz-content-sha256", put_signed.payload_hash)
+                .body(axum::body::Body::from("hello precedence"))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(put_response.status(), StatusCode::OK);
+        let etag = put_response.headers().get(header::ETAG).unwrap().to_str().unwrap().to_string();
+        let last_modified = chrono::DateTime::parse_from_rfc2822(
+            put_response.headers().get(header::LAST_MODIFIED).unwrap().to_str().unwrap(),
+        )
+        .unwrap();
+        let stale = last_modified
+            .checked_sub_signed(chrono::TimeDelta::seconds(1))
+            .unwrap()
+            .to_rfc2822();
+
+        let get_signed = crate::middleware::s3_auth::build_signed_header_auth(
+            "GET",
+            "https://example.com/api/s3/assets/precedence.txt",
+            &user.user.id,
+            state.jwt_secret.as_str(),
+            None,
+        )
+        .unwrap();
+        let get_response = tower::ServiceExt::oneshot(
+            app.clone(),
+            axum::http::Request::builder()
+                .uri("/api/s3/assets/precedence.txt")
+                .header("host", "example.com")
+                .header("authorization", get_signed.authorization.clone())
+                .header("x-amz-date", get_signed.amz_date.clone())
+                .header("x-amz-content-sha256", get_signed.payload_hash.clone())
+                .header(header::IF_MATCH, etag.clone())
+                .header(header::IF_UNMODIFIED_SINCE, stale.clone())
+                .body(axum::body::Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(get_response.status(), StatusCode::OK);
+        assert_eq!(response_text(get_response).await, "hello precedence");
+
+        let future = last_modified
+            .checked_add_signed(chrono::TimeDelta::seconds(60))
+            .unwrap()
+            .to_rfc2822();
+        let get_none_match = tower::ServiceExt::oneshot(
+            app.clone(),
+            axum::http::Request::builder()
+                .uri("/api/s3/assets/precedence.txt")
+                .header("host", "example.com")
+                .header("authorization", get_signed.authorization)
+                .header("x-amz-date", get_signed.amz_date)
+                .header("x-amz-content-sha256", get_signed.payload_hash)
+                .header(header::IF_NONE_MATCH, "\"different\"")
+                .header(header::IF_MODIFIED_SINCE, future)
+                .body(axum::body::Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(get_none_match.status(), StatusCode::OK);
+
+        let head_signed = crate::middleware::s3_auth::build_signed_header_auth(
+            "HEAD",
+            "https://example.com/api/s3/assets/precedence.txt",
+            &user.user.id,
+            state.jwt_secret.as_str(),
+            None,
+        )
+        .unwrap();
+        let head_response = tower::ServiceExt::oneshot(
+            app,
+            axum::http::Request::builder()
+                .method("HEAD")
+                .uri("/api/s3/assets/precedence.txt")
+                .header("host", "example.com")
+                .header("authorization", head_signed.authorization)
+                .header("x-amz-date", head_signed.amz_date)
+                .header("x-amz-content-sha256", head_signed.payload_hash)
+                .header(header::IF_MATCH, etag)
+                .header(header::IF_UNMODIFIED_SINCE, stale)
+                .body(axum::body::Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(head_response.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn test_s3_like_copy_object_replace_preserves_unspecified_standard_headers() {
+        let (state, _dir) = test_support::make_test_state().await;
+        let user = register_user(state.clone(), "copy-object-replace-headers@example.com").await;
+
+        let app = axum::Router::new()
+            .route(
+                "/api/s3/:bucket/*key",
+                axum::routing::put(put_bucket_object)
+                    .get(get_bucket_object)
+                    .head(head_bucket_object),
+            )
+            .layer(axum::middleware::from_fn_with_state(
+                state.clone(),
+                crate::middleware::s3_auth::s3_auth_middleware,
+            ))
+            .with_state(state.clone());
+
+        let put_source_signed = crate::middleware::s3_auth::build_signed_header_auth(
+            "PUT",
+            "https://example.com/api/s3/assets/source-replace-headers.txt",
+            &user.user.id,
+            state.jwt_secret.as_str(),
+            None,
+        )
+        .unwrap();
+        let put_source_response = tower::ServiceExt::oneshot(
+            app.clone(),
+            axum::http::Request::builder()
+                .method("PUT")
+                .uri("/api/s3/assets/source-replace-headers.txt")
+                .header("host", "example.com")
+                .header("authorization", put_source_signed.authorization)
+                .header("x-amz-date", put_source_signed.amz_date)
+                .header("x-amz-content-sha256", put_source_signed.payload_hash)
+                .header(header::CONTENT_TYPE, "text/plain")
+                .header(header::CACHE_CONTROL, "public, max-age=120")
+                .header(header::CONTENT_LANGUAGE, "en-US")
+                .header(header::CONTENT_ENCODING, "gzip")
+                .body(axum::body::Body::from("replace source headers body"))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(put_source_response.status(), StatusCode::OK);
+
+        let copy_signed = crate::middleware::s3_auth::build_signed_header_auth(
+            "PUT",
+            "https://example.com/api/s3/assets/replaced-headers-object.txt",
+            &user.user.id,
+            state.jwt_secret.as_str(),
+            None,
+        )
+        .unwrap();
+        let copy_response = tower::ServiceExt::oneshot(
+            app.clone(),
+            axum::http::Request::builder()
+                .method("PUT")
+                .uri("/api/s3/assets/replaced-headers-object.txt")
+                .header("host", "example.com")
+                .header("authorization", copy_signed.authorization)
+                .header("x-amz-date", copy_signed.amz_date)
+                .header("x-amz-content-sha256", copy_signed.payload_hash)
+                .header("x-amz-copy-source", "/assets/source-replace-headers.txt")
+                .header("x-amz-metadata-directive", "REPLACE")
+                .header(header::CONTENT_DISPOSITION, "attachment; filename=copy.txt")
+                .body(axum::body::Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(copy_response.status(), StatusCode::OK);
+
+        let head_signed = crate::middleware::s3_auth::build_signed_header_auth(
+            "HEAD",
+            "https://example.com/api/s3/assets/replaced-headers-object.txt",
+            &user.user.id,
+            state.jwt_secret.as_str(),
+            None,
+        )
+        .unwrap();
+        let head_response = tower::ServiceExt::oneshot(
+            app,
+            axum::http::Request::builder()
+                .method("HEAD")
+                .uri("/api/s3/assets/replaced-headers-object.txt")
+                .header("host", "example.com")
+                .header("authorization", head_signed.authorization)
+                .header("x-amz-date", head_signed.amz_date)
+                .header("x-amz-content-sha256", head_signed.payload_hash)
+                .body(axum::body::Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(head_response.status(), StatusCode::OK);
+        assert_eq!(head_response.headers().get(header::CACHE_CONTROL).unwrap(), "public, max-age=120");
+        assert_eq!(head_response.headers().get(header::CONTENT_LANGUAGE).unwrap(), "en-US");
+        assert_eq!(head_response.headers().get(header::CONTENT_ENCODING).unwrap(), "gzip");
+        assert_eq!(head_response.headers().get(header::CONTENT_DISPOSITION).unwrap(), "attachment; filename=copy.txt");
+    }
+
+    #[tokio::test]
+    async fn test_s3_like_list_objects_v2_supports_fetch_owner_and_zero_max_keys() {
+        let (state, _dir) = test_support::make_test_state().await;
+        let user = register_user(state.clone(), "list-owner@example.com").await;
+        let claims = claims_for(&user.user.id);
+
+        let put_response = put_bucket_object(
+            State(state.clone()),
+            Extension(claims.clone()),
+            axum::extract::Path(("assets".to_string(), "notes/owner-demo.txt".to_string())),
+            RawQuery(None),
+            HeaderMap::new(),
+            Bytes::from("owner demo"),
+        )
+        .await;
+        assert_eq!(put_response.status(), StatusCode::OK);
+
+        let zero_page = list_bucket_objects(
+            State(state.clone()),
+            Extension(claims.clone()),
+            axum::extract::Path("assets".to_string()),
+            Query(S3ListQuery {
+                list_type: Some(2),
+                uploads: None,
+                prefix: Some("notes/".to_string()),
+                delimiter: None,
+                max_keys: Some(0),
+                max_uploads: None,
+                continuation_token: None,
+                start_after: None,
+                encoding_type: None,
+                fetch_owner: None,
+                key_marker: None,
+                upload_id_marker: None,
+            }),
+        )
+        .await;
+        assert_eq!(zero_page.status(), StatusCode::OK);
+        let zero_xml = response_text(zero_page).await;
+        assert!(zero_xml.contains("<MaxKeys>0</MaxKeys>"));
+        assert!(zero_xml.contains("<KeyCount>0</KeyCount>"));
+        assert!(zero_xml.contains("<IsTruncated>true</IsTruncated>"));
+        assert!(!zero_xml.contains("<Contents>"));
+
+        let owner_page = list_bucket_objects(
+            State(state),
+            Extension(claims),
+            axum::extract::Path("assets".to_string()),
+            Query(S3ListQuery {
+                list_type: Some(2),
+                uploads: None,
+                prefix: Some("notes/".to_string()),
+                delimiter: None,
+                max_keys: Some(10),
+                max_uploads: None,
+                continuation_token: None,
+                start_after: None,
+                encoding_type: None,
+                fetch_owner: Some(true),
+                key_marker: None,
+                upload_id_marker: None,
+            }),
+        )
+        .await;
+        assert_eq!(owner_page.status(), StatusCode::OK);
+        let owner_xml = response_text(owner_page).await;
+        assert!(owner_xml.contains("<FetchOwner>true</FetchOwner>"));
+        assert!(owner_xml.contains(&format!("<Owner><ID>{}</ID></Owner>", user.user.id)));
+    }
+
+    #[tokio::test]
+    async fn test_sdk_list_objects_v2_smoke_interop_supports_fetch_owner() {
+        let (state, _dir) = test_support::make_test_state().await;
+        let user = register_user(state.clone(), "sdk-list-owner@example.com").await;
+        let secret_access_key = format!("{}:{}", state.jwt_secret, user.user.id);
+
+        let app = axum::Router::new()
+            .route("/api/s3/:bucket", axum::routing::get(list_bucket_objects))
+            .route("/api/s3/:bucket/*key", axum::routing::put(put_bucket_object))
+            .layer(axum::middleware::from_fn_with_state(
+                state.clone(),
+                crate::middleware::s3_auth::s3_auth_middleware,
+            ))
+            .with_state(state.clone());
+
+        let put_signed = crate::middleware::s3_auth::build_signed_header_auth_with_secret(
+            "PUT",
+            "https://example.com/api/s3/assets/sdk-list-owner.txt",
+            &user.user.id,
+            &secret_access_key,
+            None,
+        )
+        .unwrap();
+        let put_response = tower::ServiceExt::oneshot(
+            app.clone(),
+            axum::http::Request::builder()
+                .method("PUT")
+                .uri("/api/s3/assets/sdk-list-owner.txt")
+                .header("host", "example.com")
+                .header("authorization", put_signed.authorization)
+                .header("x-amz-date", put_signed.amz_date)
+                .header("x-amz-content-sha256", put_signed.payload_hash)
+                .body(axum::body::Body::from("sdk list owner body"))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(put_response.status(), StatusCode::OK);
+
+        let list_signed = crate::middleware::s3_auth::build_signed_header_auth_with_secret(
+            "GET",
+            "https://example.com/api/s3/assets?list-type=2&fetch-owner=true",
+            &user.user.id,
+            &secret_access_key,
+            None,
+        )
+        .unwrap();
+        let list_response = tower::ServiceExt::oneshot(
+            app,
+            axum::http::Request::builder()
+                .uri("/api/s3/assets?list-type=2&fetch-owner=true")
+                .header("host", "example.com")
+                .header("authorization", list_signed.authorization)
+                .header("x-amz-date", list_signed.amz_date)
+                .header("x-amz-content-sha256", list_signed.payload_hash)
+                .body(axum::body::Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(list_response.status(), StatusCode::OK);
+        let xml = response_text(list_response).await;
+        assert!(xml.contains("<FetchOwner>true</FetchOwner>"));
+        assert!(xml.contains(&format!("<Owner><ID>{}</ID></Owner>", user.user.id)));
     }
 
     #[tokio::test]
@@ -5347,6 +5723,7 @@ mod tests {
                 continuation_token: None,
                 start_after: None,
                 encoding_type: None,
+                fetch_owner: None,
                 key_marker: None,
                 upload_id_marker: None,
             }),
@@ -5396,6 +5773,7 @@ mod tests {
                 continuation_token: None,
                 start_after: None,
                 encoding_type: None,
+                fetch_owner: None,
                 key_marker: None,
                 upload_id_marker: None,
             }),
