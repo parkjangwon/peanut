@@ -1,0 +1,13 @@
+{
+  "name": "ops_todos",
+  "display_name": "Ops Todos",
+  "schema": {
+    "fields": {
+      "title": { "type": "string", "required": true, "max_length": 200 },
+      "done": { "type": "boolean", "required": false, "default": false },
+      "priority": { "type": "integer", "required": false, "default": 0 },
+      "source": { "type": "string", "required": false, "default": "ops" }
+    }
+  },
+  "access_policy": { "mode": "owner_private" }
+}

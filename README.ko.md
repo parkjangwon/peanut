@@ -92,6 +92,7 @@ Peanut은 아래 원칙을 지향한다.
 - 한국어 가이드: `docs/service-tokens.ko.md`
 - English guide: `docs/service-tokens.md`
 - curl 예제: `examples/service-tokens/`
+- end-to-end 운영 예제: `examples/operations-e2e/`
 
 ### Storage
 - 상세 호환 범위 표: `docs/storage-s3-compat.ko.md`
@@ -628,6 +629,7 @@ curl -s "$BASE_URL/api/data/tables/todos/rows?search=buy&filter_field=title&filt
 - server-to-server admin 자동화는 `docs/service-tokens.ko.md` 참고
 - Data API를 조금 더 실전적으로 보려면 `docs/data-api.ko.md` 참고
 - 바로 보낼 수 있는 payload 예제는 `examples/data-api/` 참고
+- service token + data + storage를 한 번에 보는 운영 예제는 `examples/operations-e2e/` 참고
 - 외부 프론트 auth 전체 흐름은 `docs/auth-client.ko.md`와 `examples/auth-client-web/` 참고
 
 ## 로컬 개발

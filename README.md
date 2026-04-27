@@ -91,6 +91,7 @@ What this means for external frontend apps:
 - English guide: `docs/service-tokens.md`
 - Korean guide: `docs/service-tokens.ko.md`
 - curl examples: `examples/service-tokens/`
+- end-to-end operations example: `examples/operations-e2e/`
 
 ### Storage
 - detailed compatibility matrix: `docs/storage-s3-compat.md`
@@ -634,6 +635,7 @@ Quick notes:
 - for server-to-server admin automation, see `docs/service-tokens.md`
 - for a fuller Data API walkthrough, see `docs/data-api.md`
 - for ready-to-send payload files, see `examples/data-api/`
+- for a combined service-token + data + storage runbook, see `examples/operations-e2e/`
 - for a full external frontend auth flow, see `docs/auth-client.md` and `examples/auth-client-web/`
 
 ## Local development

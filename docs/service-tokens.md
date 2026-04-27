@@ -22,6 +22,7 @@ Admin endpoints:
 - `POST /api/admin/service-tokens`
 - `DELETE /api/admin/service-tokens/:token_id`
 - curl examples: `examples/service-tokens/`
+- combined runbook: `examples/operations-e2e/`
 
 ## Create a token
 

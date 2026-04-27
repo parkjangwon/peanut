@@ -15,6 +15,7 @@ Files included:
 - `list-tokens.sh`
 - `use-token-admin-users.sh`
 - `revoke-token.sh`
+- for a combined Data API + storage operator flow, see `../operations-e2e/`
 
 Minimal flow:
 

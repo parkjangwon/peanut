@@ -22,6 +22,7 @@ Admin 엔드포인트:
 - `POST /api/admin/service-tokens`
 - `DELETE /api/admin/service-tokens/:token_id`
 - curl 예제: `examples/service-tokens/`
+- 통합 운영 예제: `examples/operations-e2e/`
 
 ## 토큰 생성
 
