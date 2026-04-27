@@ -93,6 +93,8 @@ Peanut은 아래 원칙을 지향한다.
 - English guide: `docs/service-tokens.md`
 
 ### Storage
+- 상세 호환 범위 표: `docs/storage-s3-compat.ko.md`
+- English matrix: `docs/storage-s3-compat.md`
 - 유저 단위로 격리된 object storage
 - 기존 단순 endpoint도 계속 유지한다:
   - 조회

@@ -92,6 +92,8 @@ What this means for external frontend apps:
 - Korean guide: `docs/service-tokens.ko.md`
 
 ### Storage
+- detailed compatibility matrix: `docs/storage-s3-compat.md`
+- Korean matrix: `docs/storage-s3-compat.ko.md`
 - user-scoped object storage
 - legacy simple endpoints remain available for authenticated users:
   - list their own keys
