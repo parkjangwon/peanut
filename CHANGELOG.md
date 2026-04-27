@@ -24,6 +24,7 @@ This project does not have a formal release history yet, so the notes below act 
 - `GET /api/push/queue` now returns queue summary counts for operator visibility, including `partial_success`
 - partial-delivery queue items now keep failure details in `last_error` even when at least one destination succeeded
 - dead Web Push subscriptions are automatically pruned when providers return terminal 404/410-style errors
+- partial-delivery queue state is now structured through explicit `partial_failure_count` and `failed_destinations_json` fields instead of inferring from `last_error` text alone
 - `JWT_SECRET` is now treated as required runtime configuration
 - storage is enforced as user-scoped isolation
 - README and README.ko now document current product scope, operational flow, and API usage more explicitly

@@ -1,4 +1,5 @@
 use crate::push::{ntfy::send_ntfy_notification, webpush::send_web_push};
+use serde::Serialize;
 use sqlx::SqlitePool;
 use std::{future::Future, time::Duration};
 use tokio::time::sleep;
@@ -21,6 +22,12 @@ struct SubscriptionRow {
     endpoint: String,
     p256dh: String,
     auth: String,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+struct FailedDestinationRecord {
+    endpoint: String,
+    error: String,
 }
 
 pub async fn start_push_worker(pool: SqlitePool) {
@@ -100,6 +107,7 @@ where
 
         let mut success_count = 0usize;
         let mut errors = Vec::new();
+        let mut failed_destinations = Vec::new();
         let mut dead_subscription_endpoints = Vec::new();
         for subscription in subscriptions {
             let delivery_result = if is_web_push_subscription(&subscription) {
@@ -139,6 +147,10 @@ where
                     error_message
                 );
                 errors.push(format!("{}: {}", subscription.endpoint, error_message));
+                failed_destinations.push(FailedDestinationRecord {
+                    endpoint: subscription.endpoint.clone(),
+                    error: error_message.clone(),
+                });
 
                 if outcome == DeliveryOutcome::SubscriptionGone {
                     dead_subscription_endpoints.push(subscription.endpoint.clone());
@@ -149,6 +161,13 @@ where
         for endpoint in dead_subscription_endpoints {
             delete_subscription_by_endpoint(pool, &item.user_id, &endpoint).await?;
         }
+
+        let partial_failure_count = failed_destinations.len() as i64;
+        let failed_destinations_json = if failed_destinations.is_empty() {
+            None
+        } else {
+            Some(serde_json::to_string(&failed_destinations)?)
+        };
 
         if success_count > 0 {
             let partial_failure_note = if errors.is_empty() {
@@ -162,9 +181,24 @@ where
                 );
                 Some(format!("partial delivery failures: {}", errors.join(" | ")))
             };
-            mark_sent(pool, item.id, partial_failure_note.as_deref()).await?;
+            mark_sent(
+                pool,
+                item.id,
+                partial_failure_note.as_deref(),
+                partial_failure_count,
+                failed_destinations_json.as_deref(),
+            )
+            .await?;
         } else {
-            mark_failed(pool, item.id, item.retry_count, Some(errors.join(" | "))).await?;
+            mark_failed(
+                pool,
+                item.id,
+                item.retry_count,
+                Some(errors.join(" | ")),
+                partial_failure_count,
+                failed_destinations_json.as_deref(),
+            )
+            .await?;
         }
     }
 
@@ -219,11 +253,15 @@ async fn mark_sent(
     pool: &SqlitePool,
     item_id: i64,
     last_error: Option<&str>,
+    partial_failure_count: i64,
+    failed_destinations_json: Option<&str>,
 ) -> Result<(), sqlx::Error> {
     sqlx::query(
-        "UPDATE push_queue SET status = 'sent', last_error = ?, claimed_at = NULL, processed_at = CURRENT_TIMESTAMP WHERE id = ?",
+        "UPDATE push_queue SET status = 'sent', last_error = ?, partial_failure_count = ?, failed_destinations_json = ?, claimed_at = NULL, processed_at = CURRENT_TIMESTAMP WHERE id = ?",
     )
     .bind(last_error)
+    .bind(partial_failure_count)
+    .bind(failed_destinations_json)
     .bind(item_id)
     .execute(pool)
     .await?;
@@ -237,7 +275,7 @@ async fn mark_terminal_failure(
     error: &str,
 ) -> Result<(), sqlx::Error> {
     sqlx::query(
-        "UPDATE push_queue SET status = 'failed', retry_count = ?, last_error = ?, claimed_at = NULL, processed_at = CURRENT_TIMESTAMP WHERE id = ?",
+        "UPDATE push_queue SET status = 'failed', retry_count = ?, last_error = ?, partial_failure_count = 0, failed_destinations_json = NULL, claimed_at = NULL, processed_at = CURRENT_TIMESTAMP WHERE id = ?",
     )
     .bind(MAX_RETRIES)
     .bind(error)
@@ -253,6 +291,8 @@ async fn mark_failed(
     item_id: i64,
     retry_count: i64,
     error: Option<String>,
+    partial_failure_count: i64,
+    failed_destinations_json: Option<&str>,
 ) -> Result<(), sqlx::Error> {
     let next_retry_count = retry_count + 1;
     let next_status = if next_retry_count >= MAX_RETRIES {
@@ -262,11 +302,13 @@ async fn mark_failed(
     };
 
     sqlx::query(
-        "UPDATE push_queue SET status = ?, retry_count = ?, last_error = ?, claimed_at = NULL, processed_at = CURRENT_TIMESTAMP WHERE id = ?",
+        "UPDATE push_queue SET status = ?, retry_count = ?, last_error = ?, partial_failure_count = ?, failed_destinations_json = ?, claimed_at = NULL, processed_at = CURRENT_TIMESTAMP WHERE id = ?",
     )
     .bind(next_status)
     .bind(next_retry_count)
     .bind(error)
+    .bind(partial_failure_count)
+    .bind(failed_destinations_json)
     .bind(item_id)
     .execute(pool)
     .await?;
@@ -365,8 +407,8 @@ mod tests {
         .await
         .unwrap();
 
-        let row: (String, i64, Option<String>) = sqlx::query_as(
-            "SELECT status, retry_count, last_error FROM push_queue WHERE user_id = ?",
+        let row: (String, i64, Option<String>, i64, Option<String>) = sqlx::query_as(
+            "SELECT status, retry_count, last_error, partial_failure_count, failed_destinations_json FROM push_queue WHERE user_id = ?",
         )
         .bind("user-1")
         .fetch_one(&pool)
@@ -377,6 +419,13 @@ mod tests {
         assert_eq!(
             row.2.as_deref(),
             Some("partial delivery failures: https://example.invalid/push: web push endpoint gone")
+        );
+        assert_eq!(row.3, 1);
+        assert_eq!(
+            row.4.as_deref(),
+            Some(
+                r#"[{"endpoint":"https://example.invalid/push","error":"web push endpoint gone"}]"#
+            )
         );
     }
 

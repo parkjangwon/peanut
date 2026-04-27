@@ -247,6 +247,7 @@ What this means:
 - queue items with no subscriptions configured now fail terminally instead of pointlessly retrying
 - queue status, retries, and last error are visible through the API and console
 - dead Web Push subscriptions that return terminal 404/410-style errors are automatically removed from the subscription table
+- partial-delivery metadata is now structured too: queue items expose `partial_failure_count` and `failed_destinations[]` alongside `last_error`
 - even when a queue item is marked `sent`, partial-delivery failures are preserved in `last_error` so operators can spot dead destinations without losing the successful delivery
 
 What this does not mean yet:

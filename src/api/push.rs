@@ -14,6 +14,64 @@ use sqlx::SqlitePool;
 use crate::api::common::{json_error, json_message};
 use crate::auth::jwt::Claims;
 
+fn decode_failed_destinations(
+    raw: Option<&str>,
+    last_error: Option<&str>,
+    partial_failure_count: i64,
+) -> Vec<PushDeliveryFailure> {
+    if let Some(value) = raw {
+        if let Ok(decoded) = serde_json::from_str::<Vec<PushDeliveryFailure>>(value) {
+            return decoded;
+        }
+    }
+
+    if partial_failure_count > 0 {
+        return parse_failed_destinations_from_last_error(last_error);
+    }
+
+    Vec::new()
+}
+
+fn parse_failed_destinations_from_last_error(last_error: Option<&str>) -> Vec<PushDeliveryFailure> {
+    let Some(raw) = last_error else {
+        return Vec::new();
+    };
+    let Some(payload) = raw.strip_prefix("partial delivery failures: ") else {
+        return Vec::new();
+    };
+
+    payload
+        .split(" | ")
+        .filter_map(|entry| {
+            let (endpoint, error) = entry.split_once(": ")?;
+            Some(PushDeliveryFailure {
+                endpoint: endpoint.to_string(),
+                error: error.to_string(),
+            })
+        })
+        .collect()
+}
+
+fn map_queue_entry(row: PushQueueEntryRow) -> PushQueueEntry {
+    PushQueueEntry {
+        id: row.id,
+        user_id: row.user_id,
+        title: row.title,
+        body: row.body,
+        status: row.status,
+        retry_count: row.retry_count,
+        last_error: row.last_error.clone(),
+        partial_failure_count: row.partial_failure_count,
+        failed_destinations: decode_failed_destinations(
+            row.failed_destinations_json.as_deref(),
+            row.last_error.as_deref(),
+            row.partial_failure_count,
+        ),
+        created_at: row.created_at,
+        processed_at: row.processed_at,
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PushSubscriptionsResponse {
     pub subscriptions: Vec<PushSubscription>,
@@ -49,7 +107,13 @@ pub struct PushSubscription {
     pub created_at: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PushDeliveryFailure {
+    pub endpoint: String,
+    pub error: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PushQueueEntry {
     pub id: i64,
     pub user_id: String,
@@ -58,8 +122,25 @@ pub struct PushQueueEntry {
     pub status: String,
     pub retry_count: i64,
     pub last_error: Option<String>,
+    pub partial_failure_count: i64,
+    pub failed_destinations: Vec<PushDeliveryFailure>,
     pub created_at: String,
     pub processed_at: Option<String>,
+}
+
+#[derive(Debug, Clone, FromRow)]
+struct PushQueueEntryRow {
+    id: i64,
+    user_id: String,
+    title: String,
+    body: String,
+    status: String,
+    retry_count: i64,
+    last_error: Option<String>,
+    partial_failure_count: i64,
+    failed_destinations_json: Option<String>,
+    created_at: String,
+    processed_at: Option<String>,
 }
 
 #[derive(Debug, Clone, FromRow)]
@@ -320,14 +401,14 @@ pub async fn list_queue(
     Extension(claims): Extension<Claims>,
 ) -> Response {
     let items_result = if claims.is_admin {
-        sqlx::query_as::<_, PushQueueEntry>(
-            "SELECT id, user_id, title, body, status, retry_count, last_error, created_at, processed_at FROM push_queue ORDER BY id DESC LIMIT 50",
+        sqlx::query_as::<_, PushQueueEntryRow>(
+            "SELECT id, user_id, title, body, status, retry_count, last_error, partial_failure_count, failed_destinations_json, created_at, processed_at FROM push_queue ORDER BY id DESC LIMIT 50",
         )
         .fetch_all(&state.pool)
         .await
     } else {
-        sqlx::query_as::<_, PushQueueEntry>(
-            "SELECT id, user_id, title, body, status, retry_count, last_error, created_at, processed_at FROM push_queue WHERE user_id = ? ORDER BY id DESC LIMIT 50",
+        sqlx::query_as::<_, PushQueueEntryRow>(
+            "SELECT id, user_id, title, body, status, retry_count, last_error, partial_failure_count, failed_destinations_json, created_at, processed_at FROM push_queue WHERE user_id = ? ORDER BY id DESC LIMIT 50",
         )
         .bind(&claims.sub)
         .fetch_all(&state.pool)
@@ -343,7 +424,7 @@ pub async fn list_queue(
                 COALESCE(SUM(CASE WHEN status = 'processing' THEN 1 ELSE 0 END), 0) AS processing,
                 COALESCE(SUM(CASE WHEN status = 'sent' THEN 1 ELSE 0 END), 0) AS sent,
                 COALESCE(SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END), 0) AS failed,
-                COALESCE(SUM(CASE WHEN status = 'sent' AND last_error LIKE 'partial delivery failures:%' THEN 1 ELSE 0 END), 0) AS partial_success
+                COALESCE(SUM(CASE WHEN status = 'sent' AND partial_failure_count > 0 THEN 1 ELSE 0 END), 0) AS partial_success
             FROM push_queue
             "#,
         )
@@ -358,7 +439,7 @@ pub async fn list_queue(
                 COALESCE(SUM(CASE WHEN status = 'processing' THEN 1 ELSE 0 END), 0) AS processing,
                 COALESCE(SUM(CASE WHEN status = 'sent' THEN 1 ELSE 0 END), 0) AS sent,
                 COALESCE(SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END), 0) AS failed,
-                COALESCE(SUM(CASE WHEN status = 'sent' AND last_error LIKE 'partial delivery failures:%' THEN 1 ELSE 0 END), 0) AS partial_success
+                COALESCE(SUM(CASE WHEN status = 'sent' AND partial_failure_count > 0 THEN 1 ELSE 0 END), 0) AS partial_success
             FROM push_queue
             WHERE user_id = ?
             "#,
@@ -372,7 +453,7 @@ pub async fn list_queue(
         (Ok(items), Ok(summary)) => (
             StatusCode::OK,
             Json(PushQueueResponse {
-                items,
+                items: items.into_iter().map(map_queue_entry).collect(),
                 summary: PushQueueSummary {
                     total: summary.total,
                     pending: summary.pending,
@@ -549,11 +630,12 @@ mod tests {
         let admin: auth::RegisterResponse = test_support::response_json(admin).await;
 
         sqlx::query(
-            "INSERT INTO push_queue (user_id, title, body, status, retry_count, last_error) VALUES (?, ?, ?, 'sent', 0, 'partial delivery failures: https://example.invalid/push: gone')",
+            "INSERT INTO push_queue (user_id, title, body, status, retry_count, last_error, partial_failure_count, failed_destinations_json) VALUES (?, ?, ?, 'sent', 0, 'partial delivery happened', 1, ?)",
         )
         .bind(&admin.user.id)
         .bind("hello")
         .bind("world")
+        .bind(r#"[{"endpoint":"https://example.invalid/push","error":"gone"}]"#)
         .execute(&state.pool)
         .await
         .unwrap();
@@ -565,6 +647,58 @@ mod tests {
         assert_eq!(queue_body.summary.sent, 1);
         assert_eq!(queue_body.summary.partial_success, 1);
         assert_eq!(queue_body.summary.failed, 0);
+        assert_eq!(queue_body.items[0].partial_failure_count, 1);
+        assert_eq!(queue_body.items[0].failed_destinations.len(), 1);
+        assert_eq!(
+            queue_body.items[0].failed_destinations[0].endpoint,
+            "https://example.invalid/push"
+        );
+        assert_eq!(queue_body.items[0].failed_destinations[0].error, "gone");
+    }
+
+    #[tokio::test]
+    async fn test_queue_item_falls_back_to_legacy_partial_delivery_error_parsing() {
+        let (state, _dir) = test_support::make_test_state().await;
+        let admin = auth::register(
+            State(state.clone()),
+            Json(auth::RegisterRequest {
+                email: "admin@example.com".to_string(),
+                password: "secret123".to_string(),
+            }),
+        )
+        .await;
+        let admin: auth::RegisterResponse = test_support::response_json(admin).await;
+
+        sqlx::query(
+            "INSERT INTO push_queue (user_id, title, body, status, retry_count, last_error, partial_failure_count, failed_destinations_json) VALUES (?, ?, ?, 'sent', 0, ?, 2, NULL)",
+        )
+        .bind(&admin.user.id)
+        .bind("hello")
+        .bind("world")
+        .bind("partial delivery failures: https://example.invalid/push-a: gone | https://example.invalid/push-b: timeout")
+        .execute(&state.pool)
+        .await
+        .unwrap();
+
+        let queue_response =
+            list_queue(State(state), Extension(claims(&admin.user.id, true))).await;
+        let queue_body: PushQueueResponse = test_support::response_json(queue_response).await;
+        assert_eq!(queue_body.items[0].partial_failure_count, 2);
+        assert_eq!(queue_body.items[0].failed_destinations.len(), 2);
+        assert_eq!(
+            queue_body.items[0].failed_destinations[0],
+            PushDeliveryFailure {
+                endpoint: "https://example.invalid/push-a".to_string(),
+                error: "gone".to_string(),
+            }
+        );
+        assert_eq!(
+            queue_body.items[0].failed_destinations[1],
+            PushDeliveryFailure {
+                endpoint: "https://example.invalid/push-b".to_string(),
+                error: "timeout".to_string(),
+            }
+        );
     }
 
     #[tokio::test]
