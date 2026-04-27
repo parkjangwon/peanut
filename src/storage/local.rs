@@ -8,6 +8,7 @@ use serde::{Deserialize, Serialize};
 const DEFAULT_BUCKET: &str = "default";
 const METADATA_ROOT_DIR: &str = ".peanut_meta";
 const MULTIPART_ROOT_DIR: &str = ".peanut_multipart";
+const MIN_MULTIPART_PART_SIZE_BYTES: u64 = 5 * 1024 * 1024;
 
 #[derive(Debug)]
 pub struct LocalStorage {
@@ -301,7 +302,7 @@ impl LocalStorage {
         let mut assembled = Vec::new();
         let mut previous_part_number = 0;
         let mut stored_parts = Vec::with_capacity(parts.len());
-        for part in parts {
+        for (index, part) in parts.iter().enumerate() {
             if part.part_number == 0 {
                 return Err(io::Error::new(
                     io::ErrorKind::InvalidInput,
@@ -320,6 +321,16 @@ impl LocalStorage {
                 return Err(io::Error::new(
                     io::ErrorKind::InvalidData,
                     format!("multipart part {} etag mismatch", part.part_number),
+                ));
+            }
+            let is_last = index + 1 == parts.len();
+            if !is_last && stored_part.0.size < MIN_MULTIPART_PART_SIZE_BYTES {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    format!(
+                        "multipart part {} is smaller than the required 5 MiB minimum for non-final parts",
+                        part.part_number
+                    ),
                 ));
             }
             assembled.extend_from_slice(&stored_part.1);

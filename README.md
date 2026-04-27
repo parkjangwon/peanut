@@ -94,11 +94,14 @@ What this means for external frontend apps:
   - `POST /api/s3/:bucket/*key?uploads` to initiate and receive an `UploadId`
   - `GET /api/s3/:bucket?uploads=1&prefix=...&max-uploads=...&key-marker=...&upload-id-marker=...` to list active multipart uploads in a bucket with marker pagination
   - `PUT /api/s3/:bucket/*key?partNumber=N&uploadId=...` to upload parts
+  - non-final multipart parts must be at least 5 MiB, matching the usual S3 minimum part-size rule
   - `PUT /api/s3/:bucket/*key?partNumber=N&uploadId=...` with `x-amz-copy-source: /src-bucket/src-key` to CopyPart from an existing object
+  - `x-amz-copy-source-range: bytes=start-end` is also supported for ranged CopyPart
   - `GET /api/s3/:bucket/*key?uploadId=...&max-parts=...&part-number-marker=...` to list staged parts for an upload with marker pagination
   - `POST /api/s3/:bucket/*key?uploadId=...` with `CompleteMultipartUpload` XML to assemble the final object
   - `DELETE /api/s3/:bucket/*key?uploadId=...` to abort a staged upload
 - multipart completion now returns and persists a multipart-composite ETag (`etag-partcount`) instead of the final assembled object hash
+- multipart compatibility now has additional SDK-style smoke coverage for ranged CopyPart flows
 - S3-like object responses now include content-type, content-length, ETag, and last-modified metadata
 - S3-like success/error responses now also include `x-amz-request-id` headers, and object `Last-Modified` headers are emitted as HTTP-date strings
 - S3-like bucket listing supports `list-type=2`, `prefix`, `delimiter`, `max-keys`, and `continuation-token`
