@@ -1,0 +1,47 @@
+{
+  "mode": "replace",
+  "restore_table": true,
+  "verify_checksum": false,
+  "table": {
+    "name": "posts",
+    "display_name": "Posts",
+    "schema": {
+      "fields": {
+        "title": { "type": "string", "required": true, "max_length": 200 },
+        "slug": { "type": "string", "required": true, "max_length": 120 },
+        "body": { "type": "string", "required": true, "max_length": 20000 },
+        "status": { "type": "string", "required": true, "default": "draft", "max_length": 20 },
+        "published_at": { "type": "datetime", "required": false },
+        "metadata": { "type": "json", "required": false, "default": {} }
+      }
+    },
+    "access_policy": { "mode": "admin_only" }
+  },
+  "rows": [
+    {
+      "data": {
+        "title": "Hello Peanut",
+        "slug": "hello-peanut",
+        "body": "First post imported into Peanut.",
+        "status": "published",
+        "published_at": "2026-05-01T12:00:00Z",
+        "metadata": {
+          "author": "admin",
+          "category": "news"
+        }
+      }
+    },
+    {
+      "data": {
+        "title": "Roadmap",
+        "slug": "roadmap",
+        "body": "Next up: service tokens and more storage docs.",
+        "status": "draft",
+        "metadata": {
+          "author": "admin",
+          "category": "planning"
+        }
+      }
+    }
+  ]
+}

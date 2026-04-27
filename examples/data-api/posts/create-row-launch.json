@@ -1,0 +1,12 @@
+{
+  "data": {
+    "title": "Launching Peanut v0.1",
+    "slug": "launching-peanut-v0-1",
+    "body": "Peanut now ships auth, bounded data APIs, and S3-like storage in a single binary.",
+    "status": "draft",
+    "metadata": {
+      "author": "admin",
+      "category": "release"
+    }
+  }
+}

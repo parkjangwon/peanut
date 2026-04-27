@@ -1,0 +1,11 @@
+{
+  "data": {
+    "status": "published",
+    "published_at": "2026-05-01T12:00:00Z",
+    "metadata": {
+      "author": "admin",
+      "category": "release",
+      "featured": true
+    }
+  }
+}

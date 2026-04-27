@@ -1,0 +1,9 @@
+{
+  "data": {
+    "name": "Ari Kim",
+    "email": "ari@acme.dev",
+    "company": "Acme",
+    "notes": "Met at the Seoul AI meetup.",
+    "tags": ["lead", "seoul"]
+  }
+}

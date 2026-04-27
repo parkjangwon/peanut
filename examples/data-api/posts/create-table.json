@@ -1,0 +1,15 @@
+{
+  "name": "posts",
+  "display_name": "Posts",
+  "schema": {
+    "fields": {
+      "title": { "type": "string", "required": true, "max_length": 200 },
+      "slug": { "type": "string", "required": true, "max_length": 120 },
+      "body": { "type": "string", "required": true, "max_length": 20000 },
+      "status": { "type": "string", "required": true, "default": "draft", "max_length": 20 },
+      "published_at": { "type": "datetime", "required": false },
+      "metadata": { "type": "json", "required": false, "default": {} }
+    }
+  },
+  "access_policy": { "mode": "admin_only" }
+}

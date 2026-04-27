@@ -1,0 +1,12 @@
+{
+  "name": "open_high_priority",
+  "display_name": "Open high priority todos",
+  "params": {
+    "limit": 20,
+    "order_by": "priority",
+    "order": "desc",
+    "filter_field": "priority",
+    "filter_op": "gte",
+    "filter_value": "2"
+  }
+}

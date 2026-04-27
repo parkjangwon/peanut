@@ -1,0 +1,8 @@
+{
+  "data": {
+    "title": "buy milk",
+    "priority": 2,
+    "due_at": "2026-05-01T09:00:00Z",
+    "labels": ["errand", "home"]
+  }
+}

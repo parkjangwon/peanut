@@ -1,0 +1,14 @@
+{
+  "name": "contacts",
+  "display_name": "Contacts",
+  "schema": {
+    "fields": {
+      "name": { "type": "string", "required": true, "max_length": 120 },
+      "email": { "type": "string", "required": true, "max_length": 200 },
+      "company": { "type": "string", "required": false, "max_length": 120 },
+      "notes": { "type": "string", "required": false, "max_length": 2000 },
+      "tags": { "type": "json", "required": false, "default": [] }
+    }
+  },
+  "access_policy": { "mode": "authenticated_shared_rw" }
+}

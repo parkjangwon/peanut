@@ -1,0 +1,14 @@
+{
+  "name": "todos",
+  "display_name": "Todos",
+  "schema": {
+    "fields": {
+      "title": { "type": "string", "required": true, "max_length": 200 },
+      "done": { "type": "boolean", "required": false, "default": false },
+      "priority": { "type": "integer", "required": false, "default": 0 },
+      "due_at": { "type": "datetime", "required": false },
+      "labels": { "type": "json", "required": false, "default": [] }
+    }
+  },
+  "access_policy": { "mode": "owner_private" }
+}

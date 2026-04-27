@@ -12,6 +12,7 @@ Peanut은 앱용 CRUD와 운영 흐름을 위해 bounded SQLite 기반 Data API�
 - `README.ko.md`
 - `docs/auth-client.ko.md`
 - `docs/data-api.md`
+- `examples/data-api/`
 
 ## 1. 제품 경계
 
@@ -104,8 +105,10 @@ row 추가:
 
 ```json
 {
-  "title": "buy milk",
-  "priority": 2
+  "data": {
+    "title": "buy milk",
+    "priority": 2
+  }
 }
 ```
 
@@ -167,6 +170,9 @@ curl -s "$BASE_URL/api/data/tables/todos/rows?search=buy&filter_field=title&filt
 ```
 
 ## 6. 바로 써볼 수 있는 예제 스키마
+
+이 예제들에 맞는 바로 전송 가능한 payload 파일은 `examples/data-api/` 아래에 있다.
+
 
 ### A. Todos
 
@@ -301,6 +307,11 @@ Import:
 유용한 mode:
 - `append`
 - `replace`
+
+실사용 payload 파일 위치:
+- `examples/data-api/todos/`
+- `examples/data-api/contacts/`
+- `examples/data-api/posts/`
 
 실전 용도:
 - 백업

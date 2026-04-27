@@ -1,0 +1,12 @@
+{
+  "name": "draft_posts",
+  "display_name": "Draft posts",
+  "params": {
+    "limit": 50,
+    "order_by": "title",
+    "order": "asc",
+    "filter_field": "status",
+    "filter_op": "eq",
+    "filter_value": "draft"
+  }
+}

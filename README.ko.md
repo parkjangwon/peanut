@@ -156,6 +156,7 @@ Peanut은 이제 Peanut이 관리하는 logical table용 제한된 SQLite 기반
 상세 가이드:
 - English guide: `docs/data-api.md`
 - 한국어 가이드: `docs/data-api.ko.md`
+- payload 예제: `examples/data-api/`
 
 현재 가능한 것:
 - `GET /api/data/tables`
@@ -430,7 +431,9 @@ Peanut은 현재 API-first 모드로 동작한다.
 
 ```json
 {
-  "title": "buy milk"
+  "data": {
+    "title": "buy milk"
+  }
 }
 ```
 
@@ -596,7 +599,7 @@ curl -s -X POST "$BASE_URL/api/data/tables" \
 curl -s -X POST "$BASE_URL/api/data/tables/todos/rows" \
   -H "content-type: application/json" \
   -H 'authorization: Bearer <PASTE_ACCESS_TOKEN_HERE>' \
-  -d '{"title":"buy milk"}'
+  -d '{"data":{"title":"buy milk"}}'
 
 # 6) filter/search/offset으로 row 조회
 curl -s "$BASE_URL/api/data/tables/todos/rows?search=buy&filter_field=title&filter_op=starts_with&filter_value=buy&order_by=title&order=asc&limit=10&offset=0" \
@@ -609,6 +612,7 @@ curl -s "$BASE_URL/api/data/tables/todos/rows?search=buy&filter_field=title&filt
 - `owner_private` row는 인증 유저 기준으로 격리된다
 - 같은 bearer token으로 storage, data, push, session 엔드포인트를 함께 호출할 수 있다
 - Data API를 조금 더 실전적으로 보려면 `docs/data-api.ko.md` 참고
+- 바로 보낼 수 있는 payload 예제는 `examples/data-api/` 참고
 - 외부 프론트 auth 전체 흐름은 `docs/auth-client.ko.md`와 `examples/auth-client-web/` 참고
 
 ## 로컬 개발

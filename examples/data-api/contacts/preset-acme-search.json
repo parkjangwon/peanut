@@ -1,0 +1,13 @@
+{
+  "name": "acme_recent",
+  "display_name": "Acme contacts",
+  "params": {
+    "limit": 25,
+    "order_by": "name",
+    "order": "asc",
+    "search": "acme",
+    "filter_field": "company",
+    "filter_op": "eq",
+    "filter_value": "Acme"
+  }
+}

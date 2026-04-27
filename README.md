@@ -155,6 +155,7 @@ Peanut now exposes a constrained SQLite-backed data API for Peanut-managed logic
 Detailed guide:
 - English guide: `docs/data-api.md`
 - Korean guide: `docs/data-api.ko.md`
+- payload examples: `examples/data-api/`
 
 Current capabilities:
 - `GET /api/data/tables`
@@ -434,7 +435,9 @@ Typical authenticated request:
 
 ```json
 {
-  "title": "buy milk"
+  "data": {
+    "title": "buy milk"
+  }
 }
 ```
 
@@ -602,7 +605,7 @@ curl -s -X POST "$BASE_URL/api/data/tables" \
 curl -s -X POST "$BASE_URL/api/data/tables/todos/rows" \
   -H "content-type: application/json" \
   -H 'authorization: Bearer <PASTE_ACCESS_TOKEN_HERE>' \
-  -d '{"title":"buy milk"}'
+  -d '{"data":{"title":"buy milk"}}'
 
 # 6) query rows with filtering, search, and offset
 curl -s "$BASE_URL/api/data/tables/todos/rows?search=buy&filter_field=title&filter_op=starts_with&filter_value=buy&order_by=title&order=asc&limit=10&offset=0" \
@@ -615,6 +618,7 @@ Quick notes:
 - `owner_private` rows are scoped to the authenticated user
 - the same bearer token works for storage, data, push, and session endpoints
 - for a fuller Data API walkthrough, see `docs/data-api.md`
+- for ready-to-send payload files, see `examples/data-api/`
 - for a full external frontend auth flow, see `docs/auth-client.md` and `examples/auth-client-web/`
 
 ## Local development

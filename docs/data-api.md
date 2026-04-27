@@ -12,6 +12,7 @@ See also:
 - `README.md`
 - `docs/auth-client.md`
 - `docs/data-api.ko.md`
+- `examples/data-api/`
 
 ## 1. Product boundary
 
@@ -104,8 +105,10 @@ Insert a row:
 
 ```json
 {
-  "title": "buy milk",
-  "priority": 2
+  "data": {
+    "title": "buy milk",
+    "priority": 2
+  }
 }
 ```
 
@@ -167,6 +170,9 @@ curl -s "$BASE_URL/api/data/tables/todos/rows?search=buy&filter_field=title&filt
 ```
 
 ## 6. Example schemas worth copying
+
+Ready-to-send payload files for these examples live in `examples/data-api/`.
+
 
 ### A. Todos
 
@@ -301,6 +307,11 @@ Import:
 Useful modes:
 - `append`
 - `replace`
+
+Practical payload files:
+- `examples/data-api/todos/`
+- `examples/data-api/contacts/`
+- `examples/data-api/posts/`
 
 Practical uses:
 - backups
