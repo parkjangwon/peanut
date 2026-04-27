@@ -12,6 +12,9 @@ Goal:
 - insert a row into the table
 - list rows back through the Data API
 - export the table snapshot
+- read the latest row-event checkpoint
+- replay only newer row events from a durable event id
+- import a known-good table snapshot back into the same table
 - upload an object into Peanut storage
 
 Files included:
@@ -21,10 +24,14 @@ Files included:
 - `create-todo-row.sh`
 - `list-todo-rows.sh`
 - `export-todos-table.sh`
+- `get-events-checkpoint.sh`
+- `replay-todo-events.sh`
+- `import-todos-table.sh`
 - `upload-storage-object.sh`
 - `head-storage-object.sh`
 - `todos-table.json`
 - `todo-row.json`
+- `todos-import-replace.json`
 - `sample-object.txt`
 
 Environment variables used:
@@ -32,6 +39,9 @@ Environment variables used:
 - `ADMIN_JWT` required for service-token creation
 - `SERVICE_TOKEN` required for Data API + storage steps
 - `TABLE_NAME` optional, default `ops_todos`
+- `LAST_EVENT_ID` required only for replay, use the latest known checkpoint/event id
+- `EVENT_LIMIT` optional for replay, default `50`
+- `IMPORT_FILE` optional for import, default `examples/operations-e2e/todos-import-replace.json`
 - `STORAGE_BUCKET` optional, default `assets`
 - `STORAGE_KEY` optional, default `ops/hello.txt`
 
@@ -49,6 +59,10 @@ export SERVICE_TOKEN='***'
 ./examples/operations-e2e/create-todo-row.sh
 ./examples/operations-e2e/list-todo-rows.sh
 ./examples/operations-e2e/export-todos-table.sh
+./examples/operations-e2e/get-events-checkpoint.sh
+export LAST_EVENT_ID=1
+./examples/operations-e2e/replay-todo-events.sh
+./examples/operations-e2e/import-todos-table.sh
 ./examples/operations-e2e/upload-storage-object.sh
 ./examples/operations-e2e/head-storage-object.sh
 ```
@@ -61,6 +75,13 @@ export ADMIN_JWT='<PASTE_ADMIN_JWT>'
 
 ./examples/operations-e2e/bootstrap-service-token-jq.sh
 ```
+
+Practical event-sync pattern:
+1. run `get-events-checkpoint.sh`
+2. persist that `latest_event_id` in your worker/job state
+3. after more writes happen, export `LAST_EVENT_ID=<saved id>`
+4. run `replay-todo-events.sh` to fetch only newer mutations
+5. update your saved event id
 
 Notes:
 - if you want to turn this into cron/systemd/CI automation, see `../automation/` and `../../docs/automation-runbook.md`

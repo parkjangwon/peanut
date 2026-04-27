@@ -1,0 +1,39 @@
+{
+  "mode": "replace",
+  "restore_table": true,
+  "verify_checksum": false,
+  "table": {
+    "name": "ops_todos",
+    "display_name": "Ops Todos",
+    "schema": {
+      "fields": {
+        "title": { "type": "string", "required": true, "max_length": 200 },
+        "done": { "type": "boolean", "required": true, "default": false },
+        "priority": { "type": "string", "required": true, "default": "medium", "max_length": 20 },
+        "owner": { "type": "string", "required": false, "max_length": 120 },
+        "tags": { "type": "json", "required": false, "default": [] }
+      }
+    },
+    "access_policy": { "mode": "admin_only" }
+  },
+  "rows": [
+    {
+      "data": {
+        "title": "rotate nightly export token",
+        "done": false,
+        "priority": "high",
+        "owner": "ops",
+        "tags": ["automation", "tokens"]
+      }
+    },
+    {
+      "data": {
+        "title": "verify storage head check",
+        "done": true,
+        "priority": "medium",
+        "owner": "ops",
+        "tags": ["storage", "health"]
+      }
+    }
+  ]
+}

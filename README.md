@@ -640,7 +640,7 @@ Quick notes:
 - for a fuller Data API walkthrough, see `docs/data-api.md`
 - for ready-to-send payload files, see `examples/data-api/`
 - for a combined service-token + data + storage runbook, see `examples/operations-e2e/`
-- that runbook now also includes Data API list/export steps
+- that runbook now also includes Data API list/export/import and checkpoint/replay steps
 - for reusable env-backed cron scripts, see `examples/automation/`
 - for a full external frontend auth flow, see `docs/auth-client.md` and `examples/auth-client-web/`
 
