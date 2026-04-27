@@ -247,6 +247,7 @@ Peanut은 현재 실용적인 hybrid push 레이어를 제공한다.
 - 여러 destination 중 하나만 성공해도 queue item 전체는 sent로 처리해서, 하나의 죽은 subscription 때문에 전체 전송이 막히지 않는다
 - subscription이 하나도 없는 item은 의미 없는 재시도 대신 즉시 terminal failure로 정리한다
 - queue 상태, retry 횟수, 마지막 에러를 API/콘솔에서 볼 수 있다
+- queue item이 `sent`로 끝나더라도 partial delivery failure는 `last_error`에 남겨서, 성공 전달은 유지하면서도 죽은 destination을 운영에서 바로 찾을 수 있다
 
 아직 아닌 것:
 - Peanut이 완전한 push 플랫폼을 지향하는 것은 아니다

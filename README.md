@@ -246,6 +246,7 @@ What this means:
 - queue items no longer fail just because one destination failed; if at least one subscription accepts the delivery, the queue item is marked sent
 - queue items with no subscriptions configured now fail terminally instead of pointlessly retrying
 - queue status, retries, and last error are visible through the API and console
+- even when a queue item is marked `sent`, partial-delivery failures are preserved in `last_error` so operators can spot dead destinations without losing the successful delivery
 
 What this does not mean yet:
 - Peanut still does not try to be a complete push platform

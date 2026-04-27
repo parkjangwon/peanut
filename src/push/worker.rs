@@ -101,12 +101,8 @@ where
                     subscription.p256dh.clone(),
                     subscription.auth.clone(),
                 );
-                send_web_push_delivery(
-                    subscription_info,
-                    item.title.clone(),
-                    item.body.clone(),
-                )
-                .await
+                send_web_push_delivery(subscription_info, item.title.clone(), item.body.clone())
+                    .await
             } else {
                 send_ntfy(
                     subscription.endpoint.clone(),
@@ -133,15 +129,18 @@ where
         }
 
         if success_count > 0 {
-            if !errors.is_empty() {
+            let partial_failure_note = if errors.is_empty() {
+                None
+            } else {
                 tracing::warn!(
                     "Push queue item {} delivered to {} subscription(s) with {} failure(s)",
                     item.id,
                     success_count,
                     errors.len()
                 );
-            }
-            mark_sent(pool, item.id).await?;
+                Some(format!("partial delivery failures: {}", errors.join(" | ")))
+            };
+            mark_sent(pool, item.id, partial_failure_note.as_deref()).await?;
         } else {
             mark_failed(pool, item.id, item.retry_count, Some(errors.join(" | "))).await?;
         }
@@ -167,10 +166,15 @@ async fn reclaim_stale_processing_items(pool: &SqlitePool) -> Result<(), sqlx::E
     Ok(())
 }
 
-async fn mark_sent(pool: &SqlitePool, item_id: i64) -> Result<(), sqlx::Error> {
+async fn mark_sent(
+    pool: &SqlitePool,
+    item_id: i64,
+    last_error: Option<&str>,
+) -> Result<(), sqlx::Error> {
     sqlx::query(
-        "UPDATE push_queue SET status = 'sent', last_error = NULL, claimed_at = NULL, processed_at = CURRENT_TIMESTAMP WHERE id = ?",
+        "UPDATE push_queue SET status = 'sent', last_error = ?, claimed_at = NULL, processed_at = CURRENT_TIMESTAMP WHERE id = ?",
     )
+    .bind(last_error)
     .bind(item_id)
     .execute(pool)
     .await?;
@@ -308,6 +312,53 @@ mod tests {
                 assert_eq!(subscription.endpoint, "https://example.invalid/push");
                 Err("web push endpoint gone".into())
             },
+        )
+        .await
+        .unwrap();
+
+        let row: (String, i64, Option<String>) = sqlx::query_as(
+            "SELECT status, retry_count, last_error FROM push_queue WHERE user_id = ?",
+        )
+        .bind("user-1")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(row.0, "sent");
+        assert_eq!(row.1, 0);
+        assert_eq!(
+            row.2.as_deref(),
+            Some("partial delivery failures: https://example.invalid/push: web push endpoint gone")
+        );
+    }
+
+    #[tokio::test]
+    async fn test_process_queue_clears_last_error_when_all_deliveries_succeed() {
+        let pool = crate::db::init_db("sqlite::memory:").await.unwrap();
+        insert_user(&pool, "user-1").await;
+
+        sqlx::query(
+            "INSERT INTO push_subscriptions (user_id, endpoint, p256dh, auth) VALUES (?, ?, '', '')",
+        )
+        .bind("user-1")
+        .bind("alerts_main")
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        sqlx::query(
+            "INSERT INTO push_queue (user_id, title, body, status, retry_count, last_error) VALUES (?, ?, ?, 'pending', 0, 'old failure')",
+        )
+        .bind("user-1")
+        .bind("hello")
+        .bind("world")
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        process_queue_with_deliveries(
+            &pool,
+            |_topic, _title, _body| async move { Ok(()) },
+            |_subscription, _title, _body| async move { Ok(()) },
         )
         .await
         .unwrap();

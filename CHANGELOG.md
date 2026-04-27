@@ -22,6 +22,7 @@ This project does not have a formal release history yet, so the notes below act 
 - push queue worker now treats delivery as successful when at least one subscription succeeds, instead of failing the whole item on the first broken destination
 - queue items with no subscriptions configured now fail terminally instead of burning retry cycles
 - `GET /api/push/queue` now returns queue summary counts for operator visibility
+- partial-delivery queue items now keep failure details in `last_error` even when at least one destination succeeded
 - `JWT_SECRET` is now treated as required runtime configuration
 - storage is enforced as user-scoped isolation
 - README and README.ko now document current product scope, operational flow, and API usage more explicitly
