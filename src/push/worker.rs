@@ -1,7 +1,9 @@
 use crate::push::{ntfy::send_ntfy_notification, webpush::send_web_push};
 use serde::Serialize;
 use sqlx::SqlitePool;
+use std::sync::Arc;
 use std::{future::Future, time::Duration};
+use tokio::task::JoinSet;
 use tokio::time::{sleep, Instant};
 use web_push::{SubscriptionInfo, WebPushError};
 
@@ -88,10 +90,10 @@ async fn process_queue_with_deliveries<NtfyFn, NtfyFuture, WebPushFn, WebPushFut
     send_web_push_delivery: WebPushFn,
 ) -> Result<(), Box<dyn std::error::Error>>
 where
-    NtfyFn: Fn(String, String, String) -> NtfyFuture,
-    NtfyFuture: Future<Output = Result<(), Box<dyn std::error::Error>>>,
-    WebPushFn: Fn(SubscriptionInfo, String, String) -> WebPushFuture,
-    WebPushFuture: Future<Output = Result<(), Box<dyn std::error::Error>>>,
+    NtfyFn: Fn(String, String, String) -> NtfyFuture + Send + Sync + 'static,
+    NtfyFuture: Future<Output = Result<(), Box<dyn std::error::Error + Send + Sync>>> + Send + 'static,
+    WebPushFn: Fn(SubscriptionInfo, String, String) -> WebPushFuture + Send + Sync + 'static,
+    WebPushFuture: Future<Output = Result<(), Box<dyn std::error::Error + Send + Sync>>> + Send + 'static,
 {
     reclaim_stale_processing_items(pool).await?;
 
@@ -100,6 +102,9 @@ where
     )
     .fetch_all(pool)
     .await?;
+
+    let send_ntfy = Arc::new(send_ntfy);
+    let send_web_push_delivery = Arc::new(send_web_push_delivery);
 
     for (id,) in pending_ids {
         let claim = sqlx::query(
@@ -132,27 +137,43 @@ where
             continue;
         }
 
+        let mut join_set = JoinSet::new();
+        for subscription in subscriptions {
+            let send_ntfy = Arc::clone(&send_ntfy);
+            let send_web_push_delivery = Arc::clone(&send_web_push_delivery);
+            let title = item.title.clone();
+            let body = item.body.clone();
+
+            join_set.spawn(async move {
+                let endpoint = subscription.endpoint.clone();
+                let delivery_result = if is_web_push_subscription(&subscription) {
+                    let subscription_info = SubscriptionInfo::new(
+                        subscription.endpoint.clone(),
+                        subscription.p256dh.clone(),
+                        subscription.auth.clone(),
+                    );
+                    send_web_push_delivery(subscription_info, title, body).await
+                } else {
+                    send_ntfy(subscription.endpoint.clone(), title, body).await
+                };
+
+                (endpoint, delivery_result)
+            });
+        }
+
         let mut success_count = 0usize;
         let mut errors = Vec::new();
         let mut failed_destinations = Vec::new();
         let mut failure_outcomes = Vec::new();
         let mut dead_subscription_endpoints = Vec::new();
-        for subscription in subscriptions {
-            let delivery_result = if is_web_push_subscription(&subscription) {
-                let subscription_info = SubscriptionInfo::new(
-                    subscription.endpoint.clone(),
-                    subscription.p256dh.clone(),
-                    subscription.auth.clone(),
-                );
-                send_web_push_delivery(subscription_info, item.title.clone(), item.body.clone())
-                    .await
-            } else {
-                send_ntfy(
-                    subscription.endpoint.clone(),
-                    item.title.clone(),
-                    item.body.clone(),
-                )
-                .await
+
+        while let Some(res) = join_set.join_next().await {
+            let (endpoint, delivery_result) = match res {
+                Ok(r) => r,
+                Err(e) => {
+                    tracing::error!("Push delivery task panicked: {}", e);
+                    continue;
+                }
             };
 
             let delivery_error = match delivery_result {
@@ -161,7 +182,7 @@ where
                     None
                 }
                 Err(error) => Some({
-                    let outcome = classify_delivery_error(&error);
+                    let outcome = classify_delivery_error(&*error);
                     let error_message = error.to_string();
                     (outcome, error_message)
                 }),
@@ -171,17 +192,17 @@ where
                 tracing::warn!(
                     "Failed to send notification for queue item {} to subscription {}: {}",
                     item.id,
-                    subscription.endpoint,
+                    endpoint,
                     error_message
                 );
-                errors.push(format!("{}: {}", subscription.endpoint, error_message));
+                errors.push(format!("{}: {}", endpoint, error_message));
                 failed_destinations.push(FailedDestinationRecord {
-                    endpoint: subscription.endpoint.clone(),
+                    endpoint: endpoint.clone(),
                     error: error_message.clone(),
                 });
 
                 if outcome == DeliveryOutcome::SubscriptionGone {
-                    dead_subscription_endpoints.push(subscription.endpoint.clone());
+                    dead_subscription_endpoints.push(endpoint.clone());
                 }
                 failure_outcomes.push(outcome);
             }
@@ -245,7 +266,7 @@ fn is_web_push_subscription(subscription: &SubscriptionRow) -> bool {
     !(subscription.p256dh.is_empty() && subscription.auth.is_empty())
 }
 
-fn classify_delivery_error(error: &Box<dyn std::error::Error>) -> DeliveryOutcome {
+fn classify_delivery_error(error: &(dyn std::error::Error + 'static)) -> DeliveryOutcome {
     if let Some(web_push_error) = error.downcast_ref::<WebPushError>() {
         match web_push_error {
             WebPushError::EndpointNotValid | WebPushError::EndpointNotFound => {
@@ -484,7 +505,7 @@ mod tests {
             },
             |subscription, _title, _body| async move {
                 assert_eq!(subscription.endpoint, "https://example.invalid/push");
-                Err("web push endpoint gone".into())
+                Err(format!("web push endpoint gone").into())
             },
         )
         .await
@@ -587,7 +608,7 @@ mod tests {
             |_topic, _title, _body| async move { Ok(()) },
             |_subscription, _title, _body| async move {
                 Err(Box::new(web_push::WebPushError::EndpointNotValid)
-                    as Box<dyn std::error::Error>)
+                    as Box<dyn std::error::Error + Send + Sync>)
             },
         )
         .await
@@ -649,7 +670,7 @@ mod tests {
             |_topic, _title, _body| async move { Ok(()) },
             |_subscription, _title, _body| async move {
                 Err(Box::new(web_push::WebPushError::EndpointNotFound)
-                    as Box<dyn std::error::Error>)
+                    as Box<dyn std::error::Error + Send + Sync>)
             },
         )
         .await
@@ -704,7 +725,7 @@ mod tests {
             |_topic, _title, _body| async move {
                 Err(
                     Box::new(crate::push::ntfy::NtfyDeliveryError::TerminalStatus(404))
-                        as Box<dyn std::error::Error>,
+                        as Box<dyn std::error::Error + Send + Sync>,
                 )
             },
             |_subscription, _title, _body| async move { Ok(()) },
@@ -802,7 +823,7 @@ mod tests {
             |_topic, _title, _body| async move {
                 Err(
                     Box::new(crate::push::ntfy::NtfyDeliveryError::RetryableStatus(503))
-                        as Box<dyn std::error::Error>,
+                        as Box<dyn std::error::Error + Send + Sync>,
                 )
             },
             |_subscription, _title, _body| async move { Ok(()) },
@@ -827,7 +848,7 @@ mod tests {
             |_topic, _title, _body| async move {
                 Err(
                     Box::new(crate::push::ntfy::NtfyDeliveryError::RetryableStatus(503))
-                        as Box<dyn std::error::Error>,
+                        as Box<dyn std::error::Error + Send + Sync>,
                 )
             },
             |_subscription, _title, _body| async move { Ok(()) },

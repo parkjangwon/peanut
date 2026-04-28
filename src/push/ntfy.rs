@@ -25,7 +25,7 @@ pub async fn send_ntfy_notification(
     topic: &str,
     title: &str,
     body: &str,
-) -> Result<(), Box<dyn std::error::Error>> {
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let client = Client::new();
     let request = build_ntfy_request(&client, topic, title, body)?;
     let res = client.execute(request).await?;
@@ -47,7 +47,7 @@ fn build_ntfy_request(
     topic: &str,
     title: &str,
     body: &str,
-) -> Result<Request, Box<dyn std::error::Error>> {
+) -> Result<Request, Box<dyn std::error::Error + Send + Sync>> {
     build_ntfy_request_with_config(
         client,
         &ntfy_base_url()?,
@@ -65,7 +65,7 @@ fn build_ntfy_request_with_config(
     topic: &str,
     title: &str,
     body: &str,
-) -> Result<Request, Box<dyn std::error::Error>> {
+) -> Result<Request, Box<dyn std::error::Error + Send + Sync>> {
     let url = ntfy_topic_url_with_base(base_url, topic)?;
     let mut request = client
         .post(url)
@@ -85,7 +85,7 @@ fn build_ntfy_request_with_config(
 fn ntfy_topic_url_with_base(
     base_url: &str,
     topic: &str,
-) -> Result<String, Box<dyn std::error::Error>> {
+) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
     let base = normalize_ntfy_base_url(base_url)?;
     let topic = topic.trim().trim_start_matches('/');
     if topic.is_empty() {
@@ -94,12 +94,12 @@ fn ntfy_topic_url_with_base(
     Ok(format!("{}/{}", base, topic))
 }
 
-fn ntfy_base_url() -> Result<String, Box<dyn std::error::Error>> {
+fn ntfy_base_url() -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
     let raw = std::env::var("NTFY_BASE_URL").unwrap_or_else(|_| "https://ntfy.sh".to_string());
     normalize_ntfy_base_url(&raw)
 }
 
-fn normalize_ntfy_base_url(raw: &str) -> Result<String, Box<dyn std::error::Error>> {
+fn normalize_ntfy_base_url(raw: &str) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
     let normalized = raw.trim().trim_end_matches('/').to_string();
     if normalized.is_empty() {
         return Err("NTFY_BASE_URL must not be empty".into());

@@ -35,7 +35,7 @@ pub async fn send_web_push(
     subscription: SubscriptionInfo,
     title: &str,
     body: &str,
-) -> Result<(), Box<dyn std::error::Error>> {
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let config = load_web_push_config()?;
     let payload = serde_json::to_vec(&json!({
         "title": title,
@@ -59,25 +59,25 @@ pub async fn send_web_push(
     Ok(())
 }
 
-pub fn public_vapid_key() -> Result<String, Box<dyn std::error::Error>> {
+pub fn public_vapid_key() -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
     let config = load_web_push_config()?;
     let builder =
         VapidSignatureBuilder::from_base64_no_sub(&config.vapid_private_key, URL_SAFE_NO_PAD)?;
     Ok(BASE64_URL_SAFE_NO_PAD.encode(builder.get_public_key()))
 }
 
-fn load_web_push_config() -> Result<WebPushConfig, Box<dyn std::error::Error>> {
+fn load_web_push_config() -> Result<WebPushConfig, Box<dyn std::error::Error + Send + Sync>> {
     let vapid_private_key = env::var(WEB_PUSH_VAPID_PRIVATE_KEY).map_err(|_| {
         Box::new(WebPushDeliveryError::TerminalConfig(format!(
             "{} must be set for Web Push delivery",
             WEB_PUSH_VAPID_PRIVATE_KEY
-        ))) as Box<dyn std::error::Error>
+        ))) as Box<dyn std::error::Error + Send + Sync>
     })?;
     let vapid_subject = env::var(WEB_PUSH_VAPID_SUBJECT).map_err(|_| {
         Box::new(WebPushDeliveryError::TerminalConfig(format!(
             "{} must be set for Web Push delivery",
             WEB_PUSH_VAPID_SUBJECT
-        ))) as Box<dyn std::error::Error>
+        ))) as Box<dyn std::error::Error + Send + Sync>
     })?;
 
     if vapid_private_key.trim().is_empty() {
