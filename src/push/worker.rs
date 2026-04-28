@@ -281,12 +281,20 @@ async fn reclaim_stale_processing_items(pool: &SqlitePool) -> Result<(), sqlx::E
     Ok(())
 }
 
-fn retry_backoff_seconds(next_retry_count: i64) -> i64 {
-    let index = (next_retry_count.saturating_sub(1)) as usize;
-    RETRY_BACKOFF_SCHEDULE_SECONDS
-        .get(index)
-        .copied()
-        .unwrap_or(*RETRY_BACKOFF_SCHEDULE_SECONDS.last().unwrap_or(&120))
+fn retry_backoff_seconds(next_retry_count: i64, item_id: i64) -> i64 {
+    let base_delay = *RETRY_BACKOFF_SCHEDULE_SECONDS.first().unwrap_or(&30);
+    let max_delay = *RETRY_BACKOFF_SCHEDULE_SECONDS.last().unwrap_or(&120);
+    let exponential = base_delay
+        .saturating_mul(1_i64 << next_retry_count.saturating_sub(1).min(10))
+        .min(max_delay);
+    let jitter_window = (exponential / 5).max(1);
+    let seed = item_id
+        .unsigned_abs()
+        .wrapping_mul(1_103_515_245)
+        .wrapping_add((next_retry_count as u64).wrapping_mul(12_345));
+    let jitter_span = (jitter_window * 2 + 1) as u64;
+    let offset = (seed % jitter_span) as i64;
+    (exponential - jitter_window + offset).min(max_delay).max(1)
 }
 
 async fn mark_sent(
@@ -343,7 +351,7 @@ async fn mark_failed(
     let next_retry_at = if next_status == "pending" {
         Some(format!(
             "+{} seconds",
-            retry_backoff_seconds(next_retry_count)
+            retry_backoff_seconds(next_retry_count, item_id)
         ))
     } else {
         None
@@ -812,6 +820,12 @@ mod tests {
         assert_eq!(second_row.0, "pending");
         assert_eq!(second_row.1, 1);
         assert!(second_row.2.is_some());
+    }
+
+    #[test]
+    fn test_retry_backoff_seconds_applies_deterministic_jitter() {
+        assert_eq!(retry_backoff_seconds(1, 42), 35);
+        assert_eq!(retry_backoff_seconds(2, 42), 53);
     }
 
     #[test]
