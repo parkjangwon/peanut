@@ -228,6 +228,7 @@ Endpoints:
 - `GET /api/push/vapid-public-key`
 - `POST /api/push/messages`
 - `GET /api/push/queue`
+- `GET /api/push/queue/stats`
 
 Runtime settings:
 - `NTFY_BASE_URL`
@@ -249,6 +250,7 @@ What this means:
 - dead Web Push subscriptions that return terminal 404/410-style errors are automatically removed from the subscription table
 - partial-delivery metadata is now structured too: queue items expose `partial_failure_count` and `failed_destinations[]` alongside `last_error`
 - queue summary also exposes current `ntfy_subscriptions` and `web_push_subscriptions` counts for operator visibility by delivery kind
+- `GET /api/push/queue/stats` exposes recent top failure reasons grouped separately for terminal item failures and per-destination delivery failures
 - even when a queue item is marked `sent`, partial-delivery failures are preserved in `last_error` so operators can spot dead destinations without losing the successful delivery
 
 What this does not mean yet:

@@ -229,6 +229,7 @@ Peanut은 현재 실용적인 hybrid push 레이어를 제공한다.
 - `GET /api/push/vapid-public-key`
 - `POST /api/push/messages`
 - `GET /api/push/queue`
+- `GET /api/push/queue/stats`
 
 런타임 설정:
 - `NTFY_BASE_URL`
@@ -250,6 +251,7 @@ Peanut은 현재 실용적인 hybrid push 레이어를 제공한다.
 - 404/410 성격의 terminal Web Push 에러를 돌려주는 죽은 subscription은 subscription 테이블에서 자동 정리된다
 - partial delivery 메타데이터도 구조화되어서, queue item은 이제 `last_error`와 함께 `partial_failure_count`, `failed_destinations[]`를 노출한다
 - queue summary는 현재 `ntfy_subscriptions`, `web_push_subscriptions` 수도 함께 노출해서 delivery kind별 운영 가시성을 높인다
+- `GET /api/push/queue/stats`는 최근 failure reason top-N을 terminal item failure와 destination-level delivery failure로 나눠서 보여준다
 - queue item이 `sent`로 끝나더라도 partial delivery failure는 `last_error`에 남겨서, 성공 전달은 유지하면서도 죽은 destination을 운영에서 바로 찾을 수 있다
 
 아직 아닌 것:

@@ -1,5 +1,5 @@
 use axum::{
-    extract::{Path, State},
+    extract::{Path, Query, State},
     http::{self, StatusCode},
     response::{IntoResponse, Response},
     Extension, Json,
@@ -10,6 +10,7 @@ use base64::{
 use serde::{Deserialize, Serialize};
 use sqlx::FromRow;
 use sqlx::SqlitePool;
+use std::collections::HashMap;
 
 use crate::api::common::{json_error, json_message};
 use crate::auth::jwt::Claims;
@@ -101,6 +102,20 @@ pub struct PushQueueResponse {
     pub summary: PushQueueSummary,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PushReasonStat {
+    pub reason: String,
+    pub count: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PushQueueStatsResponse {
+    pub window_hours: i64,
+    pub limit: usize,
+    pub terminal_failure_reasons: Vec<PushReasonStat>,
+    pub destination_failure_reasons: Vec<PushReasonStat>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct VapidPublicKeyResponse {
     pub public_key: String,
@@ -161,6 +176,61 @@ struct PushQueueSummaryRow {
     partial_success: i64,
     ntfy_subscriptions: i64,
     web_push_subscriptions: i64,
+}
+
+#[derive(Debug, Clone, FromRow)]
+struct PushQueueStatsRow {
+    last_error: Option<String>,
+    partial_failure_count: i64,
+    failed_destinations_json: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct PushQueueStatsParams {
+    pub window_hours: Option<i64>,
+    pub limit: Option<usize>,
+}
+
+const DEFAULT_PUSH_QUEUE_STATS_WINDOW_HOURS: i64 = 24;
+const MAX_PUSH_QUEUE_STATS_WINDOW_HOURS: i64 = 24 * 7;
+const DEFAULT_PUSH_QUEUE_STATS_LIMIT: usize = 5;
+const MAX_PUSH_QUEUE_STATS_LIMIT: usize = 20;
+
+fn normalize_push_queue_stats_window_hours(value: Option<i64>) -> i64 {
+    match value {
+        Some(hours) if hours > 0 => hours.min(MAX_PUSH_QUEUE_STATS_WINDOW_HOURS),
+        _ => DEFAULT_PUSH_QUEUE_STATS_WINDOW_HOURS,
+    }
+}
+
+fn normalize_push_queue_stats_limit(value: Option<usize>) -> usize {
+    match value {
+        Some(limit) if limit > 0 => limit.min(MAX_PUSH_QUEUE_STATS_LIMIT),
+        _ => DEFAULT_PUSH_QUEUE_STATS_LIMIT,
+    }
+}
+
+fn top_push_reason_stats(counts: HashMap<String, i64>, limit: usize) -> Vec<PushReasonStat> {
+    let mut stats: Vec<PushReasonStat> = counts
+        .into_iter()
+        .filter_map(|(reason, count)| {
+            let reason = reason.trim().to_string();
+            if reason.is_empty() || count <= 0 {
+                None
+            } else {
+                Some(PushReasonStat { reason, count })
+            }
+        })
+        .collect();
+
+    stats.sort_by(|left, right| {
+        right
+            .count
+            .cmp(&left.count)
+            .then_with(|| left.reason.cmp(&right.reason))
+    });
+    stats.truncate(limit);
+    stats
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -490,6 +560,77 @@ pub async fn list_queue(
     }
 }
 
+pub async fn list_queue_stats(
+    State(state): State<crate::AppState>,
+    Extension(claims): Extension<Claims>,
+    Query(params): Query<PushQueueStatsParams>,
+) -> Response {
+    let window_hours = normalize_push_queue_stats_window_hours(params.window_hours);
+    let limit = normalize_push_queue_stats_limit(params.limit);
+    let window_clause = format!("-{} hours", window_hours);
+
+    let rows_result = if claims.is_admin {
+        sqlx::query_as::<_, PushQueueStatsRow>(
+            "SELECT last_error, partial_failure_count, failed_destinations_json FROM push_queue WHERE processed_at IS NOT NULL AND processed_at >= datetime('now', ?)",
+        )
+        .bind(&window_clause)
+        .fetch_all(&state.pool)
+        .await
+    } else {
+        sqlx::query_as::<_, PushQueueStatsRow>(
+            "SELECT last_error, partial_failure_count, failed_destinations_json FROM push_queue WHERE user_id = ? AND processed_at IS NOT NULL AND processed_at >= datetime('now', ?)",
+        )
+        .bind(&claims.sub)
+        .bind(&window_clause)
+        .fetch_all(&state.pool)
+        .await
+    };
+
+    match rows_result {
+        Ok(rows) => {
+            let mut terminal_failure_counts = HashMap::new();
+            let mut destination_failure_counts = HashMap::new();
+
+            for row in rows {
+                if row.partial_failure_count > 0 {
+                    for failure in decode_failed_destinations(
+                        row.failed_destinations_json.as_deref(),
+                        row.last_error.as_deref(),
+                        row.partial_failure_count,
+                    ) {
+                        *destination_failure_counts.entry(failure.error).or_insert(0) += 1;
+                    }
+                } else if let Some(last_error) = row.last_error {
+                    let trimmed = last_error.trim();
+                    if !trimmed.is_empty() {
+                        *terminal_failure_counts
+                            .entry(trimmed.to_string())
+                            .or_insert(0) += 1;
+                    }
+                }
+            }
+
+            (
+                StatusCode::OK,
+                Json(PushQueueStatsResponse {
+                    window_hours,
+                    limit,
+                    terminal_failure_reasons: top_push_reason_stats(terminal_failure_counts, limit),
+                    destination_failure_reasons: top_push_reason_stats(
+                        destination_failure_counts,
+                        limit,
+                    ),
+                }),
+            )
+                .into_response()
+        }
+        Err(_) => json_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "failed to load push queue stats",
+        ),
+    }
+}
+
 pub async fn get_vapid_public_key() -> Response {
     match crate::push::webpush::public_vapid_key() {
         Ok(public_key) => {
@@ -560,7 +701,11 @@ pub fn should_retry(retry_count: i64) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use axum::{extract::State, http::StatusCode, Extension, Json};
+    use axum::{
+        extract::{Query, State},
+        http::StatusCode,
+        Extension, Json,
+    };
 
     use super::*;
     use crate::{api::auth, auth::jwt::Claims, test_support};
@@ -805,6 +950,124 @@ mod tests {
         assert_eq!(decoded.len(), 2);
         let logs = String::from_utf8(buffer.lock().unwrap().clone()).unwrap();
         assert!(logs.contains("failed to decode failed_destinations_json"));
+    }
+
+    #[tokio::test]
+    async fn test_queue_stats_groups_recent_failure_reasons() {
+        let (state, _dir) = test_support::make_test_state().await;
+        let admin = auth::register(
+            State(state.clone()),
+            Json(auth::RegisterRequest {
+                email: "admin@example.com".to_string(),
+                password: "secret123".to_string(),
+            }),
+        )
+        .await;
+        let admin: auth::RegisterResponse = test_support::response_json(admin).await;
+
+        sqlx::query(
+            "INSERT INTO push_queue (user_id, title, body, status, retry_count, last_error, partial_failure_count, failed_destinations_json, processed_at) VALUES (?, ?, ?, 'failed', 3, 'no subscriptions configured', 0, NULL, datetime('now', '-2 hours'))",
+        )
+        .bind(&admin.user.id)
+        .bind("hello")
+        .bind("world")
+        .execute(&state.pool)
+        .await
+        .unwrap();
+
+        sqlx::query(
+            "INSERT INTO push_queue (user_id, title, body, status, retry_count, last_error, partial_failure_count, failed_destinations_json, processed_at) VALUES (?, ?, ?, 'sent', 0, 'partial delivery happened', 2, ?, datetime('now', '-1 hours'))",
+        )
+        .bind(&admin.user.id)
+        .bind("hello")
+        .bind("world")
+        .bind(r#"[{"endpoint":"https://example.invalid/push-a","error":"timeout"},{"endpoint":"https://example.invalid/push-b","error":"timeout"}]"#)
+        .execute(&state.pool)
+        .await
+        .unwrap();
+
+        let stats_response = list_queue_stats(
+            State(state),
+            Extension(claims(&admin.user.id, true)),
+            Query(PushQueueStatsParams {
+                window_hours: Some(24),
+                limit: Some(5),
+            }),
+        )
+        .await;
+        assert_eq!(stats_response.status(), StatusCode::OK);
+        let stats_body: PushQueueStatsResponse = test_support::response_json(stats_response).await;
+        assert_eq!(stats_body.window_hours, 24);
+        assert_eq!(stats_body.limit, 5);
+        assert_eq!(stats_body.terminal_failure_reasons.len(), 1);
+        assert_eq!(
+            stats_body.terminal_failure_reasons[0].reason,
+            "no subscriptions configured"
+        );
+        assert_eq!(stats_body.terminal_failure_reasons[0].count, 1);
+        assert_eq!(stats_body.destination_failure_reasons.len(), 1);
+        assert_eq!(stats_body.destination_failure_reasons[0].reason, "timeout");
+        assert_eq!(stats_body.destination_failure_reasons[0].count, 2);
+    }
+
+    #[tokio::test]
+    async fn test_queue_stats_respects_user_scope() {
+        let (state, _dir) = test_support::make_test_state().await;
+        let admin = auth::register(
+            State(state.clone()),
+            Json(auth::RegisterRequest {
+                email: "admin@example.com".to_string(),
+                password: "secret123".to_string(),
+            }),
+        )
+        .await;
+        let admin: auth::RegisterResponse = test_support::response_json(admin).await;
+        let member = auth::register(
+            State(state.clone()),
+            Json(auth::RegisterRequest {
+                email: "member@example.com".to_string(),
+                password: "secret123".to_string(),
+            }),
+        )
+        .await;
+        let member: auth::RegisterResponse = test_support::response_json(member).await;
+
+        sqlx::query(
+            "INSERT INTO push_queue (user_id, title, body, status, retry_count, last_error, partial_failure_count, failed_destinations_json, processed_at) VALUES (?, ?, ?, 'failed', 3, 'no subscriptions configured', 0, NULL, datetime('now', '-1 hours'))",
+        )
+        .bind(&admin.user.id)
+        .bind("hello")
+        .bind("world")
+        .execute(&state.pool)
+        .await
+        .unwrap();
+
+        sqlx::query(
+            "INSERT INTO push_queue (user_id, title, body, status, retry_count, last_error, partial_failure_count, failed_destinations_json, processed_at) VALUES (?, ?, ?, 'sent', 0, 'partial delivery happened', 1, ?, datetime('now', '-1 hours'))",
+        )
+        .bind(&member.user.id)
+        .bind("hello")
+        .bind("world")
+        .bind(r#"[{"endpoint":"https://example.invalid/push-a","error":"timeout"}]"#)
+        .execute(&state.pool)
+        .await
+        .unwrap();
+
+        let stats_response = list_queue_stats(
+            State(state),
+            Extension(claims(&member.user.id, false)),
+            Query(PushQueueStatsParams {
+                window_hours: Some(24),
+                limit: Some(5),
+            }),
+        )
+        .await;
+        assert_eq!(stats_response.status(), StatusCode::OK);
+        let stats_body: PushQueueStatsResponse = test_support::response_json(stats_response).await;
+        assert!(stats_body.terminal_failure_reasons.is_empty());
+        assert_eq!(stats_body.destination_failure_reasons.len(), 1);
+        assert_eq!(stats_body.destination_failure_reasons[0].reason, "timeout");
+        assert_eq!(stats_body.destination_failure_reasons[0].count, 1);
     }
 
     #[tokio::test]

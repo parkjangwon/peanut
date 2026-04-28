@@ -113,7 +113,8 @@ async fn main() {
             get(api::push::get_vapid_public_key),
         )
         .route("/push/messages", post(api::push::enqueue_message))
-        .route("/push/queue", get(api::push::list_queue));
+        .route("/push/queue", get(api::push::list_queue))
+        .route("/push/queue/stats", get(api::push::list_queue_stats));
 
     let function_routes = Router::new()
         .route("/functions", get(api::functions::list_functions))
@@ -226,8 +227,14 @@ async fn main() {
 
     let protected_routes = Router::new()
         .route("/admin/users", get(api::admin::list_users))
-        .route("/admin/service-tokens", get(api::admin::list_service_tokens))
-        .route("/admin/service-tokens", post(api::admin::create_service_token))
+        .route(
+            "/admin/service-tokens",
+            get(api::admin::list_service_tokens),
+        )
+        .route(
+            "/admin/service-tokens",
+            post(api::admin::create_service_token),
+        )
         .route(
             "/admin/service-tokens/:token_id",
             delete(api::admin::revoke_service_token),
