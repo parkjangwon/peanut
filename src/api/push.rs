@@ -74,6 +74,7 @@ fn map_queue_entry(row: PushQueueEntryRow) -> PushQueueEntry {
             row.last_error.as_deref(),
             row.partial_failure_count,
         ),
+        next_retry_at: row.next_retry_at,
         created_at: row.created_at,
         processed_at: row.processed_at,
     }
@@ -147,6 +148,7 @@ pub struct PushQueueEntry {
     pub last_error: Option<String>,
     pub partial_failure_count: i64,
     pub failed_destinations: Vec<PushDeliveryFailure>,
+    pub next_retry_at: Option<String>,
     pub created_at: String,
     pub processed_at: Option<String>,
 }
@@ -162,6 +164,7 @@ struct PushQueueEntryRow {
     last_error: Option<String>,
     partial_failure_count: i64,
     failed_destinations_json: Option<String>,
+    next_retry_at: Option<String>,
     created_at: String,
     processed_at: Option<String>,
 }
@@ -482,13 +485,13 @@ pub async fn list_queue(
 ) -> Response {
     let items_result = if claims.is_admin {
         sqlx::query_as::<_, PushQueueEntryRow>(
-            "SELECT id, user_id, title, body, status, retry_count, last_error, partial_failure_count, failed_destinations_json, created_at, processed_at FROM push_queue ORDER BY id DESC LIMIT 50",
+            "SELECT id, user_id, title, body, status, retry_count, last_error, partial_failure_count, failed_destinations_json, next_retry_at, created_at, processed_at FROM push_queue ORDER BY id DESC LIMIT 50",
         )
         .fetch_all(&state.pool)
         .await
     } else {
         sqlx::query_as::<_, PushQueueEntryRow>(
-            "SELECT id, user_id, title, body, status, retry_count, last_error, partial_failure_count, failed_destinations_json, created_at, processed_at FROM push_queue WHERE user_id = ? ORDER BY id DESC LIMIT 50",
+            "SELECT id, user_id, title, body, status, retry_count, last_error, partial_failure_count, failed_destinations_json, next_retry_at, created_at, processed_at FROM push_queue WHERE user_id = ? ORDER BY id DESC LIMIT 50",
         )
         .bind(&claims.sub)
         .fetch_all(&state.pool)
@@ -1068,6 +1071,37 @@ mod tests {
         assert_eq!(stats_body.destination_failure_reasons.len(), 1);
         assert_eq!(stats_body.destination_failure_reasons[0].reason, "timeout");
         assert_eq!(stats_body.destination_failure_reasons[0].count, 1);
+    }
+
+    #[tokio::test]
+    async fn test_queue_item_exposes_next_retry_at_for_pending_retry() {
+        let (state, _dir) = test_support::make_test_state().await;
+        let admin = auth::register(
+            State(state.clone()),
+            Json(auth::RegisterRequest {
+                email: "admin@example.com".to_string(),
+                password: "secret123".to_string(),
+            }),
+        )
+        .await;
+        let admin: auth::RegisterResponse = test_support::response_json(admin).await;
+
+        sqlx::query(
+            "INSERT INTO push_queue (user_id, title, body, status, retry_count, last_error, next_retry_at) VALUES (?, ?, ?, 'pending', 1, 'retry later', datetime('now', '+30 seconds'))",
+        )
+        .bind(&admin.user.id)
+        .bind("hello")
+        .bind("world")
+        .execute(&state.pool)
+        .await
+        .unwrap();
+
+        let queue_response =
+            list_queue(State(state), Extension(claims(&admin.user.id, true))).await;
+        let queue_body: PushQueueResponse = test_support::response_json(queue_response).await;
+        assert_eq!(queue_body.items.len(), 1);
+        assert_eq!(queue_body.items[0].retry_count, 1);
+        assert!(queue_body.items[0].next_retry_at.is_some());
     }
 
     #[tokio::test]

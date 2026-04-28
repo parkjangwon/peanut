@@ -7,6 +7,7 @@ use web_push::{SubscriptionInfo, WebPushError};
 
 const MAX_RETRIES: i64 = 3;
 const CLAIM_TIMEOUT_SECONDS: i64 = 120;
+const RETRY_BACKOFF_SCHEDULE_SECONDS: [i64; 2] = [30, 120];
 
 #[derive(sqlx::FromRow)]
 struct PushQueueItem {
@@ -70,7 +71,7 @@ where
     reclaim_stale_processing_items(pool).await?;
 
     let pending_ids: Vec<(i64,)> = sqlx::query_as(
-        "SELECT id FROM push_queue WHERE status = 'pending' ORDER BY id ASC LIMIT 10",
+        "SELECT id FROM push_queue WHERE status = 'pending' AND (next_retry_at IS NULL OR next_retry_at <= CURRENT_TIMESTAMP) ORDER BY id ASC LIMIT 10",
     )
     .fetch_all(pool)
     .await?;
@@ -280,6 +281,14 @@ async fn reclaim_stale_processing_items(pool: &SqlitePool) -> Result<(), sqlx::E
     Ok(())
 }
 
+fn retry_backoff_seconds(next_retry_count: i64) -> i64 {
+    let index = (next_retry_count.saturating_sub(1)) as usize;
+    RETRY_BACKOFF_SCHEDULE_SECONDS
+        .get(index)
+        .copied()
+        .unwrap_or(*RETRY_BACKOFF_SCHEDULE_SECONDS.last().unwrap_or(&120))
+}
+
 async fn mark_sent(
     pool: &SqlitePool,
     item_id: i64,
@@ -288,7 +297,7 @@ async fn mark_sent(
     failed_destinations_json: Option<&str>,
 ) -> Result<(), sqlx::Error> {
     sqlx::query(
-        "UPDATE push_queue SET status = 'sent', last_error = ?, partial_failure_count = ?, failed_destinations_json = ?, claimed_at = NULL, processed_at = CURRENT_TIMESTAMP WHERE id = ?",
+        "UPDATE push_queue SET status = 'sent', last_error = ?, partial_failure_count = ?, failed_destinations_json = ?, next_retry_at = NULL, claimed_at = NULL, processed_at = CURRENT_TIMESTAMP WHERE id = ?",
     )
     .bind(last_error)
     .bind(partial_failure_count)
@@ -306,7 +315,7 @@ async fn mark_terminal_failure(
     error: &str,
 ) -> Result<(), sqlx::Error> {
     sqlx::query(
-        "UPDATE push_queue SET status = 'failed', retry_count = ?, last_error = ?, partial_failure_count = 0, failed_destinations_json = NULL, claimed_at = NULL, processed_at = CURRENT_TIMESTAMP WHERE id = ?",
+        "UPDATE push_queue SET status = 'failed', retry_count = ?, last_error = ?, partial_failure_count = 0, failed_destinations_json = NULL, next_retry_at = NULL, claimed_at = NULL, processed_at = CURRENT_TIMESTAMP WHERE id = ?",
     )
     .bind(MAX_RETRIES)
     .bind(error)
@@ -331,15 +340,25 @@ async fn mark_failed(
     } else {
         "pending"
     };
+    let next_retry_at = if next_status == "pending" {
+        Some(format!(
+            "+{} seconds",
+            retry_backoff_seconds(next_retry_count)
+        ))
+    } else {
+        None
+    };
 
     sqlx::query(
-        "UPDATE push_queue SET status = ?, retry_count = ?, last_error = ?, partial_failure_count = ?, failed_destinations_json = ?, claimed_at = NULL, processed_at = CURRENT_TIMESTAMP WHERE id = ?",
+        "UPDATE push_queue SET status = ?, retry_count = ?, last_error = ?, partial_failure_count = ?, failed_destinations_json = ?, next_retry_at = CASE WHEN ? IS NULL THEN NULL ELSE datetime('now', ?) END, claimed_at = NULL, processed_at = CURRENT_TIMESTAMP WHERE id = ?",
     )
     .bind(next_status)
     .bind(next_retry_count)
     .bind(error)
     .bind(partial_failure_count)
     .bind(failed_destinations_json)
+    .bind(next_retry_at.as_deref())
+    .bind(next_retry_at.as_deref())
     .bind(item_id)
     .execute(pool)
     .await?;
@@ -719,6 +738,80 @@ mod tests {
             row.2.as_deref(),
             Some("https://example.invalid/push: WEB_PUSH_VAPID_PRIVATE_KEY must be set for Web Push delivery")
         );
+    }
+
+    #[tokio::test]
+    async fn test_process_queue_sets_retry_backoff_for_retryable_failures() {
+        let pool = crate::db::init_db("sqlite::memory:").await.unwrap();
+        insert_user(&pool, "user-1").await;
+
+        sqlx::query(
+            "INSERT INTO push_subscriptions (user_id, endpoint, p256dh, auth) VALUES (?, ?, '', '')",
+        )
+        .bind("user-1")
+        .bind("alerts_main")
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        sqlx::query(
+            "INSERT INTO push_queue (user_id, title, body, status, retry_count) VALUES (?, ?, ?, 'pending', 0)",
+        )
+        .bind("user-1")
+        .bind("hello")
+        .bind("world")
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        process_queue_with_deliveries(
+            &pool,
+            |_topic, _title, _body| async move {
+                Err(
+                    Box::new(crate::push::ntfy::NtfyDeliveryError::RetryableStatus(503))
+                        as Box<dyn std::error::Error>,
+                )
+            },
+            |_subscription, _title, _body| async move { Ok(()) },
+        )
+        .await
+        .unwrap();
+
+        let row: (String, i64, Option<String>, Option<String>) = sqlx::query_as(
+            "SELECT status, retry_count, last_error, next_retry_at FROM push_queue WHERE user_id = ?",
+        )
+        .bind("user-1")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(row.0, "pending");
+        assert_eq!(row.1, 1);
+        assert_eq!(row.2.as_deref(), Some("alerts_main: ntfy failed: 503"));
+        assert!(row.3.is_some());
+
+        process_queue_with_deliveries(
+            &pool,
+            |_topic, _title, _body| async move {
+                Err(
+                    Box::new(crate::push::ntfy::NtfyDeliveryError::RetryableStatus(503))
+                        as Box<dyn std::error::Error>,
+                )
+            },
+            |_subscription, _title, _body| async move { Ok(()) },
+        )
+        .await
+        .unwrap();
+
+        let second_row: (String, i64, Option<String>) = sqlx::query_as(
+            "SELECT status, retry_count, next_retry_at FROM push_queue WHERE user_id = ?",
+        )
+        .bind("user-1")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(second_row.0, "pending");
+        assert_eq!(second_row.1, 1);
+        assert!(second_row.2.is_some());
     }
 
     #[test]

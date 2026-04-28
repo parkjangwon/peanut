@@ -249,7 +249,7 @@ Peanut은 현재 실용적인 hybrid push 레이어를 제공한다.
 - subscription이 하나도 없는 item은 의미 없는 재시도 대신 즉시 terminal failure로 정리한다
 - 영구적으로 잘못된 delivery 경로도 즉시 terminal failure로 다룬다. 남은 Web Push subscription이 모두 dead endpoint라 prune된 경우 추가 retry를 태우지 않고, ntfy 4xx 응답도 운영자 수정이 필요한 non-retryable 오류로 본다
 - 누락되거나 잘못된 Web Push VAPID 런타임 설정도 terminal operator error로 취급해서, env가 고쳐질 때까지 의미 없이 retry를 반복하지 않는다
-- queue 상태, retry 횟수, 마지막 에러를 API/콘솔에서 볼 수 있다
+- queue 상태, retry 횟수, 마지막 에러, `next_retry_at`를 API/콘솔에서 볼 수 있다
 - 404/410 성격의 terminal Web Push 에러를 돌려주는 죽은 subscription은 subscription 테이블에서 자동 정리된다
 - partial delivery 메타데이터도 구조화되어서, queue item은 이제 `last_error`와 함께 `partial_failure_count`, `failed_destinations[]`를 노출한다
 - queue summary는 현재 `ntfy_subscriptions`, `web_push_subscriptions` 수도 함께 노출해서 delivery kind별 운영 가시성을 높인다
