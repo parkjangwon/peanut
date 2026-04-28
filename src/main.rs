@@ -35,6 +35,7 @@ pub struct AppState {
     pub function_event_sender:
         tokio::sync::broadcast::Sender<crate::api::functions::FunctionRealtimeEvent>,
     pub data_event_sender: tokio::sync::broadcast::Sender<crate::api::data::DataRowRealtimeEvent>,
+    pub last_backup_at: Arc<tokio::sync::RwLock<Option<chrono::DateTime<chrono::Local>>>>,
 }
 
 #[tokio::main]
@@ -62,7 +63,7 @@ async fn main() {
     ));
 
     let state = AppState {
-        pool,
+        pool: pool.clone(),
         storage,
         jwt_secret: Arc::new(config.jwt_secret.clone()),
         password_reset_delivery: config.password_reset_delivery.clone(),
@@ -70,11 +71,47 @@ async fn main() {
         auth_allowed_client_ids: Arc::new(config.auth_allowed_client_ids.clone()),
         function_event_sender: tokio::sync::broadcast::channel(256).0,
         data_event_sender: tokio::sync::broadcast::channel(256).0,
+        last_backup_at: Arc::new(tokio::sync::RwLock::new(None)),
     };
 
     let pool_clone = state.pool.clone();
     tokio::spawn(async move {
         crate::push::worker::start_push_worker(pool_clone).await;
+    });
+
+    // Start background backup worker
+    let pool_for_backup = state.pool.clone();
+    let db_url = config.database_url.clone();
+    let last_backup_at = state.last_backup_at.clone();
+    tokio::spawn(async move {
+        // SQLite URL starts with sqlite:// or sqlite:
+        let db_path = if db_url.starts_with("sqlite://") {
+            &db_url[9..]
+        } else if db_url.starts_with("sqlite:") {
+            &db_url[7..]
+        } else {
+            &db_url
+        };
+        
+        // Remove query parameters if present
+        let db_path = db_path.split('?').next().unwrap_or(db_path);
+
+        loop {
+            // Wait for 24 hours
+            tokio::time::sleep(std::time::Duration::from_secs(24 * 60 * 60)).await;
+
+            tracing::info!("Starting scheduled database backup...");
+            match crate::db::backup_db(&pool_for_backup, db_path).await {
+                Ok(path) => {
+                    tracing::info!("Database backup successful: {}", path);
+                    let mut last_backup = last_backup_at.write().await;
+                    *last_backup = Some(chrono::Local::now());
+                }
+                Err(e) => {
+                    tracing::error!("Database backup failed: {}", e);
+                }
+            }
+        }
     });
 
     let legacy_storage_routes = Router::new()
