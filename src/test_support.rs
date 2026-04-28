@@ -19,6 +19,7 @@ pub async fn make_test_state() -> (crate::AppState, tempfile::TempDir) {
         function_event_sender: tokio::sync::broadcast::channel(256).0,
         data_event_sender: tokio::sync::broadcast::channel(256).0,
         last_backup_at: Arc::new(tokio::sync::RwLock::new(None)),
+        rate_limit_state: Arc::new(dashmap::DashMap::new()),
     };
     (state, dir)
 }
