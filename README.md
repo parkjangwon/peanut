@@ -246,6 +246,7 @@ What this means:
 - `GET /api/push/queue` now also returns a `summary` block with total/pending/processing/sent/failed/partial_success counts
 - queue items no longer fail just because one destination failed; if at least one subscription accepts the delivery, the queue item is marked sent
 - queue items with no subscriptions configured now fail terminally instead of pointlessly retrying
+- permanently invalid delivery paths also fail terminally now: a queue item no longer burns extra retries after all remaining Web Push subscriptions were pruned as dead, and ntfy 4xx responses are treated as non-retryable operator errors
 - queue status, retries, and last error are visible through the API and console
 - dead Web Push subscriptions that return terminal 404/410-style errors are automatically removed from the subscription table
 - partial-delivery metadata is now structured too: queue items expose `partial_failure_count` and `failed_destinations[]` alongside `last_error`

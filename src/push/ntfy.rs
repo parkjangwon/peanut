@@ -2,6 +2,24 @@ use reqwest::{
     header::{HeaderValue, AUTHORIZATION},
     Client, Request,
 };
+use std::fmt;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum NtfyDeliveryError {
+    TerminalStatus(u16),
+    RetryableStatus(u16),
+}
+
+impl fmt::Display for NtfyDeliveryError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            NtfyDeliveryError::TerminalStatus(status) => write!(f, "ntfy failed: {}", status),
+            NtfyDeliveryError::RetryableStatus(status) => write!(f, "ntfy failed: {}", status),
+        }
+    }
+}
+
+impl std::error::Error for NtfyDeliveryError {}
 
 pub async fn send_ntfy_notification(
     topic: &str,
@@ -15,7 +33,12 @@ pub async fn send_ntfy_notification(
     if res.status().is_success() {
         Ok(())
     } else {
-        Err(format!("ntfy failed: {}", res.status()).into())
+        let status = res.status().as_u16();
+        if matches!(status, 400 | 401 | 403 | 404 | 410) {
+            Err(Box::new(NtfyDeliveryError::TerminalStatus(status)))
+        } else {
+            Err(Box::new(NtfyDeliveryError::RetryableStatus(status)))
+        }
     }
 }
 
@@ -25,7 +48,14 @@ fn build_ntfy_request(
     title: &str,
     body: &str,
 ) -> Result<Request, Box<dyn std::error::Error>> {
-    build_ntfy_request_with_config(client, &ntfy_base_url()?, ntfy_auth_token().as_deref(), topic, title, body)
+    build_ntfy_request_with_config(
+        client,
+        &ntfy_base_url()?,
+        ntfy_auth_token().as_deref(),
+        topic,
+        title,
+        body,
+    )
 }
 
 fn build_ntfy_request_with_config(

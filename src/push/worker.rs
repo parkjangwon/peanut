@@ -52,6 +52,7 @@ pub async fn process_queue(pool: &SqlitePool) -> Result<(), Box<dyn std::error::
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum DeliveryOutcome {
     SubscriptionGone,
+    TerminalFailure,
     Failure,
 }
 
@@ -108,6 +109,7 @@ where
         let mut success_count = 0usize;
         let mut errors = Vec::new();
         let mut failed_destinations = Vec::new();
+        let mut failure_outcomes = Vec::new();
         let mut dead_subscription_endpoints = Vec::new();
         for subscription in subscriptions {
             let delivery_result = if is_web_push_subscription(&subscription) {
@@ -155,6 +157,7 @@ where
                 if outcome == DeliveryOutcome::SubscriptionGone {
                     dead_subscription_endpoints.push(subscription.endpoint.clone());
                 }
+                failure_outcomes.push(outcome);
             }
         }
 
@@ -189,6 +192,13 @@ where
                 failed_destinations_json.as_deref(),
             )
             .await?;
+        } else if failure_outcomes.iter().all(|outcome| {
+            matches!(
+                outcome,
+                DeliveryOutcome::SubscriptionGone | DeliveryOutcome::TerminalFailure
+            )
+        }) {
+            mark_terminal_failure(pool, item.id, &errors.join(" | ")).await?;
         } else {
             mark_failed(
                 pool,
@@ -216,6 +226,17 @@ fn classify_delivery_error(error: &Box<dyn std::error::Error>) -> DeliveryOutcom
                 return DeliveryOutcome::SubscriptionGone;
             }
             _ => {}
+        }
+    }
+
+    if let Some(ntfy_error) = error.downcast_ref::<crate::push::ntfy::NtfyDeliveryError>() {
+        match ntfy_error {
+            crate::push::ntfy::NtfyDeliveryError::TerminalStatus(_) => {
+                return DeliveryOutcome::TerminalFailure;
+            }
+            crate::push::ntfy::NtfyDeliveryError::RetryableStatus(_) => {
+                return DeliveryOutcome::Failure;
+            }
         }
     }
 
@@ -474,7 +495,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_process_queue_deletes_dead_web_push_subscriptions() {
+    async fn test_process_queue_deletes_dead_web_push_subscriptions_and_terminally_fails() {
         let pool = crate::db::init_db("sqlite::memory:").await.unwrap();
         insert_user(&pool, "user-1").await;
 
@@ -520,21 +541,23 @@ mod tests {
         .unwrap();
         assert_eq!(remaining_subscriptions.0, 0);
 
-        let row: (String, Option<String>) =
-            sqlx::query_as("SELECT status, last_error FROM push_queue WHERE user_id = ?")
-                .bind("user-1")
-                .fetch_one(&pool)
-                .await
-                .unwrap();
-        assert_eq!(row.0, "pending");
+        let row: (String, i64, Option<String>) = sqlx::query_as(
+            "SELECT status, retry_count, last_error FROM push_queue WHERE user_id = ?",
+        )
+        .bind("user-1")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(row.0, "failed");
+        assert_eq!(row.1, MAX_RETRIES);
         assert_eq!(
-            row.1.as_deref(),
+            row.2.as_deref(),
             Some("https://example.invalid/dead-push: The URL specified is no longer valid and should no longer be used")
         );
     }
 
     #[tokio::test]
-    async fn test_process_queue_deletes_not_found_web_push_subscriptions() {
+    async fn test_process_queue_deletes_not_found_web_push_subscriptions_and_terminally_fails() {
         let pool = crate::db::init_db("sqlite::memory:").await.unwrap();
         insert_user(&pool, "user-1").await;
 
@@ -579,6 +602,64 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(remaining_subscriptions.0, 0);
+
+        let row: (String, i64) =
+            sqlx::query_as("SELECT status, retry_count FROM push_queue WHERE user_id = ?")
+                .bind("user-1")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(row.0, "failed");
+        assert_eq!(row.1, MAX_RETRIES);
+    }
+
+    #[tokio::test]
+    async fn test_process_queue_terminally_fails_ntfy_4xx_without_retrying() {
+        let pool = crate::db::init_db("sqlite::memory:").await.unwrap();
+        insert_user(&pool, "user-1").await;
+
+        sqlx::query(
+            "INSERT INTO push_subscriptions (user_id, endpoint, p256dh, auth) VALUES (?, ?, '', '')",
+        )
+        .bind("user-1")
+        .bind("alerts_main")
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        sqlx::query(
+            "INSERT INTO push_queue (user_id, title, body, status, retry_count) VALUES (?, ?, ?, 'pending', 0)",
+        )
+        .bind("user-1")
+        .bind("hello")
+        .bind("world")
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        process_queue_with_deliveries(
+            &pool,
+            |_topic, _title, _body| async move {
+                Err(
+                    Box::new(crate::push::ntfy::NtfyDeliveryError::TerminalStatus(404))
+                        as Box<dyn std::error::Error>,
+                )
+            },
+            |_subscription, _title, _body| async move { Ok(()) },
+        )
+        .await
+        .unwrap();
+
+        let row: (String, i64, Option<String>) = sqlx::query_as(
+            "SELECT status, retry_count, last_error FROM push_queue WHERE user_id = ?",
+        )
+        .bind("user-1")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(row.0, "failed");
+        assert_eq!(row.1, MAX_RETRIES);
+        assert_eq!(row.2.as_deref(), Some("alerts_main: ntfy failed: 404"));
     }
 
     #[test]
