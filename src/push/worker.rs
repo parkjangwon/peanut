@@ -2,7 +2,7 @@ use crate::push::{ntfy::send_ntfy_notification, webpush::send_web_push};
 use serde::Serialize;
 use sqlx::SqlitePool;
 use std::{future::Future, time::Duration};
-use tokio::time::sleep;
+use tokio::time::{sleep, Instant};
 use web_push::{SubscriptionInfo, WebPushError};
 
 const MAX_RETRIES: i64 = 3;
@@ -33,12 +33,37 @@ struct FailedDestinationRecord {
 
 pub async fn start_push_worker(pool: SqlitePool) {
     tracing::info!("Starting push notification worker...");
+    let mut last_cleanup = Instant::now();
     loop {
         if let Err(error) = process_queue(&pool).await {
             tracing::error!("Error processing push queue: {}", error);
         }
+
+        // 1시간마다 정리 수행
+        if last_cleanup.elapsed() >= Duration::from_secs(3600) {
+            match cleanup_old_items(&pool).await {
+                Ok(count) if count > 0 => {
+                    tracing::info!("Cleaned up {} old push queue items", count)
+                }
+                Err(e) => tracing::error!("Failed to cleanup old push queue items: {}", e),
+                _ => {}
+            }
+            last_cleanup = Instant::now();
+        }
+
         sleep(Duration::from_secs(5)).await;
     }
+}
+
+async fn cleanup_old_items(pool: &SqlitePool) -> Result<u64, sqlx::Error> {
+    // 30일 이상 경과한 성공(sent) 또는 실패(failed) 항목 삭제
+    let result = sqlx::query(
+        "DELETE FROM push_queue WHERE status IN ('sent', 'failed') AND processed_at <= datetime('now', '-30 days')"
+    )
+    .execute(pool)
+    .await?;
+
+    Ok(result.rows_affected())
 }
 
 pub async fn process_queue(pool: &SqlitePool) -> Result<(), Box<dyn std::error::Error>> {
@@ -843,5 +868,63 @@ mod tests {
             auth: "def".to_string(),
         };
         assert!(is_web_push_subscription(&web_push));
+    }
+
+    #[tokio::test]
+    async fn test_cleanup_old_items() {
+        let pool = crate::db::init_db("sqlite::memory:").await.unwrap();
+        insert_user(&pool, "user-1").await;
+
+        // 31일 전 데이터 (정리 대상)
+        sqlx::query(
+            "INSERT INTO push_queue (user_id, title, body, status, processed_at) VALUES (?, ?, ?, 'sent', datetime('now', '-31 days'))",
+        )
+        .bind("user-1")
+        .bind("old sent")
+        .bind("body")
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        sqlx::query(
+            "INSERT INTO push_queue (user_id, title, body, status, processed_at) VALUES (?, ?, ?, 'failed', datetime('now', '-31 days'))",
+        )
+        .bind("user-1")
+        .bind("old failed")
+        .bind("body")
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        // 29일 전 데이터 (유지 대상)
+        sqlx::query(
+            "INSERT INTO push_queue (user_id, title, body, status, processed_at) VALUES (?, ?, ?, 'sent', datetime('now', '-29 days'))",
+        )
+        .bind("user-1")
+        .bind("recent sent")
+        .bind("body")
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        // 현재 데이터 (유지 대상)
+        sqlx::query(
+            "INSERT INTO push_queue (user_id, title, body, status, processed_at) VALUES (?, ?, ?, 'pending', datetime('now', '-31 days'))",
+        )
+        .bind("user-1")
+        .bind("old pending")
+        .bind("body")
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let cleaned = cleanup_old_items(&pool).await.unwrap();
+        assert_eq!(cleaned, 2);
+
+        let count: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM push_queue")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(count.0, 2);
     }
 }

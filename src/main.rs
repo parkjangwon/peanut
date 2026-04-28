@@ -44,6 +44,9 @@ async fn main() {
 
     let config = crate::config::load_config_from_env()
         .unwrap_or_else(|message| panic!("Invalid Peanut configuration: {message}"));
+
+    log_push_status(&config);
+
     let cors_layer = build_cors_layer(&config.auth_allowed_origins);
 
     tokio::fs::create_dir_all(&config.storage_dir)
@@ -292,6 +295,26 @@ async fn main() {
         .await
         .unwrap();
     axum::serve(listener, app).await.unwrap();
+}
+
+fn log_push_status(config: &crate::config::AppConfig) {
+    tracing::info!("Push Notification Status:");
+    tracing::info!(
+        "  - ntfy: {}",
+        if config.push_ntfy_enabled {
+            "Enabled"
+        } else {
+            "Disabled (NTFY_BASE_URL not set)"
+        }
+    );
+    tracing::info!(
+        "  - Web Push: {}",
+        if config.push_web_push_enabled {
+            "Enabled"
+        } else {
+            "Disabled (WEB_PUSH_VAPID_PRIVATE_KEY not set)"
+        }
+    );
 }
 
 fn build_cors_layer(auth_allowed_origins: &[String]) -> CorsLayer {

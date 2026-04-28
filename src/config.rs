@@ -21,6 +21,8 @@ pub struct AppConfig {
     pub password_reset_delivery: PasswordResetDelivery,
     pub auth_allowed_origins: Vec<String>,
     pub auth_allowed_client_ids: Vec<String>,
+    pub push_ntfy_enabled: bool,
+    pub push_web_push_enabled: bool,
 }
 
 pub fn load_config_from_env() -> Result<AppConfig, String> {
@@ -92,6 +94,9 @@ fn load_config_from_map(values: &HashMap<String, String>) -> Result<AppConfig, S
     let auth_allowed_origins = parse_origin_policy_list(values, "AUTH_ALLOWED_ORIGINS")?;
     let auth_allowed_client_ids = parse_client_id_policy_list(values, "AUTH_ALLOWED_CLIENT_IDS")?;
 
+    let push_ntfy_enabled = values.get("NTFY_BASE_URL").is_some();
+    let push_web_push_enabled = values.get("WEB_PUSH_VAPID_PRIVATE_KEY").is_some();
+
     Ok(AppConfig {
         database_url,
         storage_dir,
@@ -101,6 +106,8 @@ fn load_config_from_map(values: &HashMap<String, String>) -> Result<AppConfig, S
         password_reset_delivery,
         auth_allowed_origins,
         auth_allowed_client_ids,
+        push_ntfy_enabled,
+        push_web_push_enabled,
     })
 }
 
@@ -175,6 +182,8 @@ mod tests {
         assert_eq!(config.auth_allowed_origins, Vec::<String>::new());
         assert_eq!(config.auth_allowed_client_ids, Vec::<String>::new());
         assert_eq!(config.jwt_secret, "test-secret");
+        assert!(!config.push_ntfy_enabled);
+        assert!(!config.push_web_push_enabled);
     }
 
     #[test]
@@ -264,5 +273,18 @@ mod tests {
 
         let error = load_config_from_map(&values).unwrap_err();
         assert!(error.contains("AUTH_ALLOWED_ORIGINS"));
+    }
+
+    #[test]
+    fn test_load_config_from_env_detects_push_status() {
+        let values = config(&[
+            ("JWT_SECRET", "test-secret"),
+            ("NTFY_BASE_URL", "https://ntfy.sh/topic"),
+            ("WEB_PUSH_VAPID_PRIVATE_KEY", "secret-key"),
+        ]);
+
+        let config = load_config_from_map(&values).unwrap();
+        assert!(config.push_ntfy_enabled);
+        assert!(config.push_web_push_enabled);
     }
 }
