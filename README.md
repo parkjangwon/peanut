@@ -244,6 +244,7 @@ What this means:
 - push messages are queued in SQLite
 - a background worker delivers queue items to ntfy or Web Push subscriptions
 - `GET /api/push/queue` now also returns a `summary` block with total/pending/processing/sent/failed/partial_success counts
+- the queue summary also includes retry backlog visibility: `retry_scheduled` for delayed retries and `retry_overdue` for items already eligible to be retried again
 - queue items no longer fail just because one destination failed; if at least one subscription accepts the delivery, the queue item is marked sent
 - queue items with no subscriptions configured now fail terminally instead of pointlessly retrying
 - permanently invalid delivery paths also fail terminally now: a queue item no longer burns extra retries after all remaining Web Push subscriptions were pruned as dead, and ntfy 4xx responses are treated as non-retryable operator errors

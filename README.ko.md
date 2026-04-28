@@ -245,6 +245,7 @@ Peanut은 현재 실용적인 hybrid push 레이어를 제공한다.
 - push 메시지는 SQLite queue에 쌓인다
 - 백그라운드 워커가 ntfy 또는 Web Push subscription으로 전달한다
 - `GET /api/push/queue`는 이제 total/pending/processing/sent/failed/partial_success 집계를 담은 `summary` 블록도 함께 반환한다
+- queue summary에는 retry backlog 가시성도 포함돼서, `retry_scheduled`는 아직 대기 중인 재시도 수를, `retry_overdue`는 이미 다시 집혀도 되는 재시도 대상을 보여준다
 - 여러 destination 중 하나만 성공해도 queue item 전체는 sent로 처리해서, 하나의 죽은 subscription 때문에 전체 전송이 막히지 않는다
 - subscription이 하나도 없는 item은 의미 없는 재시도 대신 즉시 terminal failure로 정리한다
 - 영구적으로 잘못된 delivery 경로도 즉시 terminal failure로 다룬다. 남은 Web Push subscription이 모두 dead endpoint라 prune된 경우 추가 retry를 태우지 않고, ntfy 4xx 응답도 운영자 수정이 필요한 non-retryable 오류로 본다

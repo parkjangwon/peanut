@@ -93,6 +93,8 @@ pub struct PushQueueSummary {
     pub sent: i64,
     pub failed: i64,
     pub partial_success: i64,
+    pub retry_scheduled: i64,
+    pub retry_overdue: i64,
     pub ntfy_subscriptions: i64,
     pub web_push_subscriptions: i64,
 }
@@ -113,6 +115,8 @@ pub struct PushReasonStat {
 pub struct PushQueueStatsResponse {
     pub window_hours: i64,
     pub limit: usize,
+    pub retry_scheduled: i64,
+    pub retry_overdue: i64,
     pub terminal_failure_reasons: Vec<PushReasonStat>,
     pub destination_failure_reasons: Vec<PushReasonStat>,
 }
@@ -177,6 +181,8 @@ struct PushQueueSummaryRow {
     sent: i64,
     failed: i64,
     partial_success: i64,
+    retry_scheduled: i64,
+    retry_overdue: i64,
     ntfy_subscriptions: i64,
     web_push_subscriptions: i64,
 }
@@ -508,6 +514,8 @@ pub async fn list_queue(
                 COALESCE(SUM(CASE WHEN status = 'sent' THEN 1 ELSE 0 END), 0) AS sent,
                 COALESCE(SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END), 0) AS failed,
                 COALESCE(SUM(CASE WHEN status = 'sent' AND partial_failure_count > 0 THEN 1 ELSE 0 END), 0) AS partial_success,
+                COALESCE(SUM(CASE WHEN status = 'pending' AND retry_count > 0 AND next_retry_at > CURRENT_TIMESTAMP THEN 1 ELSE 0 END), 0) AS retry_scheduled,
+                COALESCE(SUM(CASE WHEN status = 'pending' AND retry_count > 0 AND next_retry_at IS NOT NULL AND next_retry_at <= CURRENT_TIMESTAMP THEN 1 ELSE 0 END), 0) AS retry_overdue,
                 (SELECT COUNT(*) FROM push_subscriptions WHERE p256dh = '' AND auth = '') AS ntfy_subscriptions,
                 (SELECT COUNT(*) FROM push_subscriptions WHERE NOT (p256dh = '' AND auth = '')) AS web_push_subscriptions
             FROM push_queue
@@ -525,6 +533,8 @@ pub async fn list_queue(
                 COALESCE(SUM(CASE WHEN status = 'sent' THEN 1 ELSE 0 END), 0) AS sent,
                 COALESCE(SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END), 0) AS failed,
                 COALESCE(SUM(CASE WHEN status = 'sent' AND partial_failure_count > 0 THEN 1 ELSE 0 END), 0) AS partial_success,
+                COALESCE(SUM(CASE WHEN status = 'pending' AND retry_count > 0 AND next_retry_at > CURRENT_TIMESTAMP THEN 1 ELSE 0 END), 0) AS retry_scheduled,
+                COALESCE(SUM(CASE WHEN status = 'pending' AND retry_count > 0 AND next_retry_at IS NOT NULL AND next_retry_at <= CURRENT_TIMESTAMP THEN 1 ELSE 0 END), 0) AS retry_overdue,
                 (SELECT COUNT(*) FROM push_subscriptions WHERE user_id = ? AND p256dh = '' AND auth = '') AS ntfy_subscriptions,
                 (SELECT COUNT(*) FROM push_subscriptions WHERE user_id = ? AND NOT (p256dh = '' AND auth = '')) AS web_push_subscriptions
             FROM push_queue
@@ -550,6 +560,8 @@ pub async fn list_queue(
                     sent: summary.sent,
                     failed: summary.failed,
                     partial_success: summary.partial_success,
+                    retry_scheduled: summary.retry_scheduled,
+                    retry_overdue: summary.retry_overdue,
                     ntfy_subscriptions: summary.ntfy_subscriptions,
                     web_push_subscriptions: summary.web_push_subscriptions,
                 },
@@ -589,8 +601,23 @@ pub async fn list_queue_stats(
         .await
     };
 
-    match rows_result {
-        Ok(rows) => {
+    let retry_backlog_result = if claims.is_admin {
+        sqlx::query_as::<_, (i64, i64)>(
+            "SELECT COALESCE(SUM(CASE WHEN status = 'pending' AND retry_count > 0 AND next_retry_at > CURRENT_TIMESTAMP THEN 1 ELSE 0 END), 0) AS retry_scheduled, COALESCE(SUM(CASE WHEN status = 'pending' AND retry_count > 0 AND next_retry_at IS NOT NULL AND next_retry_at <= CURRENT_TIMESTAMP THEN 1 ELSE 0 END), 0) AS retry_overdue FROM push_queue",
+        )
+        .fetch_one(&state.pool)
+        .await
+    } else {
+        sqlx::query_as::<_, (i64, i64)>(
+            "SELECT COALESCE(SUM(CASE WHEN status = 'pending' AND retry_count > 0 AND next_retry_at > CURRENT_TIMESTAMP THEN 1 ELSE 0 END), 0) AS retry_scheduled, COALESCE(SUM(CASE WHEN status = 'pending' AND retry_count > 0 AND next_retry_at IS NOT NULL AND next_retry_at <= CURRENT_TIMESTAMP THEN 1 ELSE 0 END), 0) AS retry_overdue FROM push_queue WHERE user_id = ?",
+        )
+        .bind(&claims.sub)
+        .fetch_one(&state.pool)
+        .await
+    };
+
+    match (rows_result, retry_backlog_result) {
+        (Ok(rows), Ok((retry_scheduled, retry_overdue))) => {
             let mut terminal_failure_counts = HashMap::new();
             let mut destination_failure_counts = HashMap::new();
 
@@ -618,6 +645,8 @@ pub async fn list_queue_stats(
                 Json(PushQueueStatsResponse {
                     window_hours,
                     limit,
+                    retry_scheduled,
+                    retry_overdue,
                     terminal_failure_reasons: top_push_reason_stats(terminal_failure_counts, limit),
                     destination_failure_reasons: top_push_reason_stats(
                         destination_failure_counts,
@@ -627,7 +656,7 @@ pub async fn list_queue_stats(
             )
                 .into_response()
         }
-        Err(_) => json_error(
+        _ => json_error(
             StatusCode::INTERNAL_SERVER_ERROR,
             "failed to load push queue stats",
         ),
@@ -828,6 +857,48 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_queue_summary_counts_retry_backlog_and_overdue_items() {
+        let (state, _dir) = test_support::make_test_state().await;
+        let admin = auth::register(
+            State(state.clone()),
+            Json(auth::RegisterRequest {
+                email: "admin@example.com".to_string(),
+                password: "secret123".to_string(),
+            }),
+        )
+        .await;
+        let admin: auth::RegisterResponse = test_support::response_json(admin).await;
+
+        sqlx::query(
+            "INSERT INTO push_queue (user_id, title, body, status, retry_count, next_retry_at) VALUES (?, ?, ?, 'pending', 1, datetime('now', '+30 seconds'))",
+        )
+        .bind(&admin.user.id)
+        .bind("scheduled")
+        .bind("later")
+        .execute(&state.pool)
+        .await
+        .unwrap();
+
+        sqlx::query(
+            "INSERT INTO push_queue (user_id, title, body, status, retry_count, next_retry_at) VALUES (?, ?, ?, 'pending', 2, datetime('now', '-30 seconds'))",
+        )
+        .bind(&admin.user.id)
+        .bind("overdue")
+        .bind("now")
+        .execute(&state.pool)
+        .await
+        .unwrap();
+
+        let queue_response =
+            list_queue(State(state), Extension(claims(&admin.user.id, true))).await;
+        let queue_body: PushQueueResponse = test_support::response_json(queue_response).await;
+        assert_eq!(queue_body.summary.total, 2);
+        assert_eq!(queue_body.summary.pending, 2);
+        assert_eq!(queue_body.summary.retry_scheduled, 1);
+        assert_eq!(queue_body.summary.retry_overdue, 1);
+    }
+
+    #[tokio::test]
     async fn test_queue_summary_counts_partial_success_items() {
         let (state, _dir) = test_support::make_test_state().await;
         let admin = auth::register(
@@ -989,6 +1060,26 @@ mod tests {
         .await
         .unwrap();
 
+        sqlx::query(
+            "INSERT INTO push_queue (user_id, title, body, status, retry_count, next_retry_at) VALUES (?, ?, ?, 'pending', 1, datetime('now', '+30 seconds'))",
+        )
+        .bind(&admin.user.id)
+        .bind("scheduled")
+        .bind("later")
+        .execute(&state.pool)
+        .await
+        .unwrap();
+
+        sqlx::query(
+            "INSERT INTO push_queue (user_id, title, body, status, retry_count, next_retry_at) VALUES (?, ?, ?, 'pending', 2, datetime('now', '-30 seconds'))",
+        )
+        .bind(&admin.user.id)
+        .bind("overdue")
+        .bind("now")
+        .execute(&state.pool)
+        .await
+        .unwrap();
+
         let stats_response = list_queue_stats(
             State(state),
             Extension(claims(&admin.user.id, true)),
@@ -1002,6 +1093,8 @@ mod tests {
         let stats_body: PushQueueStatsResponse = test_support::response_json(stats_response).await;
         assert_eq!(stats_body.window_hours, 24);
         assert_eq!(stats_body.limit, 5);
+        assert_eq!(stats_body.retry_scheduled, 1);
+        assert_eq!(stats_body.retry_overdue, 1);
         assert_eq!(stats_body.terminal_failure_reasons.len(), 1);
         assert_eq!(
             stats_body.terminal_failure_reasons[0].reason,
@@ -1056,6 +1149,16 @@ mod tests {
         .await
         .unwrap();
 
+        sqlx::query(
+            "INSERT INTO push_queue (user_id, title, body, status, retry_count, next_retry_at) VALUES (?, ?, ?, 'pending', 1, datetime('now', '-30 seconds'))",
+        )
+        .bind(&member.user.id)
+        .bind("retry")
+        .bind("now")
+        .execute(&state.pool)
+        .await
+        .unwrap();
+
         let stats_response = list_queue_stats(
             State(state),
             Extension(claims(&member.user.id, false)),
@@ -1067,7 +1170,8 @@ mod tests {
         .await;
         assert_eq!(stats_response.status(), StatusCode::OK);
         let stats_body: PushQueueStatsResponse = test_support::response_json(stats_response).await;
-        assert!(stats_body.terminal_failure_reasons.is_empty());
+        assert!(stats_body.retry_scheduled == 0);
+        assert_eq!(stats_body.retry_overdue, 1);
         assert_eq!(stats_body.destination_failure_reasons.len(), 1);
         assert_eq!(stats_body.destination_failure_reasons[0].reason, "timeout");
         assert_eq!(stats_body.destination_failure_reasons[0].count, 1);
