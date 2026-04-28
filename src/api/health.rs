@@ -26,10 +26,48 @@ pub async fn readiness_check(State(state): State<crate::AppState>) -> Json<Value
         .await
         .map(|row| row.0 == 1)
         .unwrap_or(false);
+
+    let db_path_str = crate::db::extract_db_path(&state.database_url);
+    let db_path = std::path::Path::new(db_path_str);
+    
+    let db_file_size = if db_path.exists() {
+        std::fs::metadata(db_path).map(|m| m.len()).ok()
+    } else {
+        None
+    };
+
+    let (backup_count, last_backup_at) = if db_path.exists() {
+        let db_dir = db_path.parent().unwrap_or(std::path::Path::new("."));
+        let db_filename = db_path.file_name().and_then(|s| s.to_str()).unwrap_or("");
+        let prefix = format!("{}.", db_filename);
+        
+        let count = std::fs::read_dir(db_dir)
+            .map(|entries| {
+                entries
+                    .filter_map(|e| e.ok())
+                    .filter(|e| {
+                        let name = e.file_name().to_string_lossy().to_string();
+                        name.starts_with(&prefix) && name.ends_with(".backup")
+                    })
+                    .count()
+            })
+            .unwrap_or(0);
+            
+        let last_backup = state.last_backup_at.read().await;
+        (count, *last_backup)
+    } else {
+        (0, None)
+    };
+
     checks.push(json!({
         "name": "database",
         "ok": db_ready,
-        "message": if db_ready { "database query succeeded" } else { "database query failed" }
+        "message": if db_ready { "database query succeeded" } else { "database query failed" },
+        "size_bytes": db_file_size,
+        "backup": {
+            "count": backup_count,
+            "last_run_at": last_backup_at.map(|t| t.to_rfc3339()),
+        }
     }));
 
     let storage_path = state.storage.root().to_path_buf();

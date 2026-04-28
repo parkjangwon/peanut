@@ -27,6 +27,7 @@ openssl = { version = "0.10", features = ["vendored"] }
 base64 = "0.21"
 tokio-stream = { version = "0.1", features = ["sync"] }
 tower-http = { version = "0.5", features = ["cors"] }
+dashmap = "6.1.0"
 
 [build-dependencies]
 rust-i18n = "3.0"

@@ -20,7 +20,10 @@ use axum::{
     routing::{delete, get, head, patch, post, put},
     Router,
 };
+use dashmap::DashMap;
+use std::net::IpAddr;
 use std::sync::Arc;
+use tokio::time::Instant;
 use tower_http::cors::{Any, CorsLayer};
 use tracing_subscriber;
 
@@ -36,6 +39,8 @@ pub struct AppState {
         tokio::sync::broadcast::Sender<crate::api::functions::FunctionRealtimeEvent>,
     pub data_event_sender: tokio::sync::broadcast::Sender<crate::api::data::DataRowRealtimeEvent>,
     pub last_backup_at: Arc<tokio::sync::RwLock<Option<chrono::DateTime<chrono::Local>>>>,
+    pub rate_limit_state: Arc<DashMap<IpAddr, (u32, Instant)>>,
+    pub database_url: Arc<String>,
 }
 
 #[tokio::main]
@@ -72,6 +77,8 @@ async fn main() {
         function_event_sender: tokio::sync::broadcast::channel(256).0,
         data_event_sender: tokio::sync::broadcast::channel(256).0,
         last_backup_at: Arc::new(tokio::sync::RwLock::new(None)),
+        rate_limit_state: Arc::new(DashMap::new()),
+        database_url: Arc::new(config.database_url.clone()),
     };
 
     let pool_clone = state.pool.clone();
@@ -308,6 +315,10 @@ async fn main() {
         .nest("/api", auth_protected_routes)
         .nest("/api", protected_routes)
         .fallback(crate::console::static_handler)
+        .layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            crate::middleware::rate_limit::rate_limit_middleware,
+        ))
         .layer(axum::middleware::from_fn(
             crate::middleware::request_id::request_id_middleware,
         ))
@@ -319,7 +330,12 @@ async fn main() {
     let listener = tokio::net::TcpListener::bind(config.bind_addr)
         .await
         .unwrap();
-    axum::serve(listener, app).await.unwrap();
+    axum::serve(
+        listener,
+        app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+    )
+    .await
+    .unwrap();
 }
 
 fn log_push_status(config: &crate::config::AppConfig) {

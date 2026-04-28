@@ -74,7 +74,7 @@ pub async fn backup_db(pool: &SqlitePool, database_url: &str) -> Result<String, 
     Ok(backup_path)
 }
 
-fn extract_db_path(url: &str) -> &str {
+pub fn extract_db_path(url: &str) -> &str {
     let path = if let Some(stripped) = url.strip_prefix("sqlite://") {
         stripped
     } else if let Some(stripped) = url.strip_prefix("sqlite:") {
