@@ -229,6 +229,16 @@ fn classify_delivery_error(error: &Box<dyn std::error::Error>) -> DeliveryOutcom
         }
     }
 
+    if let Some(web_push_config_error) =
+        error.downcast_ref::<crate::push::webpush::WebPushDeliveryError>()
+    {
+        match web_push_config_error {
+            crate::push::webpush::WebPushDeliveryError::TerminalConfig(_) => {
+                return DeliveryOutcome::TerminalFailure;
+            }
+        }
+    }
+
     if let Some(ntfy_error) = error.downcast_ref::<crate::push::ntfy::NtfyDeliveryError>() {
         match ntfy_error {
             crate::push::ntfy::NtfyDeliveryError::TerminalStatus(_) => {
@@ -660,6 +670,55 @@ mod tests {
         assert_eq!(row.0, "failed");
         assert_eq!(row.1, MAX_RETRIES);
         assert_eq!(row.2.as_deref(), Some("alerts_main: ntfy failed: 404"));
+    }
+
+    #[tokio::test]
+    async fn test_process_queue_terminally_fails_missing_web_push_vapid_config_without_retrying() {
+        let _guard = crate::push::webpush::test_env_lock();
+        unsafe {
+            std::env::remove_var("WEB_PUSH_VAPID_PRIVATE_KEY");
+            std::env::remove_var("WEB_PUSH_VAPID_SUBJECT");
+        }
+
+        let pool = crate::db::init_db("sqlite::memory:").await.unwrap();
+        insert_user(&pool, "user-1").await;
+
+        sqlx::query(
+            "INSERT INTO push_subscriptions (user_id, endpoint, p256dh, auth) VALUES (?, ?, ?, ?)",
+        )
+        .bind("user-1")
+        .bind("https://example.invalid/push")
+        .bind("p256dh")
+        .bind("auth")
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        sqlx::query(
+            "INSERT INTO push_queue (user_id, title, body, status, retry_count) VALUES (?, ?, ?, 'pending', 0)",
+        )
+        .bind("user-1")
+        .bind("hello")
+        .bind("world")
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        process_queue(&pool).await.unwrap();
+
+        let row: (String, i64, Option<String>) = sqlx::query_as(
+            "SELECT status, retry_count, last_error FROM push_queue WHERE user_id = ?",
+        )
+        .bind("user-1")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(row.0, "failed");
+        assert_eq!(row.1, MAX_RETRIES);
+        assert_eq!(
+            row.2.as_deref(),
+            Some("https://example.invalid/push: WEB_PUSH_VAPID_PRIVATE_KEY must be set for Web Push delivery")
+        );
     }
 
     #[test]

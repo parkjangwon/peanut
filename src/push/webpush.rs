@@ -1,4 +1,4 @@
-use std::env;
+use std::{env, fmt};
 
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD as BASE64_URL_SAFE_NO_PAD, Engine as _};
 use serde_json::json;
@@ -9,6 +9,21 @@ use web_push::{
 
 const WEB_PUSH_VAPID_PRIVATE_KEY: &str = "WEB_PUSH_VAPID_PRIVATE_KEY";
 const WEB_PUSH_VAPID_SUBJECT: &str = "WEB_PUSH_VAPID_SUBJECT";
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum WebPushDeliveryError {
+    TerminalConfig(String),
+}
+
+impl fmt::Display for WebPushDeliveryError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            WebPushDeliveryError::TerminalConfig(message) => write!(f, "{}", message),
+        }
+    }
+}
+
+impl std::error::Error for WebPushDeliveryError {}
 
 #[derive(Debug, Clone)]
 struct WebPushConfig {
@@ -27,8 +42,11 @@ pub async fn send_web_push(
         "body": body,
     }))?;
 
-    let mut signature_builder =
-        VapidSignatureBuilder::from_base64(&config.vapid_private_key, URL_SAFE_NO_PAD, &subscription)?;
+    let mut signature_builder = VapidSignatureBuilder::from_base64(
+        &config.vapid_private_key,
+        URL_SAFE_NO_PAD,
+        &subscription,
+    )?;
     signature_builder.add_claim("sub", config.vapid_subject);
     let signature = signature_builder.build()?;
 
@@ -43,22 +61,37 @@ pub async fn send_web_push(
 
 pub fn public_vapid_key() -> Result<String, Box<dyn std::error::Error>> {
     let config = load_web_push_config()?;
-    let builder = VapidSignatureBuilder::from_base64_no_sub(&config.vapid_private_key, URL_SAFE_NO_PAD)?;
+    let builder =
+        VapidSignatureBuilder::from_base64_no_sub(&config.vapid_private_key, URL_SAFE_NO_PAD)?;
     Ok(BASE64_URL_SAFE_NO_PAD.encode(builder.get_public_key()))
 }
 
 fn load_web_push_config() -> Result<WebPushConfig, Box<dyn std::error::Error>> {
-    let vapid_private_key = env::var(WEB_PUSH_VAPID_PRIVATE_KEY)
-        .map_err(|_| format!("{} must be set for Web Push delivery", WEB_PUSH_VAPID_PRIVATE_KEY))?;
-    let vapid_subject = env::var(WEB_PUSH_VAPID_SUBJECT)
-        .map_err(|_| format!("{} must be set for Web Push delivery", WEB_PUSH_VAPID_SUBJECT))?;
+    let vapid_private_key = env::var(WEB_PUSH_VAPID_PRIVATE_KEY).map_err(|_| {
+        Box::new(WebPushDeliveryError::TerminalConfig(format!(
+            "{} must be set for Web Push delivery",
+            WEB_PUSH_VAPID_PRIVATE_KEY
+        ))) as Box<dyn std::error::Error>
+    })?;
+    let vapid_subject = env::var(WEB_PUSH_VAPID_SUBJECT).map_err(|_| {
+        Box::new(WebPushDeliveryError::TerminalConfig(format!(
+            "{} must be set for Web Push delivery",
+            WEB_PUSH_VAPID_SUBJECT
+        ))) as Box<dyn std::error::Error>
+    })?;
 
     if vapid_private_key.trim().is_empty() {
-        return Err(format!("{} must not be empty", WEB_PUSH_VAPID_PRIVATE_KEY).into());
+        return Err(Box::new(WebPushDeliveryError::TerminalConfig(format!(
+            "{} must not be empty",
+            WEB_PUSH_VAPID_PRIVATE_KEY
+        ))));
     }
     let vapid_subject = vapid_subject.trim().to_string();
     if !(vapid_subject.starts_with("mailto:") || vapid_subject.starts_with("https://")) {
-        return Err(format!("{} must start with mailto: or https://", WEB_PUSH_VAPID_SUBJECT).into());
+        return Err(Box::new(WebPushDeliveryError::TerminalConfig(format!(
+            "{} must start with mailto: or https://",
+            WEB_PUSH_VAPID_SUBJECT
+        ))));
     }
 
     Ok(WebPushConfig {
@@ -123,6 +156,8 @@ mod tests {
 
         let public_key = public_vapid_key().unwrap();
         assert!(!public_key.is_empty());
-        assert!(public_key.chars().all(|ch| ch.is_ascii_alphanumeric() || ch == '-' || ch == '_'));
+        assert!(public_key
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || ch == '-' || ch == '_'));
     }
 }

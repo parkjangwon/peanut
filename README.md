@@ -247,6 +247,7 @@ What this means:
 - queue items no longer fail just because one destination failed; if at least one subscription accepts the delivery, the queue item is marked sent
 - queue items with no subscriptions configured now fail terminally instead of pointlessly retrying
 - permanently invalid delivery paths also fail terminally now: a queue item no longer burns extra retries after all remaining Web Push subscriptions were pruned as dead, and ntfy 4xx responses are treated as non-retryable operator errors
+- missing or invalid Web Push VAPID runtime config is also treated as a terminal operator error, so Web Push queue items fail fast instead of churning retries until someone fixes env
 - queue status, retries, and last error are visible through the API and console
 - dead Web Push subscriptions that return terminal 404/410-style errors are automatically removed from the subscription table
 - partial-delivery metadata is now structured too: queue items expose `partial_failure_count` and `failed_destinations[]` alongside `last_error`
