@@ -5,6 +5,7 @@ use sqlx::{
 use std::str::FromStr;
 use std::path::Path;
 use chrono::Local;
+use tokio::fs;
 
 pub async fn init_db(database_url: &str) -> Result<SqlitePool, sqlx::Error> {
     let connection_options = SqliteConnectOptions::from_str(database_url)?
@@ -23,31 +24,67 @@ pub async fn init_db(database_url: &str) -> Result<SqlitePool, sqlx::Error> {
     Ok(pool)
 }
 
-pub async fn backup_db(pool: &SqlitePool, db_path: &str) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
+pub async fn backup_db(pool: &SqlitePool, database_url: &str) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
+    let db_path = extract_db_path(database_url);
     let timestamp = Local::now().format("%Y%m%d_%H%M%S").to_string();
     let backup_path = format!("{}.{}.backup", db_path, timestamp);
+
+    // SQL Safety: validate path doesn't contain single quotes to prevent injection
+    if backup_path.contains('\'') {
+        return Err("Invalid backup path: contains single quotes".into());
+    }
 
     // SQLite VACUUM INTO 명령으로 안전하게 백업
     sqlx::query(&format!("VACUUM INTO '{}'", backup_path))
         .execute(pool)
         .await?;
 
-    // Rotation: .backup 파일들 중 최신 7개만 남기고 삭제
-    let db_dir = Path::new(db_path).parent().unwrap_or(Path::new("."));
-    let mut backups: Vec<_> = std::fs::read_dir(db_dir)?
-        .filter_map(|e| e.ok())
-        .filter(|e| e.path().extension().and_then(|s| s.to_str()) == Some("backup"))
-        .collect();
+    // Rotation: Only files matching the prefix {db_filename}.*.backup
+    let path = Path::new(db_path);
+    let db_dir = path.parent().unwrap_or(Path::new("."));
+    let db_filename = path.file_name().and_then(|s| s.to_str()).ok_or("Invalid database path")?;
+    let prefix = format!("{}.", db_filename);
 
-    backups.sort_by_key(|e| e.metadata().and_then(|m| m.modified()).ok());
+    let mut backups = Vec::new();
+    let mut entries = fs::read_dir(db_dir).await?;
+
+    while let Some(entry) = entries.next_entry().await? {
+        let file_name = entry.file_name();
+        let file_name_str = file_name.to_string_lossy();
+        
+        // Filter: starts with "db_file." and ends with ".backup"
+        if file_name_str.starts_with(&prefix) && file_name_str.ends_with(".backup") {
+            if let Ok(meta) = entry.metadata().await {
+                let modified = meta.modified().unwrap_or(std::time::SystemTime::UNIX_EPOCH);
+                backups.push((entry.path(), modified));
+            }
+        }
+    }
+
+    // Sort by modification time (oldest first)
+    backups.sort_by_key(|&(_, modified)| modified);
 
     if backups.len() > 7 {
-        for old_backup in backups.iter().take(backups.len() - 7) {
-            std::fs::remove_file(old_backup.path())?;
+        let to_delete_count = backups.len() - 7;
+        for (old_backup_path, _) in backups.iter().take(to_delete_count) {
+            fs::remove_file(old_backup_path).await?;
         }
     }
 
     Ok(backup_path)
+}
+
+fn extract_db_path(url: &str) -> &str {
+    let path = if let Some(stripped) = url.strip_prefix("sqlite://") {
+        stripped
+    } else if let Some(stripped) = url.strip_prefix("sqlite:") {
+        stripped
+    } else {
+        url
+    };
+
+    // Remove query parameters if present
+    path.split('?').next().unwrap_or(path)
 }
 
 #[cfg(test)]
@@ -88,5 +125,14 @@ mod tests {
             .unwrap();
             assert_eq!(exists.0, 1, "missing table {table_name}");
         }
+    }
+
+    #[test]
+    fn test_extract_db_path() {
+        assert_eq!(extract_db_path("sqlite:peanut.db"), "peanut.db");
+        assert_eq!(extract_db_path("sqlite://peanut.db"), "peanut.db");
+        assert_eq!(extract_db_path("sqlite:///path/to/peanut.db"), "/path/to/peanut.db");
+        assert_eq!(extract_db_path("sqlite:peanut.db?mode=rwc"), "peanut.db");
+        assert_eq!(extract_db_path("peanut.db"), "peanut.db");
     }
 }

@@ -84,24 +84,12 @@ async fn main() {
     let db_url = config.database_url.clone();
     let last_backup_at = state.last_backup_at.clone();
     tokio::spawn(async move {
-        // SQLite URL starts with sqlite:// or sqlite:
-        let db_path = if db_url.starts_with("sqlite://") {
-            &db_url[9..]
-        } else if db_url.starts_with("sqlite:") {
-            &db_url[7..]
-        } else {
-            &db_url
-        };
-        
-        // Remove query parameters if present
-        let db_path = db_path.split('?').next().unwrap_or(db_path);
-
         loop {
             // Wait for 24 hours
             tokio::time::sleep(std::time::Duration::from_secs(24 * 60 * 60)).await;
 
             tracing::info!("Starting scheduled database backup...");
-            match crate::db::backup_db(&pool_for_backup, db_path).await {
+            match crate::db::backup_db(&pool_for_backup, &db_url).await {
                 Ok(path) => {
                     tracing::info!("Database backup successful: {}", path);
                     let mut last_backup = last_backup_at.write().await;
