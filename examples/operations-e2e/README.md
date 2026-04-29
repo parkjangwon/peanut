@@ -29,6 +29,7 @@ Files included:
 - `import-todos-table.sh`
 - `upload-storage-object.sh`
 - `head-storage-object.sh`
+- `run-happy-path.sh`
 - `todos-table.json`
 - `todo-row.json`
 - `todos-import-replace.json`
@@ -65,6 +66,24 @@ export LAST_EVENT_ID=1
 ./examples/operations-e2e/import-todos-table.sh
 ./examples/operations-e2e/upload-storage-object.sh
 ./examples/operations-e2e/head-storage-object.sh
+```
+
+One-command happy path with `jq`:
+
+```bash
+export BASE_URL=http://127.0.0.1:3000
+export ADMIN_JWT='<PASTE_ADMIN_JWT>'
+
+./examples/operations-e2e/run-happy-path.sh
+```
+
+If you already have a plaintext service token, skip admin token creation:
+
+```bash
+export BASE_URL=http://127.0.0.1:3000
+export SERVICE_TOKEN='pst_...'
+
+./examples/operations-e2e/run-happy-path.sh
 ```
 
 If `jq` is installed, you can bootstrap the service token and print the next commands automatically:

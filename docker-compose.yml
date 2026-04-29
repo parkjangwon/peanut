@@ -14,4 +14,6 @@ services:
       BIND_ADDR: ${BIND_ADDR:-0.0.0.0:3000}
       JWT_SECRET: ${JWT_SECRET:?set JWT_SECRET in your shell or .env file}
       MAX_UPLOAD_BYTES: ${MAX_UPLOAD_BYTES:-5242880}
+      FUNCTIONS_ENABLED: ${FUNCTIONS_ENABLED:-true}
+      BACKUP_ON_STARTUP: ${BACKUP_ON_STARTUP:-false}
       RUST_LOG: ${RUST_LOG:-info}

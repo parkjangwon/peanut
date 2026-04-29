@@ -41,6 +41,7 @@ pub struct AppState {
     pub last_backup_at: Arc<tokio::sync::RwLock<Option<chrono::DateTime<chrono::Local>>>>,
     pub rate_limit_state: Arc<DashMap<IpAddr, (u32, Instant)>>,
     pub database_url: Arc<String>,
+    pub functions_enabled: bool,
 }
 
 #[tokio::main]
@@ -79,6 +80,7 @@ async fn main() {
         last_backup_at: Arc::new(tokio::sync::RwLock::new(None)),
         rate_limit_state: Arc::new(DashMap::new()),
         database_url: Arc::new(config.database_url.clone()),
+        functions_enabled: config.functions_enabled,
     };
 
     let pool_clone = state.pool.clone();
@@ -90,6 +92,18 @@ async fn main() {
     let pool_for_backup = state.pool.clone();
     let db_url = config.database_url.clone();
     let last_backup_at = state.last_backup_at.clone();
+    if config.backup_on_startup {
+        match crate::db::backup_db(&pool_for_backup, &db_url).await {
+            Ok(path) => {
+                tracing::info!("Startup database backup successful: {}", path);
+                let mut last_backup = last_backup_at.write().await;
+                *last_backup = Some(chrono::Local::now());
+            }
+            Err(e) => {
+                tracing::error!("Startup database backup failed: {}", e);
+            }
+        }
+    }
     tokio::spawn(async move {
         loop {
             // Wait for 24 hours
@@ -184,7 +198,11 @@ async fn main() {
         .route(
             "/functions/:name/invocations/:invocation_id/retry",
             post(api::functions::retry_function_invocation),
-        );
+        )
+        .layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            crate::middleware::functions_enabled::functions_enabled_middleware,
+        ));
 
     let data_routes = Router::new()
         .route("/data/tables", get(api::data::list_tables))
@@ -303,15 +321,22 @@ async fn main() {
             crate::middleware::auth_client_policy::auth_client_policy_middleware,
         ));
 
+    let function_invoke_routes = Router::new()
+        .route(
+            "/functions/endpoints/:endpoint_slug",
+            post(api::functions::invoke_function),
+        )
+        .layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            crate::middleware::functions_enabled::functions_enabled_middleware,
+        ));
+
     let app = Router::new()
         .route("/api/health", get(api::health::health_check))
         .route("/api/ready", get(api::health::readiness_check))
         .nest("/api", auth_public_routes)
         .nest("/api", s3_routes)
-        .route(
-            "/api/functions/endpoints/:endpoint_slug",
-            post(api::functions::invoke_function),
-        )
+        .nest("/api", function_invoke_routes)
         .nest("/api", auth_protected_routes)
         .nest("/api", protected_routes)
         .fallback(crate::console::static_handler)

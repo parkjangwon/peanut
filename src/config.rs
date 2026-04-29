@@ -23,6 +23,8 @@ pub struct AppConfig {
     pub auth_allowed_client_ids: Vec<String>,
     pub push_ntfy_enabled: bool,
     pub push_web_push_enabled: bool,
+    pub functions_enabled: bool,
+    pub backup_on_startup: bool,
 }
 
 pub fn load_config_from_env() -> Result<AppConfig, String> {
@@ -84,11 +86,7 @@ fn load_config_from_map(values: &HashMap<String, String>) -> Result<AppConfig, S
     {
         "inline" => PasswordResetDelivery::Inline,
         "log" => PasswordResetDelivery::Log,
-        _ => {
-            return Err(
-                "PASSWORD_RESET_DELIVERY must be either 'inline' or 'log'".to_string(),
-            )
-        }
+        _ => return Err("PASSWORD_RESET_DELIVERY must be either 'inline' or 'log'".to_string()),
     };
 
     let auth_allowed_origins = parse_origin_policy_list(values, "AUTH_ALLOWED_ORIGINS")?;
@@ -96,6 +94,8 @@ fn load_config_from_map(values: &HashMap<String, String>) -> Result<AppConfig, S
 
     let push_ntfy_enabled = values.get("NTFY_BASE_URL").is_some();
     let push_web_push_enabled = values.get("WEB_PUSH_VAPID_PRIVATE_KEY").is_some();
+    let functions_enabled = parse_bool_setting(values, "FUNCTIONS_ENABLED", true)?;
+    let backup_on_startup = parse_bool_setting(values, "BACKUP_ON_STARTUP", false)?;
 
     Ok(AppConfig {
         database_url,
@@ -108,7 +108,25 @@ fn load_config_from_map(values: &HashMap<String, String>) -> Result<AppConfig, S
         auth_allowed_client_ids,
         push_ntfy_enabled,
         push_web_push_enabled,
+        functions_enabled,
+        backup_on_startup,
     })
+}
+
+fn parse_bool_setting(
+    values: &HashMap<String, String>,
+    key: &str,
+    default: bool,
+) -> Result<bool, String> {
+    match values
+        .get(key)
+        .map(|value| value.trim().to_ascii_lowercase())
+    {
+        Some(value) if value == "true" || value == "1" || value == "yes" => Ok(true),
+        Some(value) if value == "false" || value == "0" || value == "no" => Ok(false),
+        Some(_) => Err(format!("{key} must be true or false")),
+        None => Ok(default),
+    }
 }
 
 fn parse_origin_policy_list(
@@ -178,12 +196,17 @@ mod tests {
             DEFAULT_BIND_ADDR.parse::<SocketAddr>().unwrap()
         );
         assert_eq!(config.max_upload_bytes, DEFAULT_MAX_UPLOAD_BYTES);
-        assert_eq!(config.password_reset_delivery, PasswordResetDelivery::Inline);
+        assert_eq!(
+            config.password_reset_delivery,
+            PasswordResetDelivery::Inline
+        );
         assert_eq!(config.auth_allowed_origins, Vec::<String>::new());
         assert_eq!(config.auth_allowed_client_ids, Vec::<String>::new());
         assert_eq!(config.jwt_secret, "test-secret");
         assert!(!config.push_ntfy_enabled);
         assert!(!config.push_web_push_enabled);
+        assert!(config.functions_enabled);
+        assert!(!config.backup_on_startup);
     }
 
     #[test]
@@ -203,7 +226,10 @@ mod tests {
 
     #[test]
     fn test_load_config_from_env_rejects_invalid_database_url_scheme() {
-        let values = config(&[("JWT_SECRET", "test-secret"), ("DATABASE_URL", "postgres://example")]);
+        let values = config(&[
+            ("JWT_SECRET", "test-secret"),
+            ("DATABASE_URL", "postgres://example"),
+        ]);
 
         let error = load_config_from_map(&values).unwrap_err();
         assert!(error.contains("sqlite:"));
@@ -286,5 +312,35 @@ mod tests {
         let config = load_config_from_map(&values).unwrap();
         assert!(config.push_ntfy_enabled);
         assert!(config.push_web_push_enabled);
+    }
+
+    #[test]
+    fn test_load_config_from_env_parses_function_runtime_switch() {
+        let values = config(&[
+            ("JWT_SECRET", "test-secret"),
+            ("FUNCTIONS_ENABLED", "false"),
+        ]);
+
+        let config = load_config_from_map(&values).unwrap();
+        assert!(!config.functions_enabled);
+    }
+
+    #[test]
+    fn test_load_config_from_env_rejects_invalid_function_runtime_switch() {
+        let values = config(&[
+            ("JWT_SECRET", "test-secret"),
+            ("FUNCTIONS_ENABLED", "sometimes"),
+        ]);
+
+        let error = load_config_from_map(&values).unwrap_err();
+        assert!(error.contains("FUNCTIONS_ENABLED"));
+    }
+
+    #[test]
+    fn test_load_config_from_env_parses_startup_backup_switch() {
+        let values = config(&[("JWT_SECRET", "test-secret"), ("BACKUP_ON_STARTUP", "true")]);
+
+        let config = load_config_from_map(&values).unwrap();
+        assert!(config.backup_on_startup);
     }
 }
