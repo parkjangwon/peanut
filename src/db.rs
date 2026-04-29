@@ -1,11 +1,13 @@
+use chrono::Local;
 use sqlx::{
     sqlite::{SqliteConnectOptions, SqlitePoolOptions},
     SqlitePool,
 };
+use std::path::{Path, PathBuf};
 use std::str::FromStr;
-use std::path::Path;
-use chrono::Local;
 use tokio::fs;
+
+pub const RESTORE_MARKER_FILE: &str = ".peanut_restore";
 
 pub async fn init_db(database_url: &str) -> Result<SqlitePool, sqlx::Error> {
     let connection_options = SqliteConnectOptions::from_str(database_url)?
@@ -24,7 +26,10 @@ pub async fn init_db(database_url: &str) -> Result<SqlitePool, sqlx::Error> {
     Ok(pool)
 }
 
-pub async fn backup_db(pool: &SqlitePool, database_url: &str) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
+pub async fn backup_db(
+    pool: &SqlitePool,
+    database_url: &str,
+) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
     let db_path = extract_db_path(database_url);
     let timestamp = Local::now().format("%Y%m%d_%H%M%S").to_string();
     let backup_path = format!("{}.{}.backup", db_path, timestamp);
@@ -42,7 +47,10 @@ pub async fn backup_db(pool: &SqlitePool, database_url: &str) -> Result<String, 
     // Rotation: Only files matching the prefix {db_filename}.*.backup
     let path = Path::new(db_path);
     let db_dir = path.parent().unwrap_or(Path::new("."));
-    let db_filename = path.file_name().and_then(|s| s.to_str()).ok_or("Invalid database path")?;
+    let db_filename = path
+        .file_name()
+        .and_then(|s| s.to_str())
+        .ok_or("Invalid database path")?;
     let prefix = format!("{}.", db_filename);
 
     let mut backups = Vec::new();
@@ -51,7 +59,7 @@ pub async fn backup_db(pool: &SqlitePool, database_url: &str) -> Result<String, 
     while let Some(entry) = entries.next_entry().await? {
         let file_name = entry.file_name();
         let file_name_str = file_name.to_string_lossy();
-        
+
         // Filter: starts with "db_file." and ends with ".backup"
         if file_name_str.starts_with(&prefix) && file_name_str.ends_with(".backup") {
             if let Ok(meta) = entry.metadata().await {
@@ -72,6 +80,60 @@ pub async fn backup_db(pool: &SqlitePool, database_url: &str) -> Result<String, 
     }
 
     Ok(backup_path)
+}
+
+pub async fn apply_pending_restore(
+    database_url: &str,
+    base_dir: &Path,
+) -> Result<Option<PathBuf>, Box<dyn std::error::Error + Send + Sync>> {
+    let db_path = resolve_db_path(database_url, base_dir);
+    let db_dir = db_path.parent().unwrap_or(base_dir);
+    let marker_path = db_dir.join(RESTORE_MARKER_FILE);
+    if !marker_path.exists() {
+        return Ok(None);
+    }
+
+    let backup_name = fs::read_to_string(&marker_path).await?.trim().to_string();
+    if backup_name.is_empty()
+        || backup_name.contains('/')
+        || backup_name.contains('\\')
+        || backup_name.contains("..")
+        || !backup_name.ends_with(".backup")
+    {
+        return Err("invalid restore marker backup name".into());
+    }
+
+    let backup_path = db_dir.join(&backup_name);
+    if !backup_path.exists() {
+        return Err("restore backup file not found".into());
+    }
+
+    if db_path.exists() {
+        let db_filename = db_path
+            .file_name()
+            .and_then(|value| value.to_str())
+            .ok_or("invalid database path")?;
+        let preserved_name = format!(
+            "{}.pre-restore.{}",
+            db_filename,
+            Local::now().format("%Y%m%d_%H%M%S")
+        );
+        fs::copy(&db_path, db_dir.join(preserved_name)).await?;
+    }
+
+    fs::copy(&backup_path, &db_path).await?;
+    fs::remove_file(&marker_path).await?;
+    Ok(Some(backup_path))
+}
+
+fn resolve_db_path(database_url: &str, base_dir: &Path) -> PathBuf {
+    let raw = extract_db_path(database_url);
+    let path = PathBuf::from(raw);
+    if path.is_absolute() {
+        path
+    } else {
+        base_dir.join(path)
+    }
 }
 
 pub fn extract_db_path(url: &str) -> &str {
@@ -134,5 +196,33 @@ mod tests {
         assert_eq!(extract_db_path("sqlite:///path/to/peanut.db"), "/path/to/peanut.db");
         assert_eq!(extract_db_path("sqlite:peanut.db?mode=rwc"), "peanut.db");
         assert_eq!(extract_db_path("peanut.db"), "peanut.db");
+    }
+
+    #[tokio::test]
+    async fn test_apply_pending_restore_preserves_current_db_and_copies_backup() {
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("peanut.db");
+        let backup_path = dir.path().join("peanut.db.20260429_010203.backup");
+        let marker_path = dir.path().join(".peanut_restore");
+
+        tokio::fs::write(&db_path, b"current").await.unwrap();
+        tokio::fs::write(&backup_path, b"backup").await.unwrap();
+        tokio::fs::write(&marker_path, b"peanut.db.20260429_010203.backup").await.unwrap();
+
+        let restored = apply_pending_restore("sqlite://peanut.db", dir.path()).await.unwrap();
+
+        assert!(restored.is_some());
+        assert_eq!(tokio::fs::read(&db_path).await.unwrap(), b"backup");
+        assert!(!marker_path.exists());
+        let preserved = std::fs::read_dir(dir.path())
+            .unwrap()
+            .filter_map(|entry| entry.ok())
+            .any(|entry| {
+                entry
+                    .file_name()
+                    .to_string_lossy()
+                    .starts_with("peanut.db.pre-restore.")
+            });
+        assert!(preserved);
     }
 }

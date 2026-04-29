@@ -4,6 +4,8 @@ pub const DEFAULT_DATABASE_URL: &str = "sqlite://peanut.db";
 pub const DEFAULT_STORAGE_DIR: &str = "data/storage";
 pub const DEFAULT_BIND_ADDR: &str = "127.0.0.1:3000";
 pub const DEFAULT_MAX_UPLOAD_BYTES: usize = 5 * 1024 * 1024;
+pub const DEFAULT_MULTIPART_STALE_HOURS: u64 = 24;
+pub const DEFAULT_MULTIPART_CLEANUP_INTERVAL_SECONDS: u64 = 3600;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PasswordResetDelivery {
@@ -23,6 +25,13 @@ pub struct AppConfig {
     pub auth_allowed_client_ids: Vec<String>,
     pub push_ntfy_enabled: bool,
     pub push_web_push_enabled: bool,
+    pub functions_enabled: bool,
+    pub backup_on_startup: bool,
+    pub trust_proxy_headers: bool,
+    pub multipart_stale_hours: u64,
+    pub multipart_cleanup_interval_seconds: u64,
+    pub functions_allow_network: bool,
+    pub functions_work_dir: PathBuf,
 }
 
 pub fn load_config_from_env() -> Result<AppConfig, String> {
@@ -84,11 +93,7 @@ fn load_config_from_map(values: &HashMap<String, String>) -> Result<AppConfig, S
     {
         "inline" => PasswordResetDelivery::Inline,
         "log" => PasswordResetDelivery::Log,
-        _ => {
-            return Err(
-                "PASSWORD_RESET_DELIVERY must be either 'inline' or 'log'".to_string(),
-            )
-        }
+        _ => return Err("PASSWORD_RESET_DELIVERY must be either 'inline' or 'log'".to_string()),
     };
 
     let auth_allowed_origins = parse_origin_policy_list(values, "AUTH_ALLOWED_ORIGINS")?;
@@ -96,6 +101,27 @@ fn load_config_from_map(values: &HashMap<String, String>) -> Result<AppConfig, S
 
     let push_ntfy_enabled = values.get("NTFY_BASE_URL").is_some();
     let push_web_push_enabled = values.get("WEB_PUSH_VAPID_PRIVATE_KEY").is_some();
+    let functions_enabled = parse_bool_setting(values, "FUNCTIONS_ENABLED", true)?;
+    let backup_on_startup = parse_bool_setting(values, "BACKUP_ON_STARTUP", false)?;
+    let trust_proxy_headers = parse_bool_setting(values, "TRUST_PROXY_HEADERS", false)?;
+    let multipart_stale_hours = parse_positive_u64_setting(
+        values,
+        "MULTIPART_STALE_HOURS",
+        DEFAULT_MULTIPART_STALE_HOURS,
+    )?;
+    let multipart_cleanup_interval_seconds = parse_positive_u64_setting(
+        values,
+        "MULTIPART_CLEANUP_INTERVAL_SECONDS",
+        DEFAULT_MULTIPART_CLEANUP_INTERVAL_SECONDS,
+    )?;
+    let functions_allow_network = parse_bool_setting(values, "FUNCTIONS_ALLOW_NETWORK", false)?;
+    let functions_work_dir = values
+        .get("FUNCTIONS_WORK_DIR")
+        .map(|value| PathBuf::from(value.trim()))
+        .unwrap_or_else(|| env::temp_dir().join("peanut-functions"));
+    if functions_work_dir.as_os_str().is_empty() {
+        return Err("FUNCTIONS_WORK_DIR must not be empty".to_string());
+    }
 
     Ok(AppConfig {
         database_url,
@@ -108,7 +134,49 @@ fn load_config_from_map(values: &HashMap<String, String>) -> Result<AppConfig, S
         auth_allowed_client_ids,
         push_ntfy_enabled,
         push_web_push_enabled,
+        functions_enabled,
+        backup_on_startup,
+        trust_proxy_headers,
+        multipart_stale_hours,
+        multipart_cleanup_interval_seconds,
+        functions_allow_network,
+        functions_work_dir,
     })
+}
+
+fn parse_bool_setting(
+    values: &HashMap<String, String>,
+    key: &str,
+    default: bool,
+) -> Result<bool, String> {
+    match values
+        .get(key)
+        .map(|value| value.trim().to_ascii_lowercase())
+    {
+        Some(value) if value == "true" || value == "1" || value == "yes" => Ok(true),
+        Some(value) if value == "false" || value == "0" || value == "no" => Ok(false),
+        Some(_) => Err(format!("{key} must be true or false")),
+        None => Ok(default),
+    }
+}
+
+fn parse_positive_u64_setting(
+    values: &HashMap<String, String>,
+    key: &str,
+    default: u64,
+) -> Result<u64, String> {
+    match values.get(key) {
+        Some(value) => {
+            let parsed = value
+                .parse::<u64>()
+                .map_err(|_| format!("{key} must be a positive integer"))?;
+            if parsed == 0 {
+                return Err(format!("{key} must be greater than zero"));
+            }
+            Ok(parsed)
+        }
+        None => Ok(default),
+    }
 }
 
 fn parse_origin_policy_list(
@@ -178,12 +246,22 @@ mod tests {
             DEFAULT_BIND_ADDR.parse::<SocketAddr>().unwrap()
         );
         assert_eq!(config.max_upload_bytes, DEFAULT_MAX_UPLOAD_BYTES);
-        assert_eq!(config.password_reset_delivery, PasswordResetDelivery::Inline);
+        assert_eq!(
+            config.password_reset_delivery,
+            PasswordResetDelivery::Inline
+        );
         assert_eq!(config.auth_allowed_origins, Vec::<String>::new());
         assert_eq!(config.auth_allowed_client_ids, Vec::<String>::new());
         assert_eq!(config.jwt_secret, "test-secret");
         assert!(!config.push_ntfy_enabled);
         assert!(!config.push_web_push_enabled);
+        assert!(config.functions_enabled);
+        assert!(!config.backup_on_startup);
+        assert!(!config.trust_proxy_headers);
+        assert_eq!(config.multipart_stale_hours, 24);
+        assert_eq!(config.multipart_cleanup_interval_seconds, 3600);
+        assert!(!config.functions_allow_network);
+        assert!(config.functions_work_dir.ends_with("peanut-functions"));
     }
 
     #[test]
@@ -203,7 +281,10 @@ mod tests {
 
     #[test]
     fn test_load_config_from_env_rejects_invalid_database_url_scheme() {
-        let values = config(&[("JWT_SECRET", "test-secret"), ("DATABASE_URL", "postgres://example")]);
+        let values = config(&[
+            ("JWT_SECRET", "test-secret"),
+            ("DATABASE_URL", "postgres://example"),
+        ]);
 
         let error = load_config_from_map(&values).unwrap_err();
         assert!(error.contains("sqlite:"));
@@ -286,5 +367,91 @@ mod tests {
         let config = load_config_from_map(&values).unwrap();
         assert!(config.push_ntfy_enabled);
         assert!(config.push_web_push_enabled);
+    }
+
+    #[test]
+    fn test_load_config_from_env_parses_function_runtime_switch() {
+        let values = config(&[
+            ("JWT_SECRET", "test-secret"),
+            ("FUNCTIONS_ENABLED", "false"),
+        ]);
+
+        let config = load_config_from_map(&values).unwrap();
+        assert!(!config.functions_enabled);
+    }
+
+    #[test]
+    fn test_load_config_from_env_rejects_invalid_function_runtime_switch() {
+        let values = config(&[
+            ("JWT_SECRET", "test-secret"),
+            ("FUNCTIONS_ENABLED", "sometimes"),
+        ]);
+
+        let error = load_config_from_map(&values).unwrap_err();
+        assert!(error.contains("FUNCTIONS_ENABLED"));
+    }
+
+    #[test]
+    fn test_load_config_from_env_parses_startup_backup_switch() {
+        let values = config(&[("JWT_SECRET", "test-secret"), ("BACKUP_ON_STARTUP", "true")]);
+
+        let config = load_config_from_map(&values).unwrap();
+        assert!(config.backup_on_startup);
+    }
+
+    #[test]
+    fn test_load_config_from_env_parses_trust_proxy_headers_switch() {
+        let values = config(&[("JWT_SECRET", "test-secret"), ("TRUST_PROXY_HEADERS", "true")]);
+
+        let config = load_config_from_map(&values).unwrap();
+        assert!(config.trust_proxy_headers);
+    }
+
+    #[test]
+    fn test_load_config_from_env_rejects_invalid_trust_proxy_headers_switch() {
+        let values = config(&[("JWT_SECRET", "test-secret"), ("TRUST_PROXY_HEADERS", "maybe")]);
+
+        let error = load_config_from_map(&values).unwrap_err();
+        assert!(error.contains("TRUST_PROXY_HEADERS"));
+    }
+
+    #[test]
+    fn test_load_config_from_env_parses_multipart_cleanup_settings() {
+        let values = config(&[
+            ("JWT_SECRET", "test-secret"),
+            ("MULTIPART_STALE_HOURS", "12"),
+            ("MULTIPART_CLEANUP_INTERVAL_SECONDS", "600"),
+        ]);
+
+        let config = load_config_from_map(&values).unwrap();
+        assert_eq!(config.multipart_stale_hours, 12);
+        assert_eq!(config.multipart_cleanup_interval_seconds, 600);
+    }
+
+    #[test]
+    fn test_load_config_from_env_rejects_invalid_multipart_cleanup_settings() {
+        let values = config(&[
+            ("JWT_SECRET", "test-secret"),
+            ("MULTIPART_STALE_HOURS", "0"),
+        ]);
+
+        let error = load_config_from_map(&values).unwrap_err();
+        assert!(error.contains("MULTIPART_STALE_HOURS"));
+    }
+
+    #[test]
+    fn test_load_config_from_env_parses_function_isolation_settings() {
+        let values = config(&[
+            ("JWT_SECRET", "test-secret"),
+            ("FUNCTIONS_ALLOW_NETWORK", "true"),
+            ("FUNCTIONS_WORK_DIR", "/tmp/peanut-test-functions"),
+        ]);
+
+        let config = load_config_from_map(&values).unwrap();
+        assert!(config.functions_allow_network);
+        assert_eq!(
+            config.functions_work_dir,
+            PathBuf::from("/tmp/peanut-test-functions")
+        );
     }
 }

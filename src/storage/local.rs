@@ -2,6 +2,7 @@ use std::{
     collections::BTreeMap,
     io,
     path::{Component, Path, PathBuf},
+    time::SystemTime,
 };
 
 use serde::{Deserialize, Serialize};
@@ -458,6 +459,28 @@ impl LocalStorage {
         &self.root
     }
 
+    pub async fn cleanup_stale_multipart_uploads(
+        &self,
+        stale_before: SystemTime,
+    ) -> io::Result<usize> {
+        let multipart_root = self.root.join(MULTIPART_ROOT_DIR);
+        let stale_upload_roots = tokio::task::spawn_blocking(move || {
+            collect_stale_multipart_upload_roots(&multipart_root, stale_before)
+        })
+        .await
+        .map_err(|err| io::Error::new(io::ErrorKind::Other, err))??;
+
+        let mut removed = 0;
+        for upload_root in stale_upload_roots {
+            match tokio::fs::remove_dir_all(&upload_root).await {
+                Ok(()) => removed += 1,
+                Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+                Err(error) => return Err(error),
+            }
+        }
+        Ok(removed)
+    }
+
     fn resolve_bucket_root(&self, bucket: &str) -> io::Result<PathBuf> {
         let normalized = normalize_namespace(bucket, "storage bucket cannot be empty")?;
         Ok(self.root.join(normalized))
@@ -887,6 +910,39 @@ fn collect_multipart_parts(parts_root: &Path) -> io::Result<Vec<MultipartUploadP
     Ok(parts)
 }
 
+fn collect_stale_multipart_upload_roots(
+    multipart_root: &Path,
+    stale_before: SystemTime,
+) -> io::Result<Vec<PathBuf>> {
+    let mut stale = Vec::new();
+    if !multipart_root.exists() {
+        return Ok(stale);
+    }
+
+    let mut stack = vec![multipart_root.to_path_buf()];
+    while let Some(path) = stack.pop() {
+        let manifest_path = path.join("upload.json");
+        if manifest_path.exists() {
+            let modified = std::fs::metadata(&manifest_path)?
+                .modified()
+                .unwrap_or(SystemTime::UNIX_EPOCH);
+            if modified < stale_before {
+                stale.push(path);
+            }
+            continue;
+        }
+
+        for entry in std::fs::read_dir(&path)? {
+            let entry = entry?;
+            if entry.file_type()?.is_dir() {
+                stack.push(entry.path());
+            }
+        }
+    }
+
+    Ok(stale)
+}
+
 fn read_metadata_sync(metadata_root: &Path, relative: &Path) -> io::Result<StorageObjectMetadata> {
     let mut metadata_path = metadata_root.join(relative);
     let file_name = metadata_path
@@ -1005,5 +1061,62 @@ mod tests {
         assert_eq!(page.objects.len(), 1);
         assert_eq!(page.objects[0].key, "photos/cover.jpg");
         assert_eq!(page.common_prefixes, vec!["photos/2026/", "photos/2027/"]);
+    }
+
+    #[tokio::test]
+    async fn test_cleanup_stale_multipart_uploads_removes_only_old_uploads() {
+        let dir = tempfile::tempdir().unwrap();
+        let storage = LocalStorage::new(dir.path());
+
+        let stale = storage
+            .create_multipart_upload("assets", "old.bin", Some("application/octet-stream"))
+            .await
+            .unwrap();
+        let fresh = storage
+            .create_multipart_upload("assets", "new.bin", Some("application/octet-stream"))
+            .await
+            .unwrap();
+        storage
+            .put_object("assets", "objects/keep.txt", b"keep", Some("text/plain"))
+            .await
+            .unwrap();
+
+        let stale_root = storage
+            .resolve_multipart_upload_root("assets", &stale.upload_id)
+            .unwrap();
+        let fresh_root = storage
+            .resolve_multipart_upload_root("assets", &fresh.upload_id)
+            .unwrap();
+        let cutoff = std::time::SystemTime::now() + std::time::Duration::from_secs(60);
+
+        let removed = storage.cleanup_stale_multipart_uploads(cutoff).await.unwrap();
+
+        assert_eq!(removed, 2);
+        assert!(!stale_root.exists());
+        assert!(!fresh_root.exists());
+        let object = storage.get_object("assets", "objects/keep.txt").await.unwrap();
+        assert_eq!(object.data, b"keep");
+    }
+
+    #[tokio::test]
+    async fn test_cleanup_stale_multipart_uploads_preserves_newer_than_cutoff() {
+        let dir = tempfile::tempdir().unwrap();
+        let storage = LocalStorage::new(dir.path());
+
+        let upload = storage
+            .create_multipart_upload("assets", "new.bin", Some("application/octet-stream"))
+            .await
+            .unwrap();
+        let upload_root = storage
+            .resolve_multipart_upload_root("assets", &upload.upload_id)
+            .unwrap();
+
+        let removed = storage
+            .cleanup_stale_multipart_uploads(std::time::SystemTime::UNIX_EPOCH)
+            .await
+            .unwrap();
+
+        assert_eq!(removed, 0);
+        assert!(upload_root.exists());
     }
 }

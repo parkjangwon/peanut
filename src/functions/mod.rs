@@ -25,6 +25,12 @@ const RUNNER_SOURCE: &str = r#"
 import readline from 'node:readline'
 import { pathToFileURL } from 'node:url'
 
+if (process.env.PEANUT_FUNCTIONS_ALLOW_NETWORK !== 'true') {
+  globalThis.fetch = undefined
+  globalThis.WebSocket = undefined
+  globalThis.XMLHttpRequest = undefined
+}
+
 const rl = readline.createInterface({
   input: process.stdin,
   crlfDelay: Infinity,
@@ -225,6 +231,14 @@ pub async fn execute_in_sandbox(
         .current_dir(&run_dir)
         .env_clear()
         .env("PATH", node_path)
+        .env(
+            "PEANUT_FUNCTIONS_ALLOW_NETWORK",
+            if state.functions_allow_network {
+                "true"
+            } else {
+                "false"
+            },
+        )
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
@@ -661,11 +675,8 @@ fn validate_source_code(source_code: &str) -> Result<(), String> {
         "node:",
         "child_process",
         "process.",
-        "fetch(",
         "import ",
         "import\t",
-        "XMLHttpRequest",
-        "WebSocket",
         "Deno",
         "Bun",
     ];
@@ -677,4 +688,66 @@ fn validate_source_code(source_code: &str) -> Result<(), String> {
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::Value;
+
+    fn request(source_code: &str, timeout_ms: i64) -> SandboxExecutionRequest<'_> {
+        SandboxExecutionRequest {
+            runtime: "javascript",
+            source_code,
+            function_name: "test_fn",
+            request_payload: Value::Null,
+            auth_payload: Value::Null,
+            env_payload: Value::Null,
+            timeout_ms,
+        }
+    }
+
+    #[tokio::test]
+    async fn test_network_disabled_makes_fetch_unavailable_at_runtime() {
+        let (mut state, dir) = crate::test_support::make_test_state().await;
+        state.functions_allow_network = false;
+        state.functions_work_dir = dir.path().join("functions");
+
+        let result = execute_in_sandbox(
+            request(
+                "export default async function handler() { await fetch('https://example.com'); return { ok: true } }",
+                1000,
+            ),
+            &state.functions_work_dir,
+            &state,
+            None,
+        )
+        .await
+        .unwrap_err();
+
+        assert!(result.contains("fetch is not a function"));
+    }
+
+    #[tokio::test]
+    async fn test_timeout_cleans_up_function_work_dir() {
+        let (mut state, dir) = crate::test_support::make_test_state().await;
+        state.functions_work_dir = dir.path().join("functions");
+
+        let result = execute_in_sandbox(
+            request(
+                "export default async function handler() { await new Promise((resolve) => setTimeout(resolve, 500)); return { ok: true } }",
+                50,
+            ),
+            &state.functions_work_dir,
+            &state,
+            None,
+        )
+        .await;
+
+        assert!(result.unwrap_err().contains("timed out"));
+        let entries = std::fs::read_dir(&state.functions_work_dir)
+            .map(|entries| entries.count())
+            .unwrap_or(0);
+        assert_eq!(entries, 0);
+    }
 }

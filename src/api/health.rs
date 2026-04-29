@@ -29,7 +29,7 @@ pub async fn readiness_check(State(state): State<crate::AppState>) -> Json<Value
 
     let db_path_str = crate::db::extract_db_path(&state.database_url);
     let db_path = std::path::Path::new(db_path_str);
-    
+
     let db_file_size = if db_path.exists() {
         std::fs::metadata(db_path).map(|m| m.len()).ok()
     } else {
@@ -40,7 +40,7 @@ pub async fn readiness_check(State(state): State<crate::AppState>) -> Json<Value
         let db_dir = db_path.parent().unwrap_or(std::path::Path::new("."));
         let db_filename = db_path.file_name().and_then(|s| s.to_str()).unwrap_or("");
         let prefix = format!("{}.", db_filename);
-        
+
         let count = std::fs::read_dir(db_dir)
             .map(|entries| {
                 entries
@@ -52,7 +52,7 @@ pub async fn readiness_check(State(state): State<crate::AppState>) -> Json<Value
                     .count()
             })
             .unwrap_or(0);
-            
+
         let last_backup = state.last_backup_at.read().await;
         (count, *last_backup)
     } else {
@@ -79,7 +79,38 @@ pub async fn readiness_check(State(state): State<crate::AppState>) -> Json<Value
         "path": storage_path.to_string_lossy(),
     }));
 
-    let ready = db_ready && storage_ready;
+    let node_available = if state.functions_enabled {
+        tokio::process::Command::new("node")
+            .arg("--version")
+            .output()
+            .await
+            .map(|output| output.status.success())
+            .unwrap_or(false)
+    } else {
+        true
+    };
+    let work_dir_writable = if state.functions_enabled {
+        ensure_storage_ready(&state.functions_work_dir).await.is_ok()
+    } else {
+        true
+    };
+    let functions_ready = node_available && work_dir_writable;
+    checks.push(json!({
+        "name": "functions",
+        "ok": functions_ready,
+        "enabled": state.functions_enabled,
+        "node_available": node_available,
+        "network_allowed": state.functions_allow_network,
+        "work_dir_writable": work_dir_writable,
+        "work_dir": state.functions_work_dir.to_string_lossy(),
+        "message": if state.functions_enabled {
+            if functions_ready { "functions runtime is available" } else { "functions runtime is unavailable" }
+        } else {
+            "functions runtime is disabled"
+        },
+    }));
+
+    let ready = db_ready && storage_ready && functions_ready;
 
     Json(json!({
         "status": if ready { "ready" } else { "not_ready" },
@@ -103,7 +134,10 @@ mod tests {
     #[tokio::test]
     async fn test_health_check_ko() {
         let mut headers = HeaderMap::new();
-        headers.insert("accept-language", HeaderValue::from_static("ko-KR,ko;q=0.9"));
+        headers.insert(
+            "accept-language",
+            HeaderValue::from_static("ko-KR,ko;q=0.9"),
+        );
 
         let response = health_check(headers).await;
         assert_eq!(response.0["message"], "시스템이 정상 작동 중입니다.");
@@ -112,7 +146,10 @@ mod tests {
     #[tokio::test]
     async fn test_health_check_en() {
         let mut headers = HeaderMap::new();
-        headers.insert("accept-language", HeaderValue::from_static("en-US,en;q=0.9"));
+        headers.insert(
+            "accept-language",
+            HeaderValue::from_static("en-US,en;q=0.9"),
+        );
 
         let response = health_check(headers).await;
         assert_eq!(response.0["message"], "Systems are operational.");
@@ -134,12 +171,27 @@ mod tests {
     async fn test_readiness_check_reports_not_ready_when_storage_directory_is_missing_file_path() {
         let (mut state, dir) = crate::test_support::make_test_state().await;
         let blocking_path = dir.path().join("storage-blocker");
-        tokio::fs::write(&blocking_path, b"not-a-directory").await.unwrap();
-        state.storage = std::sync::Arc::new(crate::storage::local::LocalStorage::new(&blocking_path));
+        tokio::fs::write(&blocking_path, b"not-a-directory")
+            .await
+            .unwrap();
+        state.storage =
+            std::sync::Arc::new(crate::storage::local::LocalStorage::new(&blocking_path));
 
         let response = readiness_check(State(state)).await;
         assert_eq!(response.0["status"], "not_ready");
         assert_eq!(response.0["checks"][1]["name"], "storage");
         assert_eq!(response.0["checks"][1]["ok"], false);
+    }
+
+    #[tokio::test]
+    async fn test_readiness_check_reports_functions_disabled_as_skipped() {
+        let (mut state, _dir) = crate::test_support::make_test_state().await;
+        state.functions_enabled = false;
+
+        let response = readiness_check(State(state)).await;
+        assert_eq!(response.0["status"], "ready");
+        assert_eq!(response.0["checks"][2]["name"], "functions");
+        assert_eq!(response.0["checks"][2]["ok"], true);
+        assert_eq!(response.0["checks"][2]["enabled"], false);
     }
 }

@@ -91,6 +91,7 @@ What this means for external frontend apps:
 - English guide: `docs/service-tokens.md`
 - Korean guide: `docs/service-tokens.ko.md`
 - automation runbook: `docs/automation-runbook.md`
+- MVP OpenAPI contract: `docs/openapi.yaml`
 - curl examples: `examples/service-tokens/`
 - jq-assisted token bootstrap: `examples/service-tokens/create-token-jq.sh`
 - end-to-end operations example: `examples/operations-e2e/`
@@ -283,11 +284,13 @@ Current capabilities:
 - host bindings reuse Peanut's existing auth and policy checks, so owner-scoped data/storage access stays user-scoped inside functions too
 
 Current constraints:
+- Functions are intended for trusted admin-managed code only.
 - functions must export `default` or named `handler`
 - JSON input/output only
 - no arbitrary package installation
 - source containing blocked runtime escape patterns is rejected
-- no direct outbound network access; functions extend Peanut through bounded host bindings instead
+- Peanut does not provide OS-level sandboxing for Functions; use `FUNCTIONS_ENABLED=false` on installs that do not need runtime extensions
+- `FUNCTIONS_ALLOW_NETWORK=false` keeps common browser-style network APIs unavailable inside the Node runner
 - this is a narrow sandboxed extension layer, not a full Lambda clone
 
 ### Console / operator surface
@@ -536,11 +539,13 @@ Admin saved query presets:
 ### `POST /api/data/tables/:table/import`
 Admin snapshot import:
 - accepts `{ "mode": "append" | "replace", "rows": [...] }`
+- `dry_run: true` validates checksum/schema/rows and returns a preview without mutating the database
 - `restore_table: true` can also restore `display_name`, `schema`, and `access_policy` before rows are inserted
 - `verify_checksum: true` with `metadata` validates the incoming artifact before import mutates rows
 - checksum verification expects export-style artifact fields (`table.created_by`, `table.created_at`, row ids, `created_at`, `updated_at`)
 - imported rows are normalized against the current schema before insert
 - owner-private tables require `owner_user_id` per imported row
+- dry-run responses include `would_insert`, `would_replace`, `schema_changes`, and `validation_errors`
 
 ## Repository layout
 
@@ -585,6 +590,13 @@ Optional:
 - `BIND_ADDR` (default: `127.0.0.1:3000`; must be a valid socket address)
 - `MAX_UPLOAD_BYTES` (default: `5242880`; must be a positive integer)
 - `PASSWORD_RESET_DELIVERY` (default: `inline`; `inline` or `log`)
+- `FUNCTIONS_ENABLED` (default: `true`; set `false` to disable all Functions APIs and invocation endpoints)
+- `FUNCTIONS_ALLOW_NETWORK` (default: `false`; keeps `fetch`, `WebSocket`, and `XMLHttpRequest` unavailable inside Functions)
+- `FUNCTIONS_WORK_DIR` (default: OS temp dir plus `peanut-functions`; must be writable when Functions are enabled)
+- `BACKUP_ON_STARTUP` (default: `false`; set `true` to run one SQLite backup before the server starts accepting requests)
+- `TRUST_PROXY_HEADERS` (default: `false`; set `true` only behind a trusted reverse proxy so rate limiting can use `x-forwarded-for`)
+- `MULTIPART_STALE_HOURS` (default: `24`; staged multipart uploads older than this can be cleaned up)
+- `MULTIPART_CLEANUP_INTERVAL_SECONDS` (default: `3600`; background cleanup interval)
 - `AUTH_ALLOWED_ORIGINS` (comma-separated origins; when set, auth routes require a matching `Origin` header)
 - `AUTH_ALLOWED_CLIENT_IDS` (comma-separated client ids; when set, auth routes require a matching `x-peanut-client-id` header)
 - `RUST_LOG` (default: `info`)
@@ -653,6 +665,7 @@ Quick notes:
 - for ready-to-send payload files, see `examples/data-api/`
 - for a combined service-token + data + storage runbook, see `examples/operations-e2e/`
 - that runbook now also includes Data API list/export/import and checkpoint/replay steps
+- for backend module ownership boundaries, see `docs/module-boundaries.md`
 - for reusable env-backed cron scripts, see `examples/automation/`
 - for a full external frontend auth flow, see `docs/auth-client.md` and `examples/auth-client-web/`
 

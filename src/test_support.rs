@@ -21,6 +21,10 @@ pub async fn make_test_state() -> (crate::AppState, tempfile::TempDir) {
         last_backup_at: Arc::new(tokio::sync::RwLock::new(None)),
         rate_limit_state: Arc::new(dashmap::DashMap::new()),
         database_url: Arc::new("sqlite::memory:".to_string()),
+        functions_enabled: true,
+        trust_proxy_headers: false,
+        functions_allow_network: false,
+        functions_work_dir: dir.path().join("functions"),
     };
     (state, dir)
 }

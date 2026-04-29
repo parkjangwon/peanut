@@ -1,0 +1,333 @@
+openapi: 3.1.0
+info:
+  title: Peanut API
+  version: 0.1.0
+  description: >
+    Minimal public contract for Peanut's self-host backend API. This document
+    intentionally covers the stable MVP operator surface first; detailed S3-like
+    storage compatibility lives in docs/storage-s3-compat.md.
+servers:
+  - url: http://127.0.0.1:3000
+security:
+  - bearerAuth: []
+paths:
+  /api/health:
+    get:
+      summary: Health check
+      security: []
+      responses:
+        "200":
+          description: Localized health status.
+  /api/ready:
+    get:
+      summary: Readiness check
+      security: []
+      responses:
+        "200":
+          description: Database, storage, backup, and functions runtime readiness.
+  /api/register:
+    post:
+      summary: Register a user
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RegisterRequest"
+      responses:
+        "201":
+          description: User registered.
+        "409":
+          description: Email already exists.
+  /api/login:
+    post:
+      summary: Login with email and password
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/LoginRequest"
+      responses:
+        "200":
+          description: Access and refresh tokens.
+  /api/auth/refresh:
+    post:
+      summary: Rotate a refresh token
+      security: []
+      responses:
+        "200":
+          description: New access and refresh token pair.
+  /api/auth/logout:
+    post:
+      summary: Revoke a refresh token
+      security: []
+      responses:
+        "200":
+          description: Session revoked.
+  /api/me:
+    get:
+      summary: Return current authenticated user
+      responses:
+        "200":
+          description: Current user.
+  /api/admin/users:
+    get:
+      summary: List users
+      responses:
+        "200":
+          description: Admin user list.
+  /api/admin/service-tokens:
+    get:
+      summary: List service tokens
+      responses:
+        "200":
+          description: Service token summaries.
+    post:
+      summary: Create a service token
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateServiceTokenRequest"
+      responses:
+        "201":
+          description: Service token summary and one-time plaintext token.
+  /api/admin/backups:
+    get:
+      summary: List database backups
+      responses:
+        "200":
+          description: Backup summaries.
+    post:
+      summary: Create a database backup
+      responses:
+        "201":
+          description: Created backup summary.
+  /api/admin/backups/{backup_name}/download:
+    get:
+      summary: Download a database backup
+      parameters:
+        - name: backup_name
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Backup file bytes.
+  /api/admin/backups/{backup_name}/restore:
+    post:
+      summary: Schedule a database backup restore on next restart
+      parameters:
+        - name: backup_name
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Restore marker created.
+  /api/data/tables:
+    get:
+      summary: List logical data tables
+      responses:
+        "200":
+          description: Data table list.
+    post:
+      summary: Create a logical data table
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateDataTableRequest"
+      responses:
+        "201":
+          description: Created table.
+  /api/data/tables/{table}/rows:
+    get:
+      summary: List rows in a logical table
+      parameters:
+        - $ref: "#/components/parameters/Table"
+        - name: limit
+          in: query
+          schema:
+            type: integer
+        - name: offset
+          in: query
+          schema:
+            type: integer
+        - name: search
+          in: query
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Row list.
+    post:
+      summary: Create a row
+      parameters:
+        - $ref: "#/components/parameters/Table"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateRowRequest"
+      responses:
+        "201":
+          description: Created row.
+  /api/data/tables/{table}/export:
+    get:
+      summary: Export a table snapshot
+      parameters:
+        - $ref: "#/components/parameters/Table"
+      responses:
+        "200":
+          description: Export artifact.
+  /api/data/tables/{table}/import:
+    post:
+      summary: Import rows into a table
+      parameters:
+        - $ref: "#/components/parameters/Table"
+      responses:
+        "200":
+          description: Import summary.
+  /api/data/tables/{table}/events:
+    get:
+      summary: List row events
+      parameters:
+        - $ref: "#/components/parameters/Table"
+        - name: since_id
+          in: query
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Row events.
+  /api/data/tables/{table}/events/checkpoint:
+    get:
+      summary: Get latest durable row event id
+      parameters:
+        - $ref: "#/components/parameters/Table"
+      responses:
+        "200":
+          description: Latest event checkpoint.
+  /api/push/messages:
+    post:
+      summary: Queue a push message
+      responses:
+        "201":
+          description: Message queued.
+  /api/push/queue:
+    get:
+      summary: List push queue items
+      responses:
+        "200":
+          description: Queue items and summary.
+  /api/functions:
+    get:
+      summary: List functions
+      responses:
+        "200":
+          description: Function summaries.
+        "503":
+          description: Functions runtime disabled.
+    post:
+      summary: Create a function
+      responses:
+        "201":
+          description: Created function.
+        "503":
+          description: Functions runtime disabled.
+  /api/functions/endpoints/{endpoint_slug}:
+    post:
+      summary: Invoke a function endpoint
+      security:
+        - bearerAuth: []
+        - {}
+      parameters:
+        - name: endpoint_slug
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Function invocation result.
+        "202":
+          description: Async invocation accepted.
+        "503":
+          description: Functions runtime disabled.
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+  parameters:
+    Table:
+      name: table
+      in: path
+      required: true
+      schema:
+        type: string
+  schemas:
+    RegisterRequest:
+      type: object
+      required: [email, password]
+      properties:
+        email:
+          type: string
+          format: email
+        password:
+          type: string
+          minLength: 8
+    LoginRequest:
+      type: object
+      required: [email, password]
+      properties:
+        email:
+          type: string
+          format: email
+        password:
+          type: string
+    CreateServiceTokenRequest:
+      type: object
+      required: [name]
+      properties:
+        name:
+          type: string
+        expires_in_days:
+          type: [integer, "null"]
+    CreateDataTableRequest:
+      type: object
+      required: [name, display_name, schema, access_policy]
+      properties:
+        name:
+          type: string
+        display_name:
+          type: string
+        schema:
+          type: object
+        access_policy:
+          type: object
+    CreateRowRequest:
+      type: object
+      required: [data]
+      properties:
+        data:
+          type: object
+    ErrorResponse:
+      type: object
+      required: [error, code, request_id]
+      properties:
+        error:
+          type: string
+        code:
+          type: string
+        request_id:
+          type: [string, "null"]

@@ -22,6 +22,7 @@ use axum::{
 };
 use dashmap::DashMap;
 use std::net::IpAddr;
+use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::time::Instant;
 use tower_http::cors::{Any, CorsLayer};
@@ -41,6 +42,10 @@ pub struct AppState {
     pub last_backup_at: Arc<tokio::sync::RwLock<Option<chrono::DateTime<chrono::Local>>>>,
     pub rate_limit_state: Arc<DashMap<IpAddr, (u32, Instant)>>,
     pub database_url: Arc<String>,
+    pub functions_enabled: bool,
+    pub trust_proxy_headers: bool,
+    pub functions_allow_network: bool,
+    pub functions_work_dir: PathBuf,
 }
 
 #[tokio::main]
@@ -58,6 +63,11 @@ async fn main() {
     tokio::fs::create_dir_all(&config.storage_dir)
         .await
         .unwrap();
+
+    if let Err(error) = db::apply_pending_restore(&config.database_url, std::path::Path::new(".")).await
+    {
+        panic!("Failed to apply pending database restore: {error}");
+    }
 
     let pool = db::init_db(&config.database_url)
         .await
@@ -79,6 +89,10 @@ async fn main() {
         last_backup_at: Arc::new(tokio::sync::RwLock::new(None)),
         rate_limit_state: Arc::new(DashMap::new()),
         database_url: Arc::new(config.database_url.clone()),
+        functions_enabled: config.functions_enabled,
+        trust_proxy_headers: config.trust_proxy_headers,
+        functions_allow_network: config.functions_allow_network,
+        functions_work_dir: config.functions_work_dir.clone(),
     };
 
     let pool_clone = state.pool.clone();
@@ -86,10 +100,51 @@ async fn main() {
         crate::push::worker::start_push_worker(pool_clone).await;
     });
 
+    let storage_for_cleanup = state.storage.clone();
+    let multipart_stale_hours = config.multipart_stale_hours;
+    let multipart_cleanup_interval_seconds = config.multipart_cleanup_interval_seconds;
+    tokio::spawn(async move {
+        loop {
+            tokio::time::sleep(std::time::Duration::from_secs(
+                multipart_cleanup_interval_seconds,
+            ))
+            .await;
+            let stale_before = std::time::SystemTime::now()
+                .checked_sub(std::time::Duration::from_secs(
+                    multipart_stale_hours.saturating_mul(60 * 60),
+                ))
+                .unwrap_or(std::time::SystemTime::UNIX_EPOCH);
+            match storage_for_cleanup
+                .cleanup_stale_multipart_uploads(stale_before)
+                .await
+            {
+                Ok(removed) if removed > 0 => {
+                    tracing::info!("Cleaned up {} stale multipart uploads", removed);
+                }
+                Ok(_) => {}
+                Err(error) => {
+                    tracing::error!("Multipart cleanup failed: {}", error);
+                }
+            }
+        }
+    });
+
     // Start background backup worker
     let pool_for_backup = state.pool.clone();
     let db_url = config.database_url.clone();
     let last_backup_at = state.last_backup_at.clone();
+    if config.backup_on_startup {
+        match crate::db::backup_db(&pool_for_backup, &db_url).await {
+            Ok(path) => {
+                tracing::info!("Startup database backup successful: {}", path);
+                let mut last_backup = last_backup_at.write().await;
+                *last_backup = Some(chrono::Local::now());
+            }
+            Err(e) => {
+                tracing::error!("Startup database backup failed: {}", e);
+            }
+        }
+    }
     tokio::spawn(async move {
         loop {
             // Wait for 24 hours
@@ -184,7 +239,11 @@ async fn main() {
         .route(
             "/functions/:name/invocations/:invocation_id/retry",
             post(api::functions::retry_function_invocation),
-        );
+        )
+        .layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            crate::middleware::functions_enabled::functions_enabled_middleware,
+        ));
 
     let data_routes = Router::new()
         .route("/data/tables", get(api::data::list_tables))
@@ -262,6 +321,16 @@ async fn main() {
 
     let protected_routes = Router::new()
         .route("/admin/users", get(api::admin::list_users))
+        .route("/admin/backups", get(api::backups::list_backups))
+        .route("/admin/backups", post(api::backups::create_backup))
+        .route(
+            "/admin/backups/:backup_name/download",
+            get(api::backups::download_backup),
+        )
+        .route(
+            "/admin/backups/:backup_name/restore",
+            post(api::backups::restore_backup),
+        )
         .route(
             "/admin/service-tokens",
             get(api::admin::list_service_tokens),
@@ -303,15 +372,22 @@ async fn main() {
             crate::middleware::auth_client_policy::auth_client_policy_middleware,
         ));
 
+    let function_invoke_routes = Router::new()
+        .route(
+            "/functions/endpoints/:endpoint_slug",
+            post(api::functions::invoke_function),
+        )
+        .layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            crate::middleware::functions_enabled::functions_enabled_middleware,
+        ));
+
     let app = Router::new()
         .route("/api/health", get(api::health::health_check))
         .route("/api/ready", get(api::health::readiness_check))
         .nest("/api", auth_public_routes)
         .nest("/api", s3_routes)
-        .route(
-            "/api/functions/endpoints/:endpoint_slug",
-            post(api::functions::invoke_function),
-        )
+        .nest("/api", function_invoke_routes)
         .nest("/api", auth_protected_routes)
         .nest("/api", protected_routes)
         .fallback(crate::console::static_handler)

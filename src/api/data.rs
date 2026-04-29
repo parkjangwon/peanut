@@ -130,6 +130,18 @@ pub struct TableExportMetadata {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TableImportResponse {
     pub imported_count: usize,
+    pub dry_run: bool,
+    pub would_insert: usize,
+    pub would_replace: usize,
+    pub schema_changes: SchemaDiffPreview,
+    pub validation_errors: Vec<String>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SchemaDiffPreview {
+    pub added_fields: Vec<String>,
+    pub removed_fields: Vec<String>,
+    pub changed_fields: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -154,6 +166,7 @@ pub struct DataTableRestoreSpec {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TableImportRequest {
     pub mode: Option<String>,
+    pub dry_run: Option<bool>,
     pub restore_table: Option<bool>,
     pub metadata: Option<TableExportMetadata>,
     pub verify_checksum: Option<bool>,
@@ -193,7 +206,7 @@ pub struct DataTableSchema {
     pub fields: BTreeMap<String, DataFieldSpec>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct DataFieldSpec {
     #[serde(rename = "type")]
     pub field_type: String,
@@ -1198,6 +1211,7 @@ pub async fn import_rows(
     if mode != "append" && mode != "replace" {
         return json_error(StatusCode::BAD_REQUEST, "mode must be append or replace");
     }
+    let dry_run = payload.dry_run.unwrap_or(false);
 
     if payload.verify_checksum.unwrap_or(false) {
         let metadata = match payload.metadata.as_ref() {
@@ -1222,6 +1236,59 @@ pub async fn import_rows(
         if checksum != metadata.checksum_sha256 {
             return json_error(StatusCode::BAD_REQUEST, "import checksum verification failed");
         }
+    }
+
+    let existing_row_count = match count_table_rows(&state.pool, &table.id).await {
+        Ok(count) => count,
+        Err(message) => return json_error(StatusCode::INTERNAL_SERVER_ERROR, message),
+    };
+
+    let mut schema_changes = SchemaDiffPreview::default();
+    let mut effective_table = table.clone();
+    if payload.restore_table.unwrap_or(false) {
+        let Some(restore_spec) = payload.table.as_ref() else {
+            return json_error(StatusCode::BAD_REQUEST, "table is required when restore_table is true");
+        };
+        let schema_validation_row_count = if mode == "replace" { 0 } else { existing_row_count };
+        if let Err(message) = validate_restore_table_spec(&table, restore_spec, schema_validation_row_count) {
+            return json_error(StatusCode::BAD_REQUEST, message);
+        }
+        schema_changes = schema_diff_preview(&table.schema, &restore_spec.schema);
+        effective_table.display_name = restore_spec.display_name.trim().to_string();
+        effective_table.schema = restore_spec.schema.clone();
+        effective_table.access_policy = restore_spec.access_policy.clone();
+    }
+
+    for row in &payload.rows {
+        if let Err(message) = normalize_row_data(&effective_table.schema, row.data.clone(), false) {
+            return json_error(StatusCode::BAD_REQUEST, message);
+        }
+        if let Err(message) =
+            normalize_import_owner_user_id(&effective_table.access_policy, row.owner_user_id.clone())
+        {
+            return json_error(StatusCode::BAD_REQUEST, message);
+        }
+    }
+
+    let would_replace = if mode == "replace" {
+        existing_row_count as usize
+    } else {
+        0
+    };
+
+    if dry_run {
+        return (
+            StatusCode::OK,
+            Json(TableImportResponse {
+                imported_count: 0,
+                dry_run: true,
+                would_insert: payload.rows.len(),
+                would_replace,
+                schema_changes,
+                validation_errors: Vec::new(),
+            }),
+        )
+            .into_response();
     }
 
     if mode == "replace" {
@@ -1285,7 +1352,70 @@ pub async fn import_rows(
         }
     }
 
-    (StatusCode::CREATED, Json(TableImportResponse { imported_count })).into_response()
+    (
+        StatusCode::CREATED,
+        Json(TableImportResponse {
+            imported_count,
+            dry_run: false,
+            would_insert: imported_count,
+            would_replace,
+            schema_changes,
+            validation_errors: Vec::new(),
+        }),
+    )
+        .into_response()
+}
+
+fn validate_restore_table_spec(
+    existing: &LoadedTable,
+    restore_spec: &DataTableRestoreSpec,
+    row_count: i64,
+) -> Result<(), String> {
+    let restore_name = restore_spec.name.trim().to_lowercase();
+    if restore_name != existing.name {
+        return Err("restore table name must match the target table path".to_string());
+    }
+    if restore_spec.display_name.trim().is_empty() {
+        return Err("display_name is required".to_string());
+    }
+    validate_schema(&restore_spec.schema)?;
+    validate_access_policy(&restore_spec.access_policy)?;
+    validate_schema_evolution(&existing.schema, &restore_spec.schema, row_count)?;
+    Ok(())
+}
+
+fn schema_diff_preview(existing: &DataTableSchema, updated: &DataTableSchema) -> SchemaDiffPreview {
+    let mut added_fields = updated
+        .fields
+        .keys()
+        .filter(|field_name| !existing.fields.contains_key(*field_name))
+        .cloned()
+        .collect::<Vec<_>>();
+    let mut removed_fields = existing
+        .fields
+        .keys()
+        .filter(|field_name| !updated.fields.contains_key(*field_name))
+        .cloned()
+        .collect::<Vec<_>>();
+    let mut changed_fields = existing
+        .fields
+        .iter()
+        .filter_map(|(field_name, existing_field)| {
+            updated
+                .fields
+                .get(field_name)
+                .filter(|updated_field| *updated_field != existing_field)
+                .map(|_| field_name.clone())
+        })
+        .collect::<Vec<_>>();
+    added_fields.sort();
+    removed_fields.sort();
+    changed_fields.sort();
+    SchemaDiffPreview {
+        added_fields,
+        removed_fields,
+        changed_fields,
+    }
 }
 
 async fn restore_table_definition(
@@ -1293,22 +1423,10 @@ async fn restore_table_definition(
     existing: &LoadedTable,
     restore_spec: &DataTableRestoreSpec,
 ) -> Result<LoadedTable, RestoreTableError> {
-    let restore_name = restore_spec.name.trim().to_lowercase();
-    if restore_name != existing.name {
-        return Err(RestoreTableError::BadRequest(
-            "restore table name must match the target table path".to_string(),
-        ));
-    }
-    if restore_spec.display_name.trim().is_empty() {
-        return Err(RestoreTableError::BadRequest("display_name is required".to_string()));
-    }
-    validate_schema(&restore_spec.schema).map_err(RestoreTableError::BadRequest)?;
-    validate_access_policy(&restore_spec.access_policy).map_err(RestoreTableError::BadRequest)?;
-
     let row_count = count_table_rows(pool, &existing.id)
         .await
         .map_err(RestoreTableError::Internal)?;
-    validate_schema_evolution(&existing.schema, &restore_spec.schema, row_count)
+    validate_restore_table_spec(existing, restore_spec, row_count)
         .map_err(RestoreTableError::BadRequest)?;
     validate_rows_against_schema(pool, &existing.id, &restore_spec.schema)
         .await
@@ -1658,7 +1776,7 @@ fn validate_schema_evolution(
             continue;
         };
 
-        if existing_field.field_type != updated_field.field_type {
+        if row_count > 0 && existing_field.field_type != updated_field.field_type {
             return Err(format!(
                 "cannot change field '{}' type from {} to {}",
                 field_name, existing_field.field_type, updated_field.field_type
@@ -2213,6 +2331,17 @@ mod tests {
         .await;
         assert_eq!(create_response.status(), StatusCode::CREATED);
 
+        let create_row_response = create_row(
+            State(state.clone()),
+            Extension(claims(&admin.user.id, true)),
+            axum::extract::Path("todos".to_string()),
+            Json(CreateRowRequest {
+                data: json!({ "title": "buy milk" }),
+            }),
+        )
+        .await;
+        assert_eq!(create_row_response.status(), StatusCode::CREATED);
+
         let update_response = update_table(
             State(state),
             Extension(claims(&admin.user.id, true)),
@@ -2248,6 +2377,54 @@ mod tests {
         assert_eq!(update_response.status(), StatusCode::BAD_REQUEST);
         let error: crate::api::common::ApiError = test_support::response_json(update_response).await;
         assert_eq!(error.error, "cannot change field 'title' type from string to integer");
+    }
+
+    #[tokio::test]
+    async fn test_schema_evolution_allows_field_type_changes_before_rows_exist() {
+        let (state, _dir) = test_support::make_test_state().await;
+        let admin = register_user(state.clone(), "admin@example.com").await;
+
+        let create_response = create_table(
+            State(state.clone()),
+            Extension(claims(&admin.user.id, true)),
+            Json(todo_table_request()),
+        )
+        .await;
+        assert_eq!(create_response.status(), StatusCode::CREATED);
+
+        let update_response = update_table(
+            State(state),
+            Extension(claims(&admin.user.id, true)),
+            axum::extract::Path("todos".to_string()),
+            Json(UpdateTableRequest {
+                display_name: None,
+                schema: Some(DataTableSchema {
+                    fields: BTreeMap::from([
+                        (
+                            "done".to_string(),
+                            DataFieldSpec {
+                                field_type: "boolean".to_string(),
+                                required: false,
+                                max_length: None,
+                                default: Some(Value::Bool(false)),
+                            },
+                        ),
+                        (
+                            "title".to_string(),
+                            DataFieldSpec {
+                                field_type: "integer".to_string(),
+                                required: true,
+                                max_length: None,
+                                default: None,
+                            },
+                        ),
+                    ]),
+                }),
+                access_policy: None,
+            }),
+        )
+        .await;
+        assert_eq!(update_response.status(), StatusCode::OK);
     }
 
     #[tokio::test]
@@ -2886,6 +3063,7 @@ mod tests {
             axum::extract::Path("todos".to_string()),
             Json(TableImportRequest {
                 mode: Some("replace".to_string()),
+                dry_run: None,
                 restore_table: None,
                 metadata: None,
                 verify_checksum: None,
@@ -2903,6 +3081,7 @@ mod tests {
         assert_eq!(import_response.status(), StatusCode::CREATED);
         let import_body: TableImportResponse = test_support::response_json(import_response).await;
         assert_eq!(import_body.imported_count, 1);
+        assert!(!import_body.dry_run);
 
         let rows_response = list_rows(
             State(state.clone()),
@@ -2950,6 +3129,7 @@ mod tests {
             axum::extract::Path("todos".to_string()),
             Json(TableImportRequest {
                 mode: Some("replace".to_string()),
+                dry_run: None,
                 restore_table: None,
                 metadata: Some(TableExportMetadata {
                     export_version: TABLE_EXPORT_VERSION.to_string(),
@@ -2997,6 +3177,7 @@ mod tests {
             axum::extract::Path("todos".to_string()),
             Json(TableImportRequest {
                 mode: Some("replace".to_string()),
+                dry_run: None,
                 restore_table: Some(true),
                 metadata: None,
                 verify_checksum: None,
@@ -3076,6 +3257,96 @@ mod tests {
         assert_eq!(rows_body.rows.len(), 1);
         assert_eq!(rows_body.rows[0].data.get("priority"), Some(&json!(1)));
         assert_eq!(rows_body.rows[0].data.get("title"), Some(&json!("buy milk")));
+    }
+
+    #[tokio::test]
+    async fn test_import_dry_run_does_not_mutate_rows_and_reports_preview() {
+        let (state, _dir) = test_support::make_test_state().await;
+        let admin = register_user(state.clone(), "admin@example.com").await;
+
+        let create_table_response = create_table(
+            State(state.clone()),
+            Extension(claims(&admin.user.id, true)),
+            Json(todo_table_request()),
+        )
+        .await;
+        assert_eq!(create_table_response.status(), StatusCode::CREATED);
+
+        let dry_run_response = import_rows(
+            State(state.clone()),
+            Extension(claims(&admin.user.id, true)),
+            axum::extract::Path("todos".to_string()),
+            Json(TableImportRequest {
+                mode: Some("replace".to_string()),
+                dry_run: Some(true),
+                restore_table: Some(true),
+                metadata: None,
+                verify_checksum: None,
+                table: Some(DataTableRestoreSpec {
+                    name: "todos".to_string(),
+                    display_name: "Preview Todos".to_string(),
+                    schema: DataTableSchema {
+                        fields: BTreeMap::from([
+                            (
+                                "done".to_string(),
+                                DataFieldSpec {
+                                    field_type: "boolean".to_string(),
+                                    required: false,
+                                    max_length: None,
+                                    default: Some(Value::Bool(false)),
+                                },
+                            ),
+                            (
+                                "priority".to_string(),
+                                DataFieldSpec {
+                                    field_type: "integer".to_string(),
+                                    required: false,
+                                    max_length: None,
+                                    default: Some(json!(1)),
+                                },
+                            ),
+                            (
+                                "title".to_string(),
+                                DataFieldSpec {
+                                    field_type: "string".to_string(),
+                                    required: true,
+                                    max_length: Some(200),
+                                    default: None,
+                                },
+                            ),
+                        ]),
+                    },
+                    access_policy: todo_table_request().access_policy,
+                    created_by: None,
+                    created_at: None,
+                }),
+                rows: vec![ImportRowRequest {
+                    id: None,
+                    owner_user_id: Some(admin.user.id.clone()),
+                    data: json!({ "title": "buy milk" }),
+                    created_at: None,
+                    updated_at: None,
+                }],
+            }),
+        )
+        .await;
+        assert_eq!(dry_run_response.status(), StatusCode::OK);
+        let dry_run_body: TableImportResponse = test_support::response_json(dry_run_response).await;
+        assert!(dry_run_body.dry_run);
+        assert_eq!(dry_run_body.imported_count, 0);
+        assert_eq!(dry_run_body.would_insert, 1);
+        assert_eq!(dry_run_body.would_replace, 0);
+        assert_eq!(dry_run_body.schema_changes.added_fields, vec!["priority"]);
+
+        let rows_response = list_rows(
+            State(state),
+            Extension(claims(&admin.user.id, true)),
+            axum::extract::Path("todos".to_string()),
+            axum::extract::Query(ListRowsParams::default()),
+        )
+        .await;
+        let rows_body: DataRowsResponse = test_support::response_json(rows_response).await;
+        assert!(rows_body.rows.is_empty());
     }
 
     #[tokio::test]

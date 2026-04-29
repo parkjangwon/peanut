@@ -87,4 +87,10 @@ Choose the route family by use case:
 - want temporary object access -> use presigned S3-like URLs
 - want large-file upload -> use multipart S3-like flow
 
+Operational cleanup:
+- staged multipart uploads live under Peanut's local multipart staging directory
+- `MULTIPART_STALE_HOURS` controls when an unfinished upload is considered stale
+- `MULTIPART_CLEANUP_INTERVAL_SECONDS` controls how often Peanut scans and deletes stale staging directories
+- cleanup only targets multipart staging directories and does not delete completed objects
+
 If you need strict AWS parity across every edge case, treat Peanut as partially compatible today rather than a drop-in replacement for every S3 client feature.

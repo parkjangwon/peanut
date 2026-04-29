@@ -1,5 +1,6 @@
 pub mod admin;
 pub mod auth;
+pub mod backups;
 pub mod common;
 pub mod data;
 pub mod functions;

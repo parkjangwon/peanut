@@ -22,12 +22,17 @@ pub struct MessageResponse {
     pub message: String,
 }
 
-pub async fn scope_request_id<T>(request_id: String, fut: impl std::future::Future<Output = T>) -> T {
+pub async fn scope_request_id<T>(
+    request_id: String,
+    fut: impl std::future::Future<Output = T>,
+) -> T {
     CURRENT_REQUEST_ID.scope(request_id, fut).await
 }
 
 fn current_request_id() -> Option<String> {
-    CURRENT_REQUEST_ID.try_with(|request_id| request_id.clone()).ok()
+    CURRENT_REQUEST_ID
+        .try_with(|request_id| request_id.clone())
+        .ok()
 }
 
 fn status_error_code(status: StatusCode) -> String {
@@ -37,6 +42,7 @@ fn status_error_code(status: StatusCode) -> String {
         StatusCode::FORBIDDEN => "forbidden",
         StatusCode::NOT_FOUND => "not_found",
         StatusCode::CONFLICT => "conflict",
+        StatusCode::SERVICE_UNAVAILABLE => "service_unavailable",
         StatusCode::INTERNAL_SERVER_ERROR => "internal_server_error",
         _ => "unknown_error",
     }
@@ -44,11 +50,15 @@ fn status_error_code(status: StatusCode) -> String {
 }
 
 pub fn json_error(status: StatusCode, message: impl Into<String>) -> Response {
-    (status, Json(ApiError {
-        error: message.into(),
-        code: status_error_code(status),
-        request_id: Some(current_request_id().unwrap_or_else(|| Uuid::new_v4().to_string())),
-    })).into_response()
+    (
+        status,
+        Json(ApiError {
+            error: message.into(),
+            code: status_error_code(status),
+            request_id: Some(current_request_id().unwrap_or_else(|| Uuid::new_v4().to_string())),
+        }),
+    )
+        .into_response()
 }
 
 #[cfg(test)]

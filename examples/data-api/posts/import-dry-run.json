@@ -1,0 +1,16 @@
+{
+  "mode": "replace",
+  "dry_run": true,
+  "restore_table": true,
+  "rows": [
+    {
+      "owner_user_id": "replace-with-user-id",
+      "data": {
+        "title": "Launch draft",
+        "slug": "launch-draft",
+        "body": "Preview import without mutating rows.",
+        "status": "draft"
+      }
+    }
+  ]
+}
