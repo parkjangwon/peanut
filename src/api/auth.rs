@@ -157,14 +157,7 @@ pub async fn register(
 
     match result {
         Ok(_) => {
-            let _ = record_auth_event(
-                pool,
-                &id,
-                Some(&id),
-                "user_registered",
-                None,
-            )
-            .await;
+            let _ = record_auth_event(pool, &id, Some(&id), "user_registered", None).await;
             (
                 StatusCode::CREATED,
                 Json(RegisterResponse {
@@ -610,7 +603,7 @@ async fn issue_refresh_token(
 ) -> Result<String, String> {
     let raw_token = generate_opaque_token();
     let token_hash = hash_opaque_token(&raw_token);
-    let session_id = session_id.unwrap_or_else(|| raw_token.as_str()).to_string();
+    let session_id = session_id.unwrap_or(raw_token.as_str()).to_string();
     let expires_at = sqlite_timestamp(Utc::now() + Duration::days(REFRESH_TOKEN_TTL_DAYS));
 
     sqlx::query(
@@ -793,7 +786,11 @@ fn deliver_password_reset_token(
     match delivery {
         crate::config::PasswordResetDelivery::Inline => reset_token.to_string(),
         crate::config::PasswordResetDelivery::Log => {
-            tracing::info!(email = email, reset_token = reset_token, "issued password reset token");
+            tracing::info!(
+                email = email,
+                reset_token = reset_token,
+                "issued password reset token"
+            );
             String::new()
         }
     }
@@ -1413,7 +1410,8 @@ mod tests {
             }),
         )
         .await;
-        let forgot_body: ForgotPasswordResponse = test_support::response_json(forgot_response).await;
+        let forgot_body: ForgotPasswordResponse =
+            test_support::response_json(forgot_response).await;
 
         let reset_response = reset_password(
             State(state.clone()),
@@ -1448,7 +1446,11 @@ mod tests {
         .await;
         assert_eq!(events_response.status(), StatusCode::OK);
         let events_body: AuthEventsResponse = test_support::response_json(events_response).await;
-        let actions: Vec<&str> = events_body.events.iter().map(|event| event.action.as_str()).collect();
+        let actions: Vec<&str> = events_body
+            .events
+            .iter()
+            .map(|event| event.action.as_str())
+            .collect();
         assert!(actions.contains(&"user_registered"));
         assert!(actions.contains(&"user_activated"));
         assert!(actions.contains(&"login_succeeded"));

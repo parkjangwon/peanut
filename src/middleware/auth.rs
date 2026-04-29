@@ -97,7 +97,12 @@ async fn authenticate_service_token(
     .bind(&token_hash)
     .fetch_optional(&state.pool)
     .await
-    .map_err(|_| json_error(StatusCode::INTERNAL_SERVER_ERROR, "failed to validate service token"))?
+    .map_err(|_| {
+        json_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "failed to validate service token",
+        )
+    })?
     .ok_or_else(|| json_error(StatusCode::UNAUTHORIZED, "invalid bearer token"))?;
 
     let claims = validate_user_claims(
@@ -168,12 +173,11 @@ mod tests {
         assert_eq!(claims.sub, body.user.id);
         assert!(claims.is_admin);
 
-        let last_used_at: Option<String> = sqlx::query_scalar(
-            "SELECT last_used_at FROM service_tokens WHERE id = 'svc_1'",
-        )
-        .fetch_one(&state.pool)
-        .await
-        .unwrap();
+        let last_used_at: Option<String> =
+            sqlx::query_scalar("SELECT last_used_at FROM service_tokens WHERE id = 'svc_1'")
+                .fetch_one(&state.pool)
+                .await
+                .unwrap();
         assert!(last_used_at.is_some());
     }
 

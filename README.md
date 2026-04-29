@@ -289,8 +289,11 @@ Current constraints:
 - JSON input/output only
 - no arbitrary package installation
 - source containing blocked runtime escape patterns is rejected
-- Peanut does not provide OS-level sandboxing for Functions; use `FUNCTIONS_ENABLED=false` on installs that do not need runtime extensions
+- Peanut Functions use process-only hardening and are not a hostile-tenant sandbox
+- Peanut does not provide OS-level or container-level sandboxing for Functions; use `FUNCTIONS_ENABLED=false` on installs that do not need runtime extensions
 - `FUNCTIONS_ALLOW_NETWORK=false` keeps common browser-style network APIs unavailable inside the Node runner
+- `FUNCTIONS_WORK_DIR` must not point at the filesystem root, user home directory, or database directory
+- `FUNCTIONS_MAX_CONCURRENT` limits simultaneous Function invocations in this Peanut process
 - this is a narrow sandboxed extension layer, not a full Lambda clone
 
 ### Console / operator surface
@@ -338,6 +341,16 @@ Returns backend readiness state for operators:
   ]
 }
 ```
+
+### `GET /api/admin/ops/metrics`
+Admin-only operational snapshot:
+
+```bash
+curl -s "$BASE_URL/api/admin/ops/metrics" \
+  -H "authorization: Bearer $ADMIN_JWT" | jq .
+```
+
+The response includes database size and restore state, storage totals, multipart stale count, push retry backlog, Function invocation counts, version, and uptime.
 
 ### `POST /api/register`
 Request:
@@ -592,7 +605,8 @@ Optional:
 - `PASSWORD_RESET_DELIVERY` (default: `inline`; `inline` or `log`)
 - `FUNCTIONS_ENABLED` (default: `true`; set `false` to disable all Functions APIs and invocation endpoints)
 - `FUNCTIONS_ALLOW_NETWORK` (default: `false`; keeps `fetch`, `WebSocket`, and `XMLHttpRequest` unavailable inside Functions)
-- `FUNCTIONS_WORK_DIR` (default: OS temp dir plus `peanut-functions`; must be writable when Functions are enabled)
+- `FUNCTIONS_MAX_CONCURRENT` (default: `4`; caps simultaneous Function invocations)
+- `FUNCTIONS_WORK_DIR` (default: OS temp dir plus `peanut-functions`; must be writable and must not be root, home, or the DB directory)
 - `BACKUP_ON_STARTUP` (default: `false`; set `true` to run one SQLite backup before the server starts accepting requests)
 - `TRUST_PROXY_HEADERS` (default: `false`; set `true` only behind a trusted reverse proxy so rate limiting can use `x-forwarded-for`)
 - `MULTIPART_STALE_HOURS` (default: `24`; staged multipart uploads older than this can be cleaned up)
@@ -702,7 +716,14 @@ Then open:
 cp .env.example .env
 # edit JWT_SECRET in .env
 
-docker compose up --build
+docker compose pull
+docker compose up -d
+```
+
+For local image development:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.build.yml up --build -d
 ```
 
 ### Docker Compose operations guide
@@ -721,7 +742,8 @@ cp .env.example .env
 # set JWT_SECRET
 # optionally set WEB_PUSH_VAPID_PRIVATE_KEY / WEB_PUSH_VAPID_SUBJECT
 
-docker compose up --build -d
+docker compose pull
+docker compose up -d
 docker compose logs -f peanut
 ```
 
@@ -729,7 +751,7 @@ Recommended day-2 operations:
 
 ```bash
 # restart after config change
-docker compose up -d --build
+docker compose up -d
 
 # inspect current logs
 docker compose logs --tail=200 peanut
@@ -744,7 +766,20 @@ docker compose start
 Backup and restore notes:
 - back up `./data/peanut.db` and `./data/storage/`
 - if you keep the default compose layout, backing up the entire `./data/` directory is enough
-- restore by stopping the container, replacing `./data/`, and starting the stack again
+- for API-managed DB restore, schedule the restore, verify pending state, restart Peanut, then verify readiness after startup
+- do not upgrade images while a restore marker is pending
+- for full directory restores, stop the container, replace `./data/`, and start the stack again
+
+API-managed restore flow:
+
+```bash
+curl -s -X POST "$BASE_URL/api/admin/backups/<backup-name>/restore" \
+  -H "authorization: Bearer $ADMIN_JWT"
+curl -s "$BASE_URL/api/admin/backups/restore-pending" \
+  -H "authorization: Bearer $ADMIN_JWT" | jq .
+docker compose restart peanut
+curl -s "$BASE_URL/api/ready" | jq .
+```
 
 ## Local browser Web Push experiment guide
 
@@ -773,10 +808,29 @@ Notes:
 Before shipping a change, verify:
 
 ```bash
+cargo fmt --all -- --check
+cargo clippy --all-targets -- -D warnings
 cargo test
+cargo test -- --test-threads=1
+scripts/check-openapi.sh
 ./scripts/build.sh
 node --check examples/auth-client-web/app.js
 ```
+
+Tagged releases are published as GitHub Releases and GHCR images:
+- `ghcr.io/parkjangwon/peanut:<version>`
+- `ghcr.io/parkjangwon/peanut:latest`
+
+Upgrade:
+
+```bash
+curl -s "$BASE_URL/api/admin/backups/restore-pending" \
+  -H "authorization: Bearer $ADMIN_JWT" | jq .
+docker compose pull
+docker compose up -d
+```
+
+Rollback by setting `PEANUT_IMAGE=ghcr.io/parkjangwon/peanut:<previous-version>` in `.env`, then run `docker compose up -d`.
 
 Manual smoke test:
 1. open `/` and confirm the API-first landing page renders
@@ -796,6 +850,14 @@ For a simple single-node deployment, back up:
 - the storage directory
 
 In the default docker-compose layout that means backing up `./data/`.
+
+Peanut also exposes admin APIs for DB backup operations:
+- `GET /api/admin/backups`
+- `POST /api/admin/backups`
+- `GET /api/admin/backups/:backup_name/download`
+- `POST /api/admin/backups/:backup_name/restore`
+- `GET /api/admin/backups/restore-pending`
+- `DELETE /api/admin/backups/restore-pending`
 
 ## Current non-goals
 

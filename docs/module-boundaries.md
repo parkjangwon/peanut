@@ -69,12 +69,16 @@ Preferred extraction targets:
 ## Runtime Trust Boundary
 
 Peanut Functions are trusted admin-managed extensions. The runtime uses a local
-Node subprocess and bounded Peanut host bindings, but Peanut does not claim
-OS-level sandboxing. Installations that do not need Functions should set:
+Node subprocess and bounded Peanut host bindings. This is process-only
+hardening, not a hostile-tenant sandbox, and Peanut does not claim OS-level or
+container-level sandboxing. Installations that do not need Functions should set:
 
 ```bash
 FUNCTIONS_ENABLED=false
 ```
 
 The readiness endpoint reports whether Functions are enabled and whether the
-local Node runtime is available.
+local Node runtime and work directory are available. `FUNCTIONS_ALLOW_NETWORK=false`
+keeps common browser-style network APIs unavailable, and
+`FUNCTIONS_MAX_CONCURRENT` caps simultaneous Function invocations in the Peanut
+process.

@@ -91,9 +91,11 @@ async fn process_queue_with_deliveries<NtfyFn, NtfyFuture, WebPushFn, WebPushFut
 ) -> Result<(), Box<dyn std::error::Error>>
 where
     NtfyFn: Fn(String, String, String) -> NtfyFuture + Send + Sync + 'static,
-    NtfyFuture: Future<Output = Result<(), Box<dyn std::error::Error + Send + Sync>>> + Send + 'static,
+    NtfyFuture:
+        Future<Output = Result<(), Box<dyn std::error::Error + Send + Sync>>> + Send + 'static,
     WebPushFn: Fn(SubscriptionInfo, String, String) -> WebPushFuture + Send + Sync + 'static,
-    WebPushFuture: Future<Output = Result<(), Box<dyn std::error::Error + Send + Sync>>> + Send + 'static,
+    WebPushFuture:
+        Future<Output = Result<(), Box<dyn std::error::Error + Send + Sync>>> + Send + 'static,
 {
     reclaim_stale_processing_items(pool).await?;
 
@@ -267,13 +269,10 @@ fn is_web_push_subscription(subscription: &SubscriptionRow) -> bool {
 }
 
 fn classify_delivery_error(error: &(dyn std::error::Error + 'static)) -> DeliveryOutcome {
-    if let Some(web_push_error) = error.downcast_ref::<WebPushError>() {
-        match web_push_error {
-            WebPushError::EndpointNotValid | WebPushError::EndpointNotFound => {
-                return DeliveryOutcome::SubscriptionGone;
-            }
-            _ => {}
-        }
+    if let Some(WebPushError::EndpointNotValid | WebPushError::EndpointNotFound) =
+        error.downcast_ref::<WebPushError>()
+    {
+        return DeliveryOutcome::SubscriptionGone;
     }
 
     if let Some(web_push_config_error) =
@@ -505,7 +504,7 @@ mod tests {
             },
             |subscription, _title, _body| async move {
                 assert_eq!(subscription.endpoint, "https://example.invalid/push");
-                Err(format!("web push endpoint gone").into())
+                Err("web push endpoint gone".to_string().into())
             },
         )
         .await

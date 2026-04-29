@@ -25,6 +25,10 @@ pub async fn make_test_state() -> (crate::AppState, tempfile::TempDir) {
         trust_proxy_headers: false,
         functions_allow_network: false,
         functions_work_dir: dir.path().join("functions"),
+        functions_max_concurrent: 4,
+        functions_semaphore: Arc::new(tokio::sync::Semaphore::new(4)),
+        multipart_stale_hours: 24,
+        started_at: std::time::Instant::now(),
     };
     (state, dir)
 }

@@ -184,9 +184,11 @@ pub async fn list_service_tokens(
     .fetch_all(&state.pool)
     .await
     {
-        Ok(service_tokens) => {
-            (StatusCode::OK, Json(ServiceTokensResponse { service_tokens })).into_response()
-        }
+        Ok(service_tokens) => (
+            StatusCode::OK,
+            Json(ServiceTokensResponse { service_tokens }),
+        )
+            .into_response(),
         Err(_) => json_error(
             StatusCode::INTERNAL_SERVER_ERROR,
             "failed to list service tokens",
@@ -241,7 +243,15 @@ pub async fn activate_user(
         return json_error(StatusCode::FORBIDDEN, "admin access required");
     }
 
-    set_user_active(&state.pool, &claims.sub, &user_id, true, "activate", "user_activated").await
+    set_user_active(
+        &state.pool,
+        &claims.sub,
+        &user_id,
+        true,
+        "activate",
+        "user_activated",
+    )
+    .await
 }
 
 pub async fn deactivate_user(
@@ -364,9 +374,11 @@ mod tests {
         assert_eq!(claims.sub, admin_body.user.id);
         assert!(claims.is_admin);
 
-        let list_response =
-            list_service_tokens(State(state.clone()), Extension(admin_claims(&admin_body.user.id)))
-                .await;
+        let list_response = list_service_tokens(
+            State(state.clone()),
+            Extension(admin_claims(&admin_body.user.id)),
+        )
+        .await;
         assert_eq!(list_response.status(), StatusCode::OK);
         let list_body: ServiceTokensResponse = test_support::response_json(list_response).await;
         assert_eq!(list_body.service_tokens.len(), 1);

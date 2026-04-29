@@ -57,8 +57,15 @@ pub async fn s3_auth_middleware(
             let path = req.uri().path().to_string();
             let query = req.uri().query().unwrap_or_default().to_string();
             let headers = req.headers().clone();
-            authenticate_header_signed_request(&state, &method, &path, &query, &headers, auth_header)
-                .await?
+            authenticate_header_signed_request(
+                &state,
+                &method,
+                &path,
+                &query,
+                &headers,
+                auth_header,
+            )
+            .await?
         } else {
             return Err(crate::api::common::json_error(
                 StatusCode::UNAUTHORIZED,
@@ -125,7 +132,10 @@ pub fn build_presigned_url(
 
     let mut params = query_params;
     params.extend(vec![
-        ("X-Amz-Algorithm".to_string(), SUPPORTED_ALGORITHM.to_string()),
+        (
+            "X-Amz-Algorithm".to_string(),
+            SUPPORTED_ALGORITHM.to_string(),
+        ),
         ("X-Amz-Credential".to_string(), credential),
         ("X-Amz-Date".to_string(), amz_date.clone()),
         ("X-Amz-Expires".to_string(), expires_in.to_string()),
@@ -232,7 +242,10 @@ async fn authenticate_presigned_request(
     }
 
     let params = parse_query_pairs(query);
-    let algorithm = params.get("X-Amz-Algorithm").map(String::as_str).unwrap_or_default();
+    let algorithm = params
+        .get("X-Amz-Algorithm")
+        .map(String::as_str)
+        .unwrap_or_default();
     if algorithm != SUPPORTED_ALGORITHM {
         return Err(crate::api::common::json_error(
             StatusCode::UNAUTHORIZED,
@@ -240,26 +253,21 @@ async fn authenticate_presigned_request(
         ));
     }
 
-    let credential = params
-        .get("X-Amz-Credential")
-        .cloned()
-        .ok_or_else(|| crate::api::common::json_error(StatusCode::UNAUTHORIZED, "missing x-amz-credential"))?;
-    let amz_date = params
-        .get("X-Amz-Date")
-        .cloned()
-        .ok_or_else(|| crate::api::common::json_error(StatusCode::UNAUTHORIZED, "missing x-amz-date"))?;
-    let expires = params
-        .get("X-Amz-Expires")
-        .cloned()
-        .ok_or_else(|| crate::api::common::json_error(StatusCode::UNAUTHORIZED, "missing x-amz-expires"))?;
-    let signed_headers = params
-        .get("X-Amz-SignedHeaders")
-        .cloned()
-        .ok_or_else(|| crate::api::common::json_error(StatusCode::UNAUTHORIZED, "missing x-amz-signedheaders"))?;
-    let signature = params
-        .get("X-Amz-Signature")
-        .cloned()
-        .ok_or_else(|| crate::api::common::json_error(StatusCode::UNAUTHORIZED, "missing x-amz-signature"))?;
+    let credential = params.get("X-Amz-Credential").cloned().ok_or_else(|| {
+        crate::api::common::json_error(StatusCode::UNAUTHORIZED, "missing x-amz-credential")
+    })?;
+    let amz_date = params.get("X-Amz-Date").cloned().ok_or_else(|| {
+        crate::api::common::json_error(StatusCode::UNAUTHORIZED, "missing x-amz-date")
+    })?;
+    let expires = params.get("X-Amz-Expires").cloned().ok_or_else(|| {
+        crate::api::common::json_error(StatusCode::UNAUTHORIZED, "missing x-amz-expires")
+    })?;
+    let signed_headers = params.get("X-Amz-SignedHeaders").cloned().ok_or_else(|| {
+        crate::api::common::json_error(StatusCode::UNAUTHORIZED, "missing x-amz-signedheaders")
+    })?;
+    let signature = params.get("X-Amz-Signature").cloned().ok_or_else(|| {
+        crate::api::common::json_error(StatusCode::UNAUTHORIZED, "missing x-amz-signature")
+    })?;
 
     if signed_headers != "host" {
         return Err(crate::api::common::json_error(
@@ -268,9 +276,9 @@ async fn authenticate_presigned_request(
         ));
     }
 
-    let expires = expires
-        .parse::<u32>()
-        .map_err(|_| crate::api::common::json_error(StatusCode::UNAUTHORIZED, "invalid x-amz-expires"))?;
+    let expires = expires.parse::<u32>().map_err(|_| {
+        crate::api::common::json_error(StatusCode::UNAUTHORIZED, "invalid x-amz-expires")
+    })?;
     if expires == 0 || expires > MAX_PRESIGN_EXPIRES {
         return Err(crate::api::common::json_error(
             StatusCode::UNAUTHORIZED,
@@ -280,7 +288,9 @@ async fn authenticate_presigned_request(
 
     let request_time = chrono::NaiveDateTime::parse_from_str(&amz_date, "%Y%m%dT%H%M%SZ")
         .map(|value| value.and_utc())
-        .map_err(|_| crate::api::common::json_error(StatusCode::UNAUTHORIZED, "invalid x-amz-date"))?;
+        .map_err(|_| {
+            crate::api::common::json_error(StatusCode::UNAUTHORIZED, "invalid x-amz-date")
+        })?;
     if Utc::now() > request_time + Duration::seconds(expires as i64) {
         return Err(crate::api::common::json_error(
             StatusCode::UNAUTHORIZED,
@@ -291,8 +301,9 @@ async fn authenticate_presigned_request(
     let (access_key, scope_date) = parse_credential(&credential)
         .map_err(|message| crate::api::common::json_error(StatusCode::UNAUTHORIZED, message))?;
 
-    let host = host
-        .ok_or_else(|| crate::api::common::json_error(StatusCode::UNAUTHORIZED, "missing host header"))?;
+    let host = host.ok_or_else(|| {
+        crate::api::common::json_error(StatusCode::UNAUTHORIZED, "missing host header")
+    })?;
     let canonical_uri = path.to_string();
     let canonical_query = canonical_query_string_without_signature(query)?;
     let canonical_request = canonical_request(
@@ -345,7 +356,9 @@ async fn authenticate_header_signed_request(
     let payload_hash = header_value(headers, "x-amz-content-sha256")?;
     let request_time = chrono::NaiveDateTime::parse_from_str(&amz_date, "%Y%m%dT%H%M%SZ")
         .map(|value| value.and_utc())
-        .map_err(|_| crate::api::common::json_error(StatusCode::UNAUTHORIZED, "invalid x-amz-date"))?;
+        .map_err(|_| {
+            crate::api::common::json_error(StatusCode::UNAUTHORIZED, "invalid x-amz-date")
+        })?;
     if Utc::now() > request_time + Duration::minutes(15) {
         return Err(crate::api::common::json_error(
             StatusCode::UNAUTHORIZED,
@@ -396,7 +409,12 @@ async fn load_active_user(
     .bind(user_id)
     .fetch_optional(&state.pool)
     .await
-    .map_err(|_| crate::api::common::json_error(StatusCode::INTERNAL_SERVER_ERROR, "failed to validate session"))?
+    .map_err(|_| {
+        crate::api::common::json_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "failed to validate session",
+        )
+    })?
     .ok_or_else(|| crate::api::common::json_error(StatusCode::UNAUTHORIZED, "user not found"))?;
 
     if !user.is_active {
@@ -437,7 +455,10 @@ fn build_presign_query_params(
     match subresource {
         Some("tagging") => {
             if upload_id.is_some() || part_number.is_some() {
-                return Err("tagging subresource cannot be combined with upload_id or part_number".to_string());
+                return Err(
+                    "tagging subresource cannot be combined with upload_id or part_number"
+                        .to_string(),
+                );
             }
             if !matches!(method, "GET" | "PUT" | "DELETE") {
                 return Err("tagging subresource supports only GET, PUT, or DELETE".to_string());
@@ -446,7 +467,10 @@ fn build_presign_query_params(
         }
         Some("uploads") => {
             if upload_id.is_some() || part_number.is_some() {
-                return Err("uploads subresource cannot be combined with upload_id or part_number".to_string());
+                return Err(
+                    "uploads subresource cannot be combined with upload_id or part_number"
+                        .to_string(),
+                );
             }
             if method != "POST" {
                 return Err("uploads subresource supports only POST".to_string());
@@ -467,7 +491,10 @@ fn build_presign_query_params(
                     }
                     "GET" | "POST" | "DELETE" => {
                         if part_number.is_some() {
-                            return Err("part_number is only supported for PUT multipart part presign".to_string());
+                            return Err(
+                                "part_number is only supported for PUT multipart part presign"
+                                    .to_string(),
+                            );
                         }
                         Ok(vec![("uploadId".to_string(), upload_id.to_string())])
                     }
@@ -529,8 +556,15 @@ fn parse_absolute_request_target(url: &str) -> Result<(String, String, String), 
     }
     let remainder = parts.next().unwrap_or_default();
     let path_and_query = format!("/{}", remainder);
-    let (path, query) = path_and_query.split_once('?').unwrap_or((path_and_query.as_str(), ""));
-    Ok((host.to_string(), path.to_string(), canonical_query_string_without_signature(query).map_err(|_| "invalid query string".to_string())?))
+    let (path, query) = path_and_query
+        .split_once('?')
+        .unwrap_or((path_and_query.as_str(), ""));
+    Ok((
+        host.to_string(),
+        path.to_string(),
+        canonical_query_string_without_signature(query)
+            .map_err(|_| "invalid query string".to_string())?,
+    ))
 }
 
 fn parse_credential(credential: &str) -> Result<(String, String), String> {
@@ -549,7 +583,10 @@ fn signing_key(jwt_secret: &str, access_key: &str, short_date: &str) -> Vec<u8> 
 }
 
 fn signing_key_from_secret(secret_access_key: &str, short_date: &str) -> Vec<u8> {
-    let k_date = hmac_sha256(format!("AWS4{secret_access_key}").as_bytes(), short_date.as_bytes());
+    let k_date = hmac_sha256(
+        format!("AWS4{secret_access_key}").as_bytes(),
+        short_date.as_bytes(),
+    );
     let k_region = hmac_sha256(&k_date, REGION.as_bytes());
     let k_service = hmac_sha256(&k_region, SERVICE.as_bytes());
     hmac_sha256(&k_service, TERMINATOR.as_bytes())
@@ -586,10 +623,12 @@ fn canonical_query_string_without_signature(query: &str) -> Result<String, Respo
         if raw_key == "X-Amz-Signature" {
             continue;
         }
-        let key = percent_decode(raw_key)
-            .map_err(|_| crate::api::common::json_error(StatusCode::UNAUTHORIZED, "invalid query encoding"))?;
-        let value = percent_decode(raw_value)
-            .map_err(|_| crate::api::common::json_error(StatusCode::UNAUTHORIZED, "invalid query encoding"))?;
+        let key = percent_decode(raw_key).map_err(|_| {
+            crate::api::common::json_error(StatusCode::UNAUTHORIZED, "invalid query encoding")
+        })?;
+        let value = percent_decode(raw_value).map_err(|_| {
+            crate::api::common::json_error(StatusCode::UNAUTHORIZED, "invalid query encoding")
+        })?;
         pairs.push((key, value));
     }
     Ok(canonical_query_string(&pairs))
@@ -636,7 +675,12 @@ struct AuthorizationHeader {
 fn parse_authorization_header(value: &str) -> Result<AuthorizationHeader, Response> {
     let remainder = value
         .strip_prefix(&format!("{SUPPORTED_ALGORITHM} "))
-        .ok_or_else(|| crate::api::common::json_error(StatusCode::UNAUTHORIZED, "unsupported authorization scheme"))?;
+        .ok_or_else(|| {
+            crate::api::common::json_error(
+                StatusCode::UNAUTHORIZED,
+                "unsupported authorization scheme",
+            )
+        })?;
     let mut credential = None;
     let mut signed_headers = None;
     let mut signature = None;
@@ -678,15 +722,23 @@ fn parse_signed_headers(value: &str) -> Result<Vec<String>, Response> {
     Ok(headers)
 }
 
-fn canonical_headers(headers: &HeaderMap, signed_headers: &[String]) -> Result<Vec<(String, String)>, Response> {
+fn canonical_headers(
+    headers: &HeaderMap,
+    signed_headers: &[String],
+) -> Result<Vec<(String, String)>, Response> {
     let mut values = Vec::new();
     for name in signed_headers {
         let value = headers
             .get(name)
             .and_then(|header| header.to_str().ok())
-            .map(|raw| raw.trim().split_whitespace().collect::<Vec<_>>().join(" "))
+            .map(|raw| raw.split_whitespace().collect::<Vec<_>>().join(" "))
             .filter(|raw| !raw.is_empty())
-            .ok_or_else(|| crate::api::common::json_error(StatusCode::UNAUTHORIZED, format!("missing signed header {name}")))?;
+            .ok_or_else(|| {
+                crate::api::common::json_error(
+                    StatusCode::UNAUTHORIZED,
+                    format!("missing signed header {name}"),
+                )
+            })?;
         values.push((name.clone(), value));
     }
     Ok(values)
@@ -698,7 +750,9 @@ fn header_value(headers: &HeaderMap, name: &str) -> Result<String, Response> {
         .and_then(|value| value.to_str().ok())
         .map(|value| value.trim().to_string())
         .filter(|value| !value.is_empty())
-        .ok_or_else(|| crate::api::common::json_error(StatusCode::UNAUTHORIZED, format!("missing {name}")))
+        .ok_or_else(|| {
+            crate::api::common::json_error(StatusCode::UNAUTHORIZED, format!("missing {name}"))
+        })
 }
 
 fn percent_encode_query_component(value: &str) -> String {
@@ -713,7 +767,9 @@ fn percent_encode(bytes: &[u8], keep_slash: bool) -> String {
     let mut output = String::new();
     for byte in bytes {
         let ch = *byte as char;
-        let safe = ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | '.' | '~') || (keep_slash && ch == '/');
+        let safe = ch.is_ascii_alphanumeric()
+            || matches!(ch, '-' | '_' | '.' | '~')
+            || (keep_slash && ch == '/');
         if safe {
             output.push(ch);
         } else {

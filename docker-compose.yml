@@ -1,7 +1,6 @@
 services:
   peanut:
-    build: .
-    image: peanut:latest
+    image: ${PEANUT_IMAGE:-ghcr.io/parkjangwon/peanut:latest}
     container_name: peanut
     ports:
       - "3000:3000"
@@ -16,6 +15,7 @@ services:
       MAX_UPLOAD_BYTES: ${MAX_UPLOAD_BYTES:-5242880}
       FUNCTIONS_ENABLED: ${FUNCTIONS_ENABLED:-true}
       FUNCTIONS_ALLOW_NETWORK: ${FUNCTIONS_ALLOW_NETWORK:-false}
+      FUNCTIONS_MAX_CONCURRENT: ${FUNCTIONS_MAX_CONCURRENT:-4}
       FUNCTIONS_WORK_DIR: ${FUNCTIONS_WORK_DIR:-/tmp/peanut-functions}
       BACKUP_ON_STARTUP: ${BACKUP_ON_STARTUP:-false}
       TRUST_PROXY_HEADERS: ${TRUST_PROXY_HEADERS:-false}

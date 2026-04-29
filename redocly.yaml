@@ -1,0 +1,10 @@
+extends:
+  - recommended
+
+rules:
+  operation-operationId: error
+  operation-4xx-response: error
+  no-unused-components: warn
+  info-license: error
+  tag-description: off
+  operation-description: off

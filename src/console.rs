@@ -80,7 +80,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_static_handler_unknown_route_returns_api_hint_json() {
-        let response = static_handler(Uri::from_static("/dashboard")).await.into_response();
+        let response = static_handler(Uri::from_static("/dashboard"))
+            .await
+            .into_response();
         assert_eq!(response.status(), StatusCode::NOT_FOUND);
         assert_eq!(
             response.headers().get(header::CONTENT_TYPE).unwrap(),

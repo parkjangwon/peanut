@@ -1,4 +1,4 @@
-FROM rust:1.81-slim AS builder
+FROM rust:1-slim-bookworm AS builder
 WORKDIR /app
 
 RUN apt-get update && apt-get install -y pkg-config libssl-dev libsqlite3-dev build-essential && rm -rf /var/lib/apt/lists/*
@@ -7,7 +7,7 @@ RUN cargo build --release
 
 FROM debian:bookworm-slim
 WORKDIR /app
-RUN apt-get update && apt-get install -y libssl3 libsqlite3-0 ca-certificates && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && apt-get install -y libssl3 libsqlite3-0 ca-certificates nodejs && rm -rf /var/lib/apt/lists/*
 COPY --from=builder /app/target/release/peanut ./peanut
 RUN mkdir -p /app/data/storage
 EXPOSE 3000

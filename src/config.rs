@@ -1,4 +1,9 @@
-use std::{collections::HashMap, env, net::SocketAddr, path::PathBuf};
+use std::{
+    collections::HashMap,
+    env,
+    net::SocketAddr,
+    path::{Path, PathBuf},
+};
 
 pub const DEFAULT_DATABASE_URL: &str = "sqlite://peanut.db";
 pub const DEFAULT_STORAGE_DIR: &str = "data/storage";
@@ -6,6 +11,7 @@ pub const DEFAULT_BIND_ADDR: &str = "127.0.0.1:3000";
 pub const DEFAULT_MAX_UPLOAD_BYTES: usize = 5 * 1024 * 1024;
 pub const DEFAULT_MULTIPART_STALE_HOURS: u64 = 24;
 pub const DEFAULT_MULTIPART_CLEANUP_INTERVAL_SECONDS: u64 = 3600;
+pub const DEFAULT_FUNCTIONS_MAX_CONCURRENT: usize = 4;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PasswordResetDelivery {
@@ -32,6 +38,7 @@ pub struct AppConfig {
     pub multipart_cleanup_interval_seconds: u64,
     pub functions_allow_network: bool,
     pub functions_work_dir: PathBuf,
+    pub functions_max_concurrent: usize,
 }
 
 pub fn load_config_from_env() -> Result<AppConfig, String> {
@@ -122,6 +129,12 @@ fn load_config_from_map(values: &HashMap<String, String>) -> Result<AppConfig, S
     if functions_work_dir.as_os_str().is_empty() {
         return Err("FUNCTIONS_WORK_DIR must not be empty".to_string());
     }
+    validate_functions_work_dir(&functions_work_dir, &database_url)?;
+    let functions_max_concurrent = parse_positive_usize_setting(
+        values,
+        "FUNCTIONS_MAX_CONCURRENT",
+        DEFAULT_FUNCTIONS_MAX_CONCURRENT,
+    )?;
 
     Ok(AppConfig {
         database_url,
@@ -141,6 +154,7 @@ fn load_config_from_map(values: &HashMap<String, String>) -> Result<AppConfig, S
         multipart_cleanup_interval_seconds,
         functions_allow_network,
         functions_work_dir,
+        functions_max_concurrent,
     })
 }
 
@@ -177,6 +191,58 @@ fn parse_positive_u64_setting(
         }
         None => Ok(default),
     }
+}
+
+fn parse_positive_usize_setting(
+    values: &HashMap<String, String>,
+    key: &str,
+    default: usize,
+) -> Result<usize, String> {
+    match values.get(key) {
+        Some(value) => {
+            let parsed = value
+                .parse::<usize>()
+                .map_err(|_| format!("{key} must be a positive integer"))?;
+            if parsed == 0 {
+                return Err(format!("{key} must be greater than zero"));
+            }
+            Ok(parsed)
+        }
+        None => Ok(default),
+    }
+}
+
+fn validate_functions_work_dir(path: &Path, database_url: &str) -> Result<(), String> {
+    if path == Path::new("/") {
+        return Err("FUNCTIONS_WORK_DIR must not be the filesystem root".to_string());
+    }
+
+    if let Ok(home) = env::var("HOME") {
+        if !home.trim().is_empty() && path == Path::new(&home) {
+            return Err("FUNCTIONS_WORK_DIR must not be the user home directory".to_string());
+        }
+    }
+
+    if let Some(db_path) = sqlite_db_path(database_url) {
+        let db_dir = db_path.parent().unwrap_or_else(|| Path::new("."));
+        if path == db_path || path == db_dir {
+            return Err(
+                "FUNCTIONS_WORK_DIR must not be the database path or directory".to_string(),
+            );
+        }
+    }
+
+    Ok(())
+}
+
+fn sqlite_db_path(database_url: &str) -> Option<PathBuf> {
+    if database_url == "sqlite::memory:" {
+        return None;
+    }
+    database_url
+        .strip_prefix("sqlite://")
+        .or_else(|| database_url.strip_prefix("sqlite:"))
+        .map(PathBuf::from)
 }
 
 fn parse_origin_policy_list(
@@ -262,6 +328,10 @@ mod tests {
         assert_eq!(config.multipart_cleanup_interval_seconds, 3600);
         assert!(!config.functions_allow_network);
         assert!(config.functions_work_dir.ends_with("peanut-functions"));
+        assert_eq!(
+            config.functions_max_concurrent,
+            DEFAULT_FUNCTIONS_MAX_CONCURRENT
+        );
     }
 
     #[test]
@@ -401,7 +471,10 @@ mod tests {
 
     #[test]
     fn test_load_config_from_env_parses_trust_proxy_headers_switch() {
-        let values = config(&[("JWT_SECRET", "test-secret"), ("TRUST_PROXY_HEADERS", "true")]);
+        let values = config(&[
+            ("JWT_SECRET", "test-secret"),
+            ("TRUST_PROXY_HEADERS", "true"),
+        ]);
 
         let config = load_config_from_map(&values).unwrap();
         assert!(config.trust_proxy_headers);
@@ -409,7 +482,10 @@ mod tests {
 
     #[test]
     fn test_load_config_from_env_rejects_invalid_trust_proxy_headers_switch() {
-        let values = config(&[("JWT_SECRET", "test-secret"), ("TRUST_PROXY_HEADERS", "maybe")]);
+        let values = config(&[
+            ("JWT_SECRET", "test-secret"),
+            ("TRUST_PROXY_HEADERS", "maybe"),
+        ]);
 
         let error = load_config_from_map(&values).unwrap_err();
         assert!(error.contains("TRUST_PROXY_HEADERS"));
@@ -445,6 +521,7 @@ mod tests {
             ("JWT_SECRET", "test-secret"),
             ("FUNCTIONS_ALLOW_NETWORK", "true"),
             ("FUNCTIONS_WORK_DIR", "/tmp/peanut-test-functions"),
+            ("FUNCTIONS_MAX_CONCURRENT", "8"),
         ]);
 
         let config = load_config_from_map(&values).unwrap();
@@ -453,5 +530,29 @@ mod tests {
             config.functions_work_dir,
             PathBuf::from("/tmp/peanut-test-functions")
         );
+        assert_eq!(config.functions_max_concurrent, 8);
+    }
+
+    #[test]
+    fn test_load_config_from_env_rejects_invalid_functions_max_concurrent() {
+        let values = config(&[
+            ("JWT_SECRET", "test-secret"),
+            ("FUNCTIONS_MAX_CONCURRENT", "0"),
+        ]);
+
+        let error = load_config_from_map(&values).unwrap_err();
+        assert!(error.contains("FUNCTIONS_MAX_CONCURRENT"));
+    }
+
+    #[test]
+    fn test_load_config_from_env_rejects_dangerous_functions_work_dir() {
+        let values = config(&[
+            ("JWT_SECRET", "test-secret"),
+            ("DATABASE_URL", "sqlite:///tmp/peanut.db"),
+            ("FUNCTIONS_WORK_DIR", "/tmp"),
+        ]);
+
+        let error = load_config_from_map(&values).unwrap_err();
+        assert!(error.contains("FUNCTIONS_WORK_DIR"));
     }
 }

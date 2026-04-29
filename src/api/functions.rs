@@ -282,15 +282,16 @@ pub async fn create_function(
         );
     }
 
-    let version = match insert_function_version(&mut tx, &function_id, 1, &validated, &claims.sub).await {
-        Ok(version) => version,
-        Err(_) => {
-            return json_error(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "failed to persist function version",
-            )
-        }
-    };
+    let version =
+        match insert_function_version(&mut tx, &function_id, 1, &validated, &claims.sub).await {
+            Ok(version) => version,
+            Err(_) => {
+                return json_error(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "failed to persist function version",
+                )
+            }
+        };
 
     if activate_function_version(&mut tx, &function_id, &validated, &version, &claims.sub)
         .await
@@ -409,18 +410,19 @@ pub async fn rollback_function_version(
         }
     };
 
-    let version = match load_function_version_by_number(&state.pool, &function.id, version_number).await {
-        Ok(version) => version,
-        Err(LoadFunctionVersionError::NotFound) => {
-            return json_error(StatusCode::NOT_FOUND, "function version not found")
-        }
-        Err(LoadFunctionVersionError::QueryFailed) => {
-            return json_error(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "failed to load function version",
-            )
-        }
-    };
+    let version =
+        match load_function_version_by_number(&state.pool, &function.id, version_number).await {
+            Ok(version) => version,
+            Err(LoadFunctionVersionError::NotFound) => {
+                return json_error(StatusCode::NOT_FOUND, "function version not found")
+            }
+            Err(LoadFunctionVersionError::QueryFailed) => {
+                return json_error(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "failed to load function version",
+                )
+            }
+        };
 
     let validated = ValidatedFunction {
         id: function.id.clone(),
@@ -431,7 +433,9 @@ pub async fn rollback_function_version(
         source_code: version.source_code.clone(),
         invoke_policy: version.invoke_policy.clone(),
         env_json: version.env_json.clone(),
-        secret_values: load_function_secrets(&state.pool, &version.id).await.unwrap_or_default(),
+        secret_values: load_function_secrets(&state.pool, &version.id)
+            .await
+            .unwrap_or_default(),
         api_key_hash: version.api_key_hash.clone(),
         allowed_origins_json: version.allowed_origins_json.clone(),
         rate_limit_per_minute: version.rate_limit_per_minute,
@@ -499,17 +503,19 @@ pub async fn update_function(
         }
     };
 
-    let existing_secret_values = match load_function_secrets(&state.pool, &existing.active_version_id).await {
-        Ok(secrets) => secrets,
-        Err(_) => {
-            return json_error(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "failed to load function secrets",
-            )
-        }
-    };
+    let existing_secret_values =
+        match load_function_secrets(&state.pool, &existing.active_version_id).await {
+            Ok(secrets) => secrets,
+            Err(_) => {
+                return json_error(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "failed to load function secrets",
+                )
+            }
+        };
 
-    let validated = match validate_update_payload(existing.clone(), existing_secret_values, payload) {
+    let validated = match validate_update_payload(existing.clone(), existing_secret_values, payload)
+    {
         Ok(validated) => validated,
         Err(message) => return json_error(StatusCode::BAD_REQUEST, message),
     };
@@ -562,12 +568,14 @@ pub async fn update_function(
 
     match load_function_by_name(&state.pool, &validated.name).await {
         Ok(function) => (StatusCode::OK, Json(FunctionResponse { function })).into_response(),
-        Err(LoadFunctionError::NotFound) => {
-            json_error(StatusCode::INTERNAL_SERVER_ERROR, "updated function could not be reloaded")
-        }
-        Err(LoadFunctionError::QueryFailed) => {
-            json_error(StatusCode::INTERNAL_SERVER_ERROR, "failed to load updated function")
-        }
+        Err(LoadFunctionError::NotFound) => json_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "updated function could not be reloaded",
+        ),
+        Err(LoadFunctionError::QueryFailed) => json_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "failed to load updated function",
+        ),
     }
 }
 
@@ -694,18 +702,19 @@ pub async fn list_function_invocation_attempts(
         }
     };
 
-    let root_invocation_id = match find_root_invocation_id(&state.pool, &function.id, &invocation_id).await {
-        Ok(root_invocation_id) => root_invocation_id,
-        Err(LoadInvocationError::NotFound) => {
-            return json_error(StatusCode::NOT_FOUND, "function invocation not found")
-        }
-        Err(LoadInvocationError::QueryFailed) => {
-            return json_error(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "failed to load function invocation attempts",
-            )
-        }
-    };
+    let root_invocation_id =
+        match find_root_invocation_id(&state.pool, &function.id, &invocation_id).await {
+            Ok(root_invocation_id) => root_invocation_id,
+            Err(LoadInvocationError::NotFound) => {
+                return json_error(StatusCode::NOT_FOUND, "function invocation not found")
+            }
+            Err(LoadInvocationError::QueryFailed) => {
+                return json_error(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "failed to load function invocation attempts",
+                )
+            }
+        };
 
     match sqlx::query_as::<_, FunctionInvocation>(
         r#"
@@ -751,17 +760,18 @@ pub async fn stream_function_events(
         return json_error(StatusCode::NOT_FOUND, "function not found");
     }
 
-    let stream = BroadcastStream::new(state.function_event_sender.subscribe()).filter_map(
-        move |message| match message {
-            Ok(event) if event.function_name == name => Some(Ok::<Event, Infallible>(
-                Event::default()
-                    .event("function.invocation")
-                    .json_data(event)
-                    .unwrap_or_else(|_| Event::default().data("{}")),
-            )),
-            _ => None,
-        },
-    );
+    let stream =
+        BroadcastStream::new(state.function_event_sender.subscribe()).filter_map(move |message| {
+            match message {
+                Ok(event) if event.function_name == name => Some(Ok::<Event, Infallible>(
+                    Event::default()
+                        .event("function.invocation")
+                        .json_data(event)
+                        .unwrap_or_else(|_| Event::default().data("{}")),
+                )),
+                _ => None,
+            }
+        });
 
     Sse::new(stream)
         .keep_alive(KeepAlive::new().interval(std::time::Duration::from_secs(15)))
@@ -871,15 +881,16 @@ pub async fn invoke_function(
     }
 
     let auth_claims = claims.map(|Extension(claims)| claims);
-    let function_version = match load_function_version_by_id(&state.pool, &function.active_version_id).await {
-        Ok(version) => version,
-        Err(_) => {
-            return json_error(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "failed to load active function version",
-            )
-        }
-    };
+    let function_version =
+        match load_function_version_by_id(&state.pool, &function.active_version_id).await {
+            Ok(version) => version,
+            Err(_) => {
+                return json_error(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "failed to load active function version",
+                )
+            }
+        };
     run_function_invocation_with_version(
         &state,
         &function,
@@ -959,7 +970,12 @@ async fn run_function_invocation_with_version(
         return json_error(StatusCode::INTERNAL_SERVER_ERROR, "failed to create invocation log");
     }
 
-    emit_function_event(state, &function.name, &invocation, invocation.initial_status);
+    emit_function_event(
+        state,
+        &function.name,
+        &invocation,
+        invocation.initial_status,
+    );
 
     if async_invoke {
         let state = state.clone();
@@ -992,7 +1008,7 @@ async fn run_function_invocation_with_version(
                 duration_ms: 0,
             }),
         )
-        .into_response();
+            .into_response();
     }
 
     match execute_and_finalize_invocation(state, &function.name, invocation, claims, input).await {
@@ -1005,7 +1021,7 @@ async fn run_function_invocation_with_version(
                 duration_ms,
             }),
         )
-        .into_response(),
+            .into_response(),
         Err(error) => json_error(StatusCode::INTERNAL_SERVER_ERROR, error),
     }
 }
@@ -1017,6 +1033,13 @@ async fn execute_and_finalize_invocation(
     claims: Option<Claims>,
     input: Value,
 ) -> Result<(Value, i64), String> {
+    let _permit = state
+        .functions_semaphore
+        .clone()
+        .acquire_owned()
+        .await
+        .map_err(|_| "functions runtime is unavailable".to_string())?;
+
     let auth_payload = match claims.as_ref() {
         Some(claims) => serde_json::json!({ "user_id": claims.sub, "is_admin": claims.is_admin }),
         None => Value::Null,
@@ -1186,9 +1209,7 @@ fn require_api_key(
     headers: &HeaderMap,
     body_api_key: Option<&str>,
 ) -> Option<Response> {
-    let Some(stored_hash) = function.api_key_hash.as_deref() else {
-        return None;
-    };
+    let stored_hash = function.api_key_hash.as_deref()?;
     let header_key = headers
         .get("x-peanut-function-key")
         .and_then(|value| value.to_str().ok());
@@ -1416,7 +1437,7 @@ fn validate_update_payload(
     let api_key_hash = payload
         .api_key
         .as_deref()
-        .map(|value| hash_api_key(value))
+        .map(hash_api_key)
         .or(existing.api_key_hash.clone());
     let allowed_origins_json = normalize_allowed_origins_json(
         payload
@@ -1513,7 +1534,9 @@ fn parse_env_map(env_json: &str) -> BTreeMap<String, String> {
     serde_json::from_str(env_json).unwrap_or_default()
 }
 
-fn normalize_secret_values(values: BTreeMap<String, String>) -> Result<BTreeMap<String, String>, String> {
+fn normalize_secret_values(
+    values: BTreeMap<String, String>,
+) -> Result<BTreeMap<String, String>, String> {
     for (key, value) in &values {
         if key.is_empty() {
             return Err("secret keys must not be empty".to_string());
@@ -1523,7 +1546,8 @@ fn normalize_secret_values(values: BTreeMap<String, String>) -> Result<BTreeMap<
             .all(|ch| ch.is_ascii_uppercase() || ch.is_ascii_digit() || ch == '_')
         {
             return Err(
-                "secret keys may only contain uppercase letters, digits, and underscores".to_string(),
+                "secret keys may only contain uppercase letters, digits, and underscores"
+                    .to_string(),
             );
         }
         if value.trim().is_empty() {
@@ -1546,8 +1570,17 @@ fn redact_secret_text(text: String, secrets: &BTreeMap<String, String>) -> Strin
 fn redact_json_value(value: Value, secrets: &BTreeMap<String, String>) -> Value {
     match value {
         Value::String(text) => Value::String(redact_secret_text(text, secrets)),
-        Value::Array(items) => Value::Array(items.into_iter().map(|item| redact_json_value(item, secrets)).collect()),
-        Value::Object(map) => Value::Object(map.into_iter().map(|(k, v)| (k, redact_json_value(v, secrets))).collect()),
+        Value::Array(items) => Value::Array(
+            items
+                .into_iter()
+                .map(|item| redact_json_value(item, secrets))
+                .collect(),
+        ),
+        Value::Object(map) => Value::Object(
+            map.into_iter()
+                .map(|(k, v)| (k, redact_json_value(v, secrets)))
+                .collect(),
+        ),
         other => other,
     }
 }
@@ -1894,7 +1927,8 @@ mod tests {
         )
         .await;
         assert_eq!(invoke_response.status(), StatusCode::OK);
-        let invoke_body: InvokeFunctionResponse = test_support::response_json(invoke_response).await;
+        let invoke_body: InvokeFunctionResponse =
+            test_support::response_json(invoke_response).await;
         assert_eq!(invoke_body.response, serde_json::json!({ "token": "***" }));
     }
 
@@ -2341,7 +2375,8 @@ export default async function handler(ctx) {
         )
         .await;
         assert_eq!(retry_detail.status(), StatusCode::OK);
-        let retry_detail_body: FunctionInvocationResponse = test_support::response_json(retry_detail).await;
+        let retry_detail_body: FunctionInvocationResponse =
+            test_support::response_json(retry_detail).await;
         assert_eq!(retry_detail_body.invocation.retry_count, 1);
         assert_eq!(
             retry_detail_body.invocation.parent_invocation_id.as_deref(),
@@ -2355,7 +2390,8 @@ export default async function handler(ctx) {
         )
         .await;
         assert_eq!(attempts.status(), StatusCode::OK);
-        let attempts_body: FunctionInvocationsResponse = test_support::response_json(attempts).await;
+        let attempts_body: FunctionInvocationsResponse =
+            test_support::response_json(attempts).await;
         assert_eq!(attempts_body.invocations.len(), 2);
         assert_eq!(attempts_body.invocations[0].retry_count, 0);
         assert_eq!(attempts_body.invocations[1].retry_count, 1);
@@ -2405,7 +2441,8 @@ export default async function handler(ctx) {
         )
         .await;
         assert_eq!(invoke_response.status(), StatusCode::ACCEPTED);
-        let invoke_body: InvokeFunctionResponse = test_support::response_json(invoke_response).await;
+        let invoke_body: InvokeFunctionResponse =
+            test_support::response_json(invoke_response).await;
         assert_eq!(invoke_body.status, "queued");
         assert_eq!(invoke_body.response, Value::Null);
 
@@ -2429,7 +2466,10 @@ export default async function handler(ctx) {
         let final_detail = final_detail.expect("async invocation did not complete in time");
         assert_eq!(final_detail.status, "succeeded");
         assert_eq!(final_detail.invoke_mode, "async");
-        assert!(final_detail.response_json.unwrap().contains("\"done\":true"));
+        assert!(final_detail
+            .response_json
+            .unwrap()
+            .contains("\"done\":true"));
     }
 
     #[tokio::test]
@@ -2473,7 +2513,8 @@ export default async function handler(ctx) {
         )
         .await;
         assert_eq!(invoke_response.status(), StatusCode::ACCEPTED);
-        let invoke_body: InvokeFunctionResponse = test_support::response_json(invoke_response).await;
+        let invoke_body: InvokeFunctionResponse =
+            test_support::response_json(invoke_response).await;
 
         let mut statuses = Vec::new();
         for _ in 0..6 {
@@ -2481,7 +2522,9 @@ export default async function handler(ctx) {
                 .await
                 .expect("timed out waiting for realtime event")
                 .expect("failed to receive realtime event");
-            if event.function_name == "stream_fn" && event.invocation_id == invoke_body.invocation_id {
+            if event.function_name == "stream_fn"
+                && event.invocation_id == invoke_body.invocation_id
+            {
                 statuses.push(event.status);
                 if statuses.last().map(|s| s.as_str()) == Some("succeeded") {
                     break;
@@ -2621,8 +2664,7 @@ export default async function handler(ctx) {
                 endpoint_slug: None,
                 runtime: Some("javascript".to_string()),
                 source_code: Some(
-                    "export default async function handler() { return { version: 2 } }"
-                        .to_string(),
+                    "export default async function handler() { return { version: 2 } }".to_string(),
                 ),
                 timeout_ms: None,
                 enabled: None,
@@ -2678,7 +2720,8 @@ export default async function handler(ctx) {
         )
         .await;
         assert_eq!(invoke_response.status(), StatusCode::OK);
-        let invoke_body: InvokeFunctionResponse = test_support::response_json(invoke_response).await;
+        let invoke_body: InvokeFunctionResponse =
+            test_support::response_json(invoke_response).await;
         assert_eq!(invoke_body.response, serde_json::json!({ "version": 1 }));
     }
 }

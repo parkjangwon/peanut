@@ -59,15 +59,35 @@ pub async fn readiness_check(State(state): State<crate::AppState>) -> Json<Value
         (0, None)
     };
 
+    let restore_pending = crate::api::backups::read_restore_pending(&state.database_url)
+        .await
+        .ok()
+        .flatten();
+    let restore_pending_ok = restore_pending
+        .as_ref()
+        .map(|pending| pending.exists)
+        .unwrap_or(true);
+
     checks.push(json!({
         "name": "database",
-        "ok": db_ready,
-        "message": if db_ready { "database query succeeded" } else { "database query failed" },
+        "ok": db_ready && restore_pending_ok,
+        "message": if db_ready && restore_pending_ok {
+            if restore_pending.is_some() {
+                "database query succeeded; pending restore requires restart"
+            } else {
+                "database query succeeded"
+            }
+        } else if !restore_pending_ok {
+            "pending restore backup is missing"
+        } else {
+            "database query failed"
+        },
         "size_bytes": db_file_size,
         "backup": {
             "count": backup_count,
             "last_run_at": last_backup_at.map(|t| t.to_rfc3339()),
-        }
+        },
+        "restore_pending": restore_pending,
     }));
 
     let storage_path = state.storage.root().to_path_buf();
@@ -90,7 +110,9 @@ pub async fn readiness_check(State(state): State<crate::AppState>) -> Json<Value
         true
     };
     let work_dir_writable = if state.functions_enabled {
-        ensure_storage_ready(&state.functions_work_dir).await.is_ok()
+        ensure_storage_ready(&state.functions_work_dir)
+            .await
+            .is_ok()
     } else {
         true
     };
@@ -110,7 +132,7 @@ pub async fn readiness_check(State(state): State<crate::AppState>) -> Json<Value
         },
     }));
 
-    let ready = db_ready && storage_ready && functions_ready;
+    let ready = db_ready && restore_pending_ok && storage_ready && functions_ready;
 
     Json(json!({
         "status": if ready { "ready" } else { "not_ready" },
@@ -193,5 +215,27 @@ mod tests {
         assert_eq!(response.0["checks"][2]["name"], "functions");
         assert_eq!(response.0["checks"][2]["ok"], true);
         assert_eq!(response.0["checks"][2]["enabled"], false);
+    }
+
+    #[tokio::test]
+    async fn test_readiness_check_reports_not_ready_when_restore_backup_is_missing() {
+        let (mut state, dir) = crate::test_support::make_test_state().await;
+        let database_url = format!("sqlite://{}", dir.path().join("peanut.db").display());
+        state.database_url = std::sync::Arc::new(database_url);
+        tokio::fs::write(
+            dir.path().join(crate::db::RESTORE_MARKER_FILE),
+            "peanut.db.20260429_010203.backup",
+        )
+        .await
+        .unwrap();
+
+        let response = readiness_check(State(state)).await;
+        assert_eq!(response.0["status"], "not_ready");
+        assert_eq!(response.0["checks"][0]["name"], "database");
+        assert_eq!(response.0["checks"][0]["ok"], false);
+        assert_eq!(
+            response.0["checks"][0]["message"],
+            "pending restore backup is missing"
+        );
     }
 }

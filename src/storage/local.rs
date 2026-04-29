@@ -301,7 +301,9 @@ impl LocalStorage {
             bucket: normalize_namespace(bucket, "storage bucket cannot be empty")?
                 .to_string_lossy()
                 .replace('\\', "/"),
-            key: normalize_object_key(key)?.to_string_lossy().replace('\\', "/"),
+            key: normalize_object_key(key)?
+                .to_string_lossy()
+                .replace('\\', "/"),
             content_type: content_type
                 .map(str::trim)
                 .filter(|value| !value.is_empty())
@@ -335,7 +337,8 @@ impl LocalStorage {
         }
         let upload = self.read_multipart_upload(bucket, key, upload_id).await?;
         let part_path = self.resolve_multipart_part_path(bucket, &upload.upload_id, part_number)?;
-        let metadata_path = self.resolve_multipart_part_metadata_path(bucket, &upload.upload_id, part_number)?;
+        let metadata_path =
+            self.resolve_multipart_part_metadata_path(bucket, &upload.upload_id, part_number)?;
         if let Some(parent) = part_path.parent() {
             tokio::fs::create_dir_all(parent).await?;
         }
@@ -382,7 +385,9 @@ impl LocalStorage {
                 ));
             }
             previous_part_number = part.part_number;
-            let stored_part = self.read_multipart_part(bucket, &upload.upload_id, part.part_number).await?;
+            let stored_part = self
+                .read_multipart_part(bucket, &upload.upload_id, part.part_number)
+                .await?;
             if stored_part.0.etag != part.etag {
                 return Err(io::Error::new(
                     io::ErrorKind::InvalidData,
@@ -403,7 +408,12 @@ impl LocalStorage {
             stored_parts.push(stored_part.0);
         }
         let mut metadata = self
-            .put_object(bucket, &upload.key, &assembled, Some(upload.content_type.as_str()))
+            .put_object(
+                bucket,
+                &upload.key,
+                &assembled,
+                Some(upload.content_type.as_str()),
+            )
             .await?;
         metadata.etag = compute_multipart_composite_etag(&stored_parts)?;
         self.write_metadata(bucket, &upload.key, &metadata).await?;
@@ -436,7 +446,11 @@ impl LocalStorage {
             .into_iter()
             .filter(|upload| upload.key.starts_with(&normalized_prefix))
             .collect::<Vec<_>>();
-        uploads.sort_by(|left, right| left.key.cmp(&right.key).then(left.upload_id.cmp(&right.upload_id)));
+        uploads.sort_by(|left, right| {
+            left.key
+                .cmp(&right.key)
+                .then(left.upload_id.cmp(&right.upload_id))
+        });
         Ok(uploads)
     }
 
@@ -447,7 +461,9 @@ impl LocalStorage {
         upload_id: &str,
     ) -> io::Result<Vec<MultipartUploadPart>> {
         let upload = self.read_multipart_upload(bucket, key, upload_id).await?;
-        let parts_root = self.resolve_multipart_upload_root(bucket, &upload.upload_id)?.join("parts");
+        let parts_root = self
+            .resolve_multipart_upload_root(bucket, &upload.upload_id)?
+            .join("parts");
         let mut parts = tokio::task::spawn_blocking(move || collect_multipart_parts(&parts_root))
             .await
             .map_err(|err| io::Error::new(io::ErrorKind::Other, err))??;
@@ -558,7 +574,11 @@ impl LocalStorage {
             .join(Self::resolve_upload_id(upload_id)?))
     }
 
-    fn resolve_multipart_manifest_path(&self, bucket: &str, upload_id: &str) -> io::Result<PathBuf> {
+    fn resolve_multipart_manifest_path(
+        &self,
+        bucket: &str,
+        upload_id: &str,
+    ) -> io::Result<PathBuf> {
         Ok(self
             .resolve_multipart_upload_root(bucket, upload_id)?
             .join("upload.json"))
@@ -601,7 +621,9 @@ impl LocalStorage {
         let normalized_bucket = normalize_namespace(bucket, "storage bucket cannot be empty")?
             .to_string_lossy()
             .replace('\\', "/");
-        let normalized_key = normalize_object_key(key)?.to_string_lossy().replace('\\', "/");
+        let normalized_key = normalize_object_key(key)?
+            .to_string_lossy()
+            .replace('\\', "/");
         if upload.bucket != normalized_bucket || upload.key != normalized_key {
             return Err(io::Error::new(
                 io::ErrorKind::NotFound,
@@ -617,7 +639,8 @@ impl LocalStorage {
         upload_id: &str,
         part_number: u32,
     ) -> io::Result<(MultipartUploadPart, Vec<u8>)> {
-        let metadata_path = self.resolve_multipart_part_metadata_path(bucket, upload_id, part_number)?;
+        let metadata_path =
+            self.resolve_multipart_part_metadata_path(bucket, upload_id, part_number)?;
         let part_path = self.resolve_multipart_part_path(bucket, upload_id, part_number)?;
         let raw = tokio::fs::read(metadata_path).await?;
         let metadata = serde_json::from_slice(&raw)
@@ -720,11 +743,7 @@ fn normalize_optional_delimiter(value: Option<&str>) -> io::Result<Option<String
     match value {
         Some(raw) if !raw.trim().is_empty() => {
             let trimmed = raw.trim();
-            if trimmed.contains('/') {
-                Ok(Some(trimmed.to_string()))
-            } else {
-                Ok(Some(trimmed.to_string()))
-            }
+            Ok(Some(trimmed.to_string()))
         }
         _ => Ok(None),
     }
@@ -801,7 +820,7 @@ fn hex_encode(bytes: &[u8]) -> String {
 }
 
 fn decode_hex(value: &str) -> io::Result<Vec<u8>> {
-    if value.len() % 2 != 0 {
+    if !value.len().is_multiple_of(2) {
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
             "multipart etag must be an even-length hex string",
@@ -811,8 +830,12 @@ fn decode_hex(value: &str) -> io::Result<Vec<u8>> {
     let mut decoded = Vec::with_capacity(value.len() / 2);
     let mut chars = value.as_bytes().chunks_exact(2);
     for chunk in &mut chars {
-        let pair = std::str::from_utf8(chunk)
-            .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "multipart etag must be valid UTF-8"))?;
+        let pair = std::str::from_utf8(chunk).map_err(|_| {
+            io::Error::new(
+                io::ErrorKind::InvalidData,
+                "multipart etag must be valid UTF-8",
+            )
+        })?;
         let byte = u8::from_str_radix(pair, 16).map_err(|_| {
             io::Error::new(
                 io::ErrorKind::InvalidData,
@@ -899,7 +922,9 @@ fn collect_multipart_parts(parts_root: &Path) -> io::Result<Vec<MultipartUploadP
     for entry in std::fs::read_dir(parts_root)? {
         let entry = entry?;
         let path = entry.path();
-        if !entry.file_type()?.is_file() || path.extension().and_then(|v| v.to_str()) != Some("json") {
+        if !entry.file_type()?.is_file()
+            || path.extension().and_then(|v| v.to_str()) != Some("json")
+        {
             continue;
         }
         let raw = std::fs::read(path)?;
@@ -1041,15 +1066,30 @@ mod tests {
         let storage = LocalStorage::new(dir.path());
 
         storage
-            .put_object("user-1/assets", "photos/2026/a.jpg", b"a", Some("image/jpeg"))
+            .put_object(
+                "user-1/assets",
+                "photos/2026/a.jpg",
+                b"a",
+                Some("image/jpeg"),
+            )
             .await
             .unwrap();
         storage
-            .put_object("user-1/assets", "photos/2027/b.jpg", b"b", Some("image/jpeg"))
+            .put_object(
+                "user-1/assets",
+                "photos/2027/b.jpg",
+                b"b",
+                Some("image/jpeg"),
+            )
             .await
             .unwrap();
         storage
-            .put_object("user-1/assets", "photos/cover.jpg", b"c", Some("image/jpeg"))
+            .put_object(
+                "user-1/assets",
+                "photos/cover.jpg",
+                b"c",
+                Some("image/jpeg"),
+            )
             .await
             .unwrap();
 
@@ -1089,12 +1129,18 @@ mod tests {
             .unwrap();
         let cutoff = std::time::SystemTime::now() + std::time::Duration::from_secs(60);
 
-        let removed = storage.cleanup_stale_multipart_uploads(cutoff).await.unwrap();
+        let removed = storage
+            .cleanup_stale_multipart_uploads(cutoff)
+            .await
+            .unwrap();
 
         assert_eq!(removed, 2);
         assert!(!stale_root.exists());
         assert!(!fresh_root.exists());
-        let object = storage.get_object("assets", "objects/keep.txt").await.unwrap();
+        let object = storage
+            .get_object("assets", "objects/keep.txt")
+            .await
+            .unwrap();
         assert_eq!(object.data, b"keep");
     }
 

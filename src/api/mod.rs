@@ -5,5 +5,6 @@ pub mod common;
 pub mod data;
 pub mod functions;
 pub mod health;
+pub mod ops;
 pub mod push;
 pub mod storage;

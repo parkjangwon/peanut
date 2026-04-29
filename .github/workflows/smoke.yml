@@ -7,31 +7,80 @@ on:
       - master
       - codex/**
 
+env:
+  CARGO_TERM_COLOR: always
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
 jobs:
-  smoke:
+  check:
     runs-on: ubuntu-latest
     timeout-minutes: 20
-
     steps:
       - uses: actions/checkout@v4
-
       - uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
           toolchain: stable
+          components: rustfmt, clippy
+      - name: Cache Rust build
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: rust-check-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
+      - name: Compile tests
+        run: cargo test --no-run
+      - name: Format
+        run: cargo fmt --all -- --check
+      - name: Clippy
+        run: cargo clippy --all-targets -- -D warnings
 
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: stable
+      - name: Cache Rust build
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: rust-test-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
+      - name: Run tests
+        run: cargo test
+      - name: Run serialized tests
+        run: cargo test -- --test-threads=1
+
+  smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    needs: [check, test]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: stable
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
-
+      - name: Cache Rust build
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: rust-smoke-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
       - name: Install runtime tools
         run: sudo apt-get update && sudo apt-get install -y jq curl
-
-      - name: Compile tests
-        run: cargo test --no-run
-
-      - name: Run tests
-        run: cargo test -- --test-threads=1
-
+      - name: Build server
+        run: cargo build
       - name: Start Peanut
         env:
           JWT_SECRET: ci-secret-that-is-long-enough
@@ -44,7 +93,6 @@ jobs:
           mkdir -p ci-data
           cargo run > ci-peanut.log 2>&1 &
           echo $! > ci-peanut.pid
-
       - name: Wait for readiness
         run: |
           for attempt in $(seq 1 30); do
@@ -55,30 +103,43 @@ jobs:
           done
           cat ci-peanut.log
           exit 1
-
       - name: Bootstrap admin
         run: |
           curl -fsS -X POST http://127.0.0.1:3000/api/register \
             -H 'content-type: application/json' \
             -d '{"email":"admin@example.com","password":"secret123"}' | jq .
-
           login_json=$(curl -fsS -X POST http://127.0.0.1:3000/api/login \
             -H 'content-type: application/json' \
             -d '{"email":"admin@example.com","password":"secret123"}')
           echo "$login_json" | jq .
           echo "ADMIN_JWT=$(echo "$login_json" | jq -r '.access_token')" >> "$GITHUB_ENV"
-
       - name: OpenAPI contract checks
+        env:
+          ADMIN_JWT: ${{ env.ADMIN_JWT }}
+          NPM_CONFIG_CACHE: ${{ runner.temp }}/npm-cache
         run: scripts/check-openapi.sh
-
       - name: Operations happy path
         env:
           ADMIN_JWT: ${{ env.ADMIN_JWT }}
         run: examples/operations-e2e/run-happy-path.sh
-
       - name: Stop Peanut
         if: always()
         run: |
           if [ -f ci-peanut.pid ]; then
             kill "$(cat ci-peanut.pid)" || true
           fi
+      - name: Upload Peanut log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ci-peanut-log
+          path: ci-peanut.log
+          if-no-files-found: ignore
+
+  release-check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Docker build
+        run: docker build -t peanut:ci .

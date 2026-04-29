@@ -12,7 +12,9 @@ pub async fn auth_client_policy_middleware(
     req: Request,
     next: Next,
 ) -> Result<Response, Response> {
-    if let Some(response) = require_allowed_origin(req.headers(), state.auth_allowed_origins.as_ref()) {
+    if let Some(response) =
+        require_allowed_origin(req.headers(), state.auth_allowed_origins.as_ref())
+    {
         return Err(response);
     }
     if let Some(response) =
@@ -57,7 +59,13 @@ fn require_allowed_client_id(
         .get("x-peanut-client-id")
         .and_then(|value| value.to_str().ok());
     match client_id {
-        Some(client_id) if allowed_client_ids.iter().any(|allowed| allowed == client_id) => None,
+        Some(client_id)
+            if allowed_client_ids
+                .iter()
+                .any(|allowed| allowed == client_id) =>
+        {
+            None
+        }
         Some(_) => Some(json_error(
             StatusCode::FORBIDDEN,
             "client id is not allowed for auth routes",
@@ -144,7 +152,10 @@ mod tests {
 
         assert_eq!(response.status(), StatusCode::FORBIDDEN);
         let body: crate::api::common::ApiError = crate::test_support::response_json(response).await;
-        assert_eq!(body.error, "x-peanut-client-id header is required for auth routes");
+        assert_eq!(
+            body.error,
+            "x-peanut-client-id header is required for auth routes"
+        );
     }
 
     #[tokio::test]

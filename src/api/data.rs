@@ -312,7 +312,10 @@ pub async fn list_tables(
             }
             (StatusCode::OK, Json(DataTablesResponse { tables })).into_response()
         }
-        Err(_) => json_error(StatusCode::INTERNAL_SERVER_ERROR, "failed to list data tables"),
+        Err(_) => json_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "failed to list data tables",
+        ),
     }
 }
 
@@ -346,7 +349,12 @@ pub async fn create_table(
     };
     let access_policy_json = match serde_json::to_string(&payload.access_policy) {
         Ok(value) => value,
-        Err(_) => return json_error(StatusCode::INTERNAL_SERVER_ERROR, "failed to encode access policy"),
+        Err(_) => {
+            return json_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "failed to encode access policy",
+            )
+        }
     };
 
     match sqlx::query(
@@ -381,10 +389,21 @@ pub async fn get_table(
     Path(table): Path<String>,
 ) -> Response {
     match load_table(&state.pool, &table).await {
-        Ok(table) => (StatusCode::OK, Json(DataTableResponse { table: table.into() })).into_response(),
+        Ok(table) => (
+            StatusCode::OK,
+            Json(DataTableResponse {
+                table: table.into(),
+            }),
+        )
+            .into_response(),
         Err(LoadTableError::NotFound) => json_error(StatusCode::NOT_FOUND, "data table not found"),
-        Err(LoadTableError::Invalid(message)) => json_error(StatusCode::INTERNAL_SERVER_ERROR, message),
-        Err(LoadTableError::QueryFailed) => json_error(StatusCode::INTERNAL_SERVER_ERROR, "failed to load data table"),
+        Err(LoadTableError::Invalid(message)) => {
+            json_error(StatusCode::INTERNAL_SERVER_ERROR, message)
+        }
+        Err(LoadTableError::QueryFailed) => json_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "failed to load data table",
+        ),
     }
 }
 
@@ -398,9 +417,18 @@ pub async fn list_query_presets(
     }
     let table = match load_table(&state.pool, &table).await {
         Ok(table) => table,
-        Err(LoadTableError::NotFound) => return json_error(StatusCode::NOT_FOUND, "data table not found"),
-        Err(LoadTableError::Invalid(message)) => return json_error(StatusCode::INTERNAL_SERVER_ERROR, message),
-        Err(LoadTableError::QueryFailed) => return json_error(StatusCode::INTERNAL_SERVER_ERROR, "failed to load data table"),
+        Err(LoadTableError::NotFound) => {
+            return json_error(StatusCode::NOT_FOUND, "data table not found")
+        }
+        Err(LoadTableError::Invalid(message)) => {
+            return json_error(StatusCode::INTERNAL_SERVER_ERROR, message)
+        }
+        Err(LoadTableError::QueryFailed) => {
+            return json_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "failed to load data table",
+            )
+        }
     };
 
     match load_query_presets(&state.pool, &table.id).await {
@@ -420,9 +448,18 @@ pub async fn create_query_preset(
     }
     let table = match load_table(&state.pool, &table).await {
         Ok(table) => table,
-        Err(LoadTableError::NotFound) => return json_error(StatusCode::NOT_FOUND, "data table not found"),
-        Err(LoadTableError::Invalid(message)) => return json_error(StatusCode::INTERNAL_SERVER_ERROR, message),
-        Err(LoadTableError::QueryFailed) => return json_error(StatusCode::INTERNAL_SERVER_ERROR, "failed to load data table"),
+        Err(LoadTableError::NotFound) => {
+            return json_error(StatusCode::NOT_FOUND, "data table not found")
+        }
+        Err(LoadTableError::Invalid(message)) => {
+            return json_error(StatusCode::INTERNAL_SERVER_ERROR, message)
+        }
+        Err(LoadTableError::QueryFailed) => {
+            return json_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "failed to load data table",
+            )
+        }
     };
 
     if let Err(message) = validate_query_preset_payload(&table.schema, &payload) {
@@ -432,7 +469,12 @@ pub async fn create_query_preset(
     let preset_id = Uuid::new_v4().to_string();
     let params_json = match serde_json::to_string(&payload.params) {
         Ok(value) => value,
-        Err(_) => return json_error(StatusCode::INTERNAL_SERVER_ERROR, "failed to encode preset params"),
+        Err(_) => {
+            return json_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "failed to encode preset params",
+            )
+        }
     };
 
     match sqlx::query(
@@ -468,16 +510,30 @@ pub async fn update_query_preset(
     }
     let table = match load_table(&state.pool, &table).await {
         Ok(table) => table,
-        Err(LoadTableError::NotFound) => return json_error(StatusCode::NOT_FOUND, "data table not found"),
-        Err(LoadTableError::Invalid(message)) => return json_error(StatusCode::INTERNAL_SERVER_ERROR, message),
-        Err(LoadTableError::QueryFailed) => return json_error(StatusCode::INTERNAL_SERVER_ERROR, "failed to load data table"),
+        Err(LoadTableError::NotFound) => {
+            return json_error(StatusCode::NOT_FOUND, "data table not found")
+        }
+        Err(LoadTableError::Invalid(message)) => {
+            return json_error(StatusCode::INTERNAL_SERVER_ERROR, message)
+        }
+        Err(LoadTableError::QueryFailed) => {
+            return json_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "failed to load data table",
+            )
+        }
     };
     if let Err(message) = validate_query_preset_payload(&table.schema, &payload) {
         return json_error(StatusCode::BAD_REQUEST, message);
     }
     let params_json = match serde_json::to_string(&payload.params) {
         Ok(value) => value,
-        Err(_) => return json_error(StatusCode::INTERNAL_SERVER_ERROR, "failed to encode preset params"),
+        Err(_) => {
+            return json_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "failed to encode preset params",
+            )
+        }
     };
 
     match sqlx::query(
@@ -512,9 +568,18 @@ pub async fn delete_query_preset(
     }
     let table = match load_table(&state.pool, &table).await {
         Ok(table) => table,
-        Err(LoadTableError::NotFound) => return json_error(StatusCode::NOT_FOUND, "data table not found"),
-        Err(LoadTableError::Invalid(message)) => return json_error(StatusCode::INTERNAL_SERVER_ERROR, message),
-        Err(LoadTableError::QueryFailed) => return json_error(StatusCode::INTERNAL_SERVER_ERROR, "failed to load data table"),
+        Err(LoadTableError::NotFound) => {
+            return json_error(StatusCode::NOT_FOUND, "data table not found")
+        }
+        Err(LoadTableError::Invalid(message)) => {
+            return json_error(StatusCode::INTERNAL_SERVER_ERROR, message)
+        }
+        Err(LoadTableError::QueryFailed) => {
+            return json_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "failed to load data table",
+            )
+        }
     };
 
     match sqlx::query("DELETE FROM data_query_presets WHERE id = ? AND table_id = ?")
@@ -523,9 +588,17 @@ pub async fn delete_query_preset(
         .execute(&state.pool)
         .await
     {
-        Ok(result) if result.rows_affected() == 0 => json_error(StatusCode::NOT_FOUND, "query preset not found"),
-        Ok(_) => json_message(StatusCode::OK, format!("deleted query preset {}", preset_id)),
-        Err(_) => json_error(StatusCode::INTERNAL_SERVER_ERROR, "failed to delete query preset"),
+        Ok(result) if result.rows_affected() == 0 => {
+            json_error(StatusCode::NOT_FOUND, "query preset not found")
+        }
+        Ok(_) => json_message(
+            StatusCode::OK,
+            format!("deleted query preset {}", preset_id),
+        ),
+        Err(_) => json_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "failed to delete query preset",
+        ),
     }
 }
 
@@ -540,16 +613,34 @@ pub async fn run_query_preset(
 
     let table = match load_table(&state.pool, &table).await {
         Ok(table) => table,
-        Err(LoadTableError::NotFound) => return json_error(StatusCode::NOT_FOUND, "data table not found"),
-        Err(LoadTableError::Invalid(message)) => return json_error(StatusCode::INTERNAL_SERVER_ERROR, message),
-        Err(LoadTableError::QueryFailed) => return json_error(StatusCode::INTERNAL_SERVER_ERROR, "failed to load data table"),
+        Err(LoadTableError::NotFound) => {
+            return json_error(StatusCode::NOT_FOUND, "data table not found")
+        }
+        Err(LoadTableError::Invalid(message)) => {
+            return json_error(StatusCode::INTERNAL_SERVER_ERROR, message)
+        }
+        Err(LoadTableError::QueryFailed) => {
+            return json_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "failed to load data table",
+            )
+        }
     };
 
     let preset = match load_query_preset(&state.pool, &table.id, &preset_id).await {
         Ok(preset) => preset,
-        Err(LoadPresetError::NotFound) => return json_error(StatusCode::NOT_FOUND, "query preset not found"),
-        Err(LoadPresetError::Invalid(message)) => return json_error(StatusCode::INTERNAL_SERVER_ERROR, message),
-        Err(LoadPresetError::QueryFailed) => return json_error(StatusCode::INTERNAL_SERVER_ERROR, "failed to load query preset"),
+        Err(LoadPresetError::NotFound) => {
+            return json_error(StatusCode::NOT_FOUND, "query preset not found")
+        }
+        Err(LoadPresetError::Invalid(message)) => {
+            return json_error(StatusCode::INTERNAL_SERVER_ERROR, message)
+        }
+        Err(LoadPresetError::QueryFailed) => {
+            return json_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "failed to load query preset",
+            )
+        }
     };
 
     execute_list_rows(&state, &claims, &table, &preset.params).await
@@ -567,9 +658,18 @@ pub async fn update_table(
 
     let existing = match load_table(&state.pool, &table).await {
         Ok(table) => table,
-        Err(LoadTableError::NotFound) => return json_error(StatusCode::NOT_FOUND, "data table not found"),
-        Err(LoadTableError::Invalid(message)) => return json_error(StatusCode::INTERNAL_SERVER_ERROR, message),
-        Err(LoadTableError::QueryFailed) => return json_error(StatusCode::INTERNAL_SERVER_ERROR, "failed to load data table"),
+        Err(LoadTableError::NotFound) => {
+            return json_error(StatusCode::NOT_FOUND, "data table not found")
+        }
+        Err(LoadTableError::Invalid(message)) => {
+            return json_error(StatusCode::INTERNAL_SERVER_ERROR, message)
+        }
+        Err(LoadTableError::QueryFailed) => {
+            return json_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "failed to load data table",
+            )
+        }
     };
 
     let display_name = payload
@@ -586,7 +686,9 @@ pub async fn update_table(
         return json_error(StatusCode::BAD_REQUEST, message);
     }
 
-    let access_policy = payload.access_policy.unwrap_or(existing.access_policy.clone());
+    let access_policy = payload
+        .access_policy
+        .unwrap_or(existing.access_policy.clone());
     if let Err(message) = validate_access_policy(&access_policy) {
         return json_error(StatusCode::BAD_REQUEST, message);
     }
@@ -610,7 +712,12 @@ pub async fn update_table(
     };
     let access_policy_json = match serde_json::to_string(&access_policy) {
         Ok(value) => value,
-        Err(_) => return json_error(StatusCode::INTERNAL_SERVER_ERROR, "failed to encode access policy"),
+        Err(_) => {
+            return json_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "failed to encode access policy",
+            )
+        }
     };
 
     match sqlx::query(
@@ -644,9 +751,18 @@ pub async fn delete_table(
 
     let existing = match load_table(&state.pool, &table).await {
         Ok(table) => table,
-        Err(LoadTableError::NotFound) => return json_error(StatusCode::NOT_FOUND, "data table not found"),
-        Err(LoadTableError::Invalid(message)) => return json_error(StatusCode::INTERNAL_SERVER_ERROR, message),
-        Err(LoadTableError::QueryFailed) => return json_error(StatusCode::INTERNAL_SERVER_ERROR, "failed to load data table"),
+        Err(LoadTableError::NotFound) => {
+            return json_error(StatusCode::NOT_FOUND, "data table not found")
+        }
+        Err(LoadTableError::Invalid(message)) => {
+            return json_error(StatusCode::INTERNAL_SERVER_ERROR, message)
+        }
+        Err(LoadTableError::QueryFailed) => {
+            return json_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "failed to load data table",
+            )
+        }
     };
 
     match sqlx::query("DELETE FROM data_tables WHERE id = ?")
@@ -654,9 +770,17 @@ pub async fn delete_table(
         .execute(&state.pool)
         .await
     {
-        Ok(result) if result.rows_affected() == 0 => json_error(StatusCode::NOT_FOUND, "data table not found"),
-        Ok(_) => json_message(StatusCode::OK, format!("deleted data table {}", existing.name)),
-        Err(_) => json_error(StatusCode::INTERNAL_SERVER_ERROR, "failed to delete data table"),
+        Ok(result) if result.rows_affected() == 0 => {
+            json_error(StatusCode::NOT_FOUND, "data table not found")
+        }
+        Ok(_) => json_message(
+            StatusCode::OK,
+            format!("deleted data table {}", existing.name),
+        ),
+        Err(_) => json_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "failed to delete data table",
+        ),
     }
 }
 
@@ -668,9 +792,18 @@ pub async fn create_row(
 ) -> Response {
     let table = match load_table(&state.pool, &table).await {
         Ok(table) => table,
-        Err(LoadTableError::NotFound) => return json_error(StatusCode::NOT_FOUND, "data table not found"),
-        Err(LoadTableError::Invalid(message)) => return json_error(StatusCode::INTERNAL_SERVER_ERROR, message),
-        Err(LoadTableError::QueryFailed) => return json_error(StatusCode::INTERNAL_SERVER_ERROR, "failed to load data table"),
+        Err(LoadTableError::NotFound) => {
+            return json_error(StatusCode::NOT_FOUND, "data table not found")
+        }
+        Err(LoadTableError::Invalid(message)) => {
+            return json_error(StatusCode::INTERNAL_SERVER_ERROR, message)
+        }
+        Err(LoadTableError::QueryFailed) => {
+            return json_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "failed to load data table",
+            )
+        }
     };
 
     if !can_write_table(&claims, &table.access_policy) {
@@ -686,7 +819,12 @@ pub async fn create_row(
     let owner_user_id = owner_user_id_for_new_row(&claims, &table.access_policy);
     let data_json = match serde_json::to_string(&normalized) {
         Ok(value) => value,
-        Err(_) => return json_error(StatusCode::INTERNAL_SERVER_ERROR, "failed to encode row data"),
+        Err(_) => {
+            return json_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "failed to encode row data",
+            )
+        }
     };
 
     let insert_result = sqlx::query(
@@ -701,13 +839,37 @@ pub async fn create_row(
 
     match insert_result {
         Ok(_) => {
-            if let Ok(event_id) = record_row_event(&state.pool, &table.id, &row_id, &claims.sub, "insert", Some(&normalized)).await {
-                emit_data_row_event(&state, event_id, &table.name, &row_id, &claims.sub, "insert", Some(&normalized));
+            if let Ok(event_id) = record_row_event(
+                &state.pool,
+                &table.id,
+                &row_id,
+                &claims.sub,
+                "insert",
+                Some(&normalized),
+            )
+            .await
+            {
+                emit_data_row_event(
+                    &state,
+                    event_id,
+                    &table.name,
+                    &row_id,
+                    &claims.sub,
+                    "insert",
+                    Some(&normalized),
+                );
             }
             match load_row(&state.pool, &table.id, &row_id).await {
-                Ok(row) => (StatusCode::CREATED, Json(DataRowResponse::from_record(row))).into_response(),
-                Err(LoadRowError::NotFound) => json_error(StatusCode::INTERNAL_SERVER_ERROR, "created row could not be reloaded"),
-                Err(LoadRowError::QueryFailed) => json_error(StatusCode::INTERNAL_SERVER_ERROR, "failed to load row"),
+                Ok(row) => {
+                    (StatusCode::CREATED, Json(DataRowResponse::from_record(row))).into_response()
+                }
+                Err(LoadRowError::NotFound) => json_error(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "created row could not be reloaded",
+                ),
+                Err(LoadRowError::QueryFailed) => {
+                    json_error(StatusCode::INTERNAL_SERVER_ERROR, "failed to load row")
+                }
             }
         }
         Err(_) => json_error(StatusCode::INTERNAL_SERVER_ERROR, "failed to create row"),
@@ -722,9 +884,18 @@ pub async fn list_rows(
 ) -> Response {
     let table = match load_table(&state.pool, &table).await {
         Ok(table) => table,
-        Err(LoadTableError::NotFound) => return json_error(StatusCode::NOT_FOUND, "data table not found"),
-        Err(LoadTableError::Invalid(message)) => return json_error(StatusCode::INTERNAL_SERVER_ERROR, message),
-        Err(LoadTableError::QueryFailed) => return json_error(StatusCode::INTERNAL_SERVER_ERROR, "failed to load data table"),
+        Err(LoadTableError::NotFound) => {
+            return json_error(StatusCode::NOT_FOUND, "data table not found")
+        }
+        Err(LoadTableError::Invalid(message)) => {
+            return json_error(StatusCode::INTERNAL_SERVER_ERROR, message)
+        }
+        Err(LoadTableError::QueryFailed) => {
+            return json_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "failed to load data table",
+            )
+        }
     };
 
     execute_list_rows(&state, &claims, &table, &params).await
@@ -740,7 +911,10 @@ async fn execute_list_rows(
         return json_error(StatusCode::FORBIDDEN, "read access denied");
     }
 
-    let limit = params.limit.unwrap_or(MAX_LIST_ROWS as usize).min(MAX_LIST_ROWS as usize);
+    let limit = params
+        .limit
+        .unwrap_or(MAX_LIST_ROWS as usize)
+        .min(MAX_LIST_ROWS as usize);
     let offset = params.offset.unwrap_or(0);
     let order_by = params.order_by.as_deref().unwrap_or("created_at");
     let descending = !matches!(params.order.as_deref(), Some("asc"));
@@ -800,21 +974,36 @@ pub async fn list_row_events(
 
     let table = match load_table(&state.pool, &table).await {
         Ok(table) => table,
-        Err(LoadTableError::NotFound) => return json_error(StatusCode::NOT_FOUND, "data table not found"),
-        Err(LoadTableError::Invalid(message)) => return json_error(StatusCode::INTERNAL_SERVER_ERROR, message),
-        Err(LoadTableError::QueryFailed) => return json_error(StatusCode::INTERNAL_SERVER_ERROR, "failed to load data table"),
+        Err(LoadTableError::NotFound) => {
+            return json_error(StatusCode::NOT_FOUND, "data table not found")
+        }
+        Err(LoadTableError::Invalid(message)) => {
+            return json_error(StatusCode::INTERNAL_SERVER_ERROR, message)
+        }
+        Err(LoadTableError::QueryFailed) => {
+            return json_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "failed to load data table",
+            )
+        }
     };
 
     let limit = params.limit.unwrap_or(MAX_LIST_ROWS as usize).min(200);
     if let Some(action) = params.action.as_deref() {
         if action != "insert" && action != "update" && action != "delete" {
-            return json_error(StatusCode::BAD_REQUEST, "action must be insert, update, or delete");
+            return json_error(
+                StatusCode::BAD_REQUEST,
+                "action must be insert, update, or delete",
+            );
         }
     }
 
     if let Some(since_id) = params.since_id {
         if since_id < 0 {
-            return json_error(StatusCode::BAD_REQUEST, "since_id must be greater than or equal to 0");
+            return json_error(
+                StatusCode::BAD_REQUEST,
+                "since_id must be greater than or equal to 0",
+            );
         }
     }
 
@@ -890,18 +1079,34 @@ pub async fn get_row_event_checkpoint(
 
     let table = match load_table(&state.pool, &table).await {
         Ok(table) => table,
-        Err(LoadTableError::NotFound) => return json_error(StatusCode::NOT_FOUND, "data table not found"),
-        Err(LoadTableError::Invalid(message)) => return json_error(StatusCode::INTERNAL_SERVER_ERROR, message),
-        Err(LoadTableError::QueryFailed) => return json_error(StatusCode::INTERNAL_SERVER_ERROR, "failed to load data table"),
+        Err(LoadTableError::NotFound) => {
+            return json_error(StatusCode::NOT_FOUND, "data table not found")
+        }
+        Err(LoadTableError::Invalid(message)) => {
+            return json_error(StatusCode::INTERNAL_SERVER_ERROR, message)
+        }
+        Err(LoadTableError::QueryFailed) => {
+            return json_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "failed to load data table",
+            )
+        }
     };
 
-    let latest_event_id = match sqlx::query_scalar::<_, Option<i64>>("SELECT MAX(id) FROM data_row_events WHERE table_id = ?")
-        .bind(&table.id)
-        .fetch_one(&state.pool)
-        .await
+    let latest_event_id = match sqlx::query_scalar::<_, Option<i64>>(
+        "SELECT MAX(id) FROM data_row_events WHERE table_id = ?",
+    )
+    .bind(&table.id)
+    .fetch_one(&state.pool)
+    .await
     {
         Ok(value) => value.unwrap_or(0),
-        Err(_) => return json_error(StatusCode::INTERNAL_SERVER_ERROR, "failed to load row event checkpoint"),
+        Err(_) => {
+            return json_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "failed to load row event checkpoint",
+            )
+        }
     };
 
     (
@@ -911,7 +1116,7 @@ pub async fn get_row_event_checkpoint(
             latest_event_id,
         }),
     )
-    .into_response()
+        .into_response()
 }
 
 pub async fn stream_row_events(
@@ -927,15 +1132,18 @@ pub async fn stream_row_events(
         return json_error(StatusCode::NOT_FOUND, "data table not found");
     }
 
-    let stream = BroadcastStream::new(state.data_event_sender.subscribe()).filter_map(move |message| match message {
-        Ok(event) if event.table_name == table => Some(Ok::<Event, Infallible>(
-            Event::default()
-                .event("data.row_changed")
-                .json_data(event)
-                .unwrap_or_else(|_| Event::default().data("{}")),
-        )),
-        _ => None,
-    });
+    let stream =
+        BroadcastStream::new(state.data_event_sender.subscribe()).filter_map(move |message| {
+            match message {
+                Ok(event) if event.table_name == table => Some(Ok::<Event, Infallible>(
+                    Event::default()
+                        .event("data.row_changed")
+                        .json_data(event)
+                        .unwrap_or_else(|_| Event::default().data("{}")),
+                )),
+                _ => None,
+            }
+        });
 
     Sse::new(stream)
         .keep_alive(KeepAlive::new().interval(std::time::Duration::from_secs(15)))
@@ -949,18 +1157,33 @@ pub async fn get_row(
 ) -> Response {
     let table = match load_table(&state.pool, &table).await {
         Ok(table) => table,
-        Err(LoadTableError::NotFound) => return json_error(StatusCode::NOT_FOUND, "data table not found"),
-        Err(LoadTableError::Invalid(message)) => return json_error(StatusCode::INTERNAL_SERVER_ERROR, message),
-        Err(LoadTableError::QueryFailed) => return json_error(StatusCode::INTERNAL_SERVER_ERROR, "failed to load data table"),
+        Err(LoadTableError::NotFound) => {
+            return json_error(StatusCode::NOT_FOUND, "data table not found")
+        }
+        Err(LoadTableError::Invalid(message)) => {
+            return json_error(StatusCode::INTERNAL_SERVER_ERROR, message)
+        }
+        Err(LoadTableError::QueryFailed) => {
+            return json_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "failed to load data table",
+            )
+        }
     };
 
     let record = match load_row(&state.pool, &table.id, &row_id).await {
         Ok(record) => record,
         Err(LoadRowError::NotFound) => return json_error(StatusCode::NOT_FOUND, "row not found"),
-        Err(LoadRowError::QueryFailed) => return json_error(StatusCode::INTERNAL_SERVER_ERROR, "failed to load row"),
+        Err(LoadRowError::QueryFailed) => {
+            return json_error(StatusCode::INTERNAL_SERVER_ERROR, "failed to load row")
+        }
     };
 
-    if !can_access_row(&claims, &table.access_policy, record.owner_user_id.as_deref()) {
+    if !can_access_row(
+        &claims,
+        &table.access_policy,
+        record.owner_user_id.as_deref(),
+    ) {
         return json_error(StatusCode::FORBIDDEN, "row access denied");
     }
 
@@ -978,22 +1201,38 @@ pub async fn update_row(
 ) -> Response {
     let table = match load_table(&state.pool, &table).await {
         Ok(table) => table,
-        Err(LoadTableError::NotFound) => return json_error(StatusCode::NOT_FOUND, "data table not found"),
-        Err(LoadTableError::Invalid(message)) => return json_error(StatusCode::INTERNAL_SERVER_ERROR, message),
-        Err(LoadTableError::QueryFailed) => return json_error(StatusCode::INTERNAL_SERVER_ERROR, "failed to load data table"),
+        Err(LoadTableError::NotFound) => {
+            return json_error(StatusCode::NOT_FOUND, "data table not found")
+        }
+        Err(LoadTableError::Invalid(message)) => {
+            return json_error(StatusCode::INTERNAL_SERVER_ERROR, message)
+        }
+        Err(LoadTableError::QueryFailed) => {
+            return json_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "failed to load data table",
+            )
+        }
     };
 
     let existing = match load_row(&state.pool, &table.id, &row_id).await {
         Ok(record) => record,
         Err(LoadRowError::NotFound) => return json_error(StatusCode::NOT_FOUND, "row not found"),
-        Err(LoadRowError::QueryFailed) => return json_error(StatusCode::INTERNAL_SERVER_ERROR, "failed to load row"),
+        Err(LoadRowError::QueryFailed) => {
+            return json_error(StatusCode::INTERNAL_SERVER_ERROR, "failed to load row")
+        }
     };
 
-    if !can_access_row(&claims, &table.access_policy, existing.owner_user_id.as_deref()) {
+    if !can_access_row(
+        &claims,
+        &table.access_policy,
+        existing.owner_user_id.as_deref(),
+    ) {
         return json_error(StatusCode::FORBIDDEN, "row access denied");
     }
 
-    let existing_value = match parse_json_object(&existing.data_json, "failed to decode stored row") {
+    let existing_value = match parse_json_object(&existing.data_json, "failed to decode stored row")
+    {
         Ok(value) => value,
         Err(message) => return json_error(StatusCode::INTERNAL_SERVER_ERROR, message),
     };
@@ -1013,7 +1252,12 @@ pub async fn update_row(
     };
     let data_json = match serde_json::to_string(&normalized) {
         Ok(value) => value,
-        Err(_) => return json_error(StatusCode::INTERNAL_SERVER_ERROR, "failed to encode row data"),
+        Err(_) => {
+            return json_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "failed to encode row data",
+            )
+        }
     };
 
     match sqlx::query(
@@ -1046,18 +1290,33 @@ pub async fn delete_row(
 ) -> Response {
     let table = match load_table(&state.pool, &table).await {
         Ok(table) => table,
-        Err(LoadTableError::NotFound) => return json_error(StatusCode::NOT_FOUND, "data table not found"),
-        Err(LoadTableError::Invalid(message)) => return json_error(StatusCode::INTERNAL_SERVER_ERROR, message),
-        Err(LoadTableError::QueryFailed) => return json_error(StatusCode::INTERNAL_SERVER_ERROR, "failed to load data table"),
+        Err(LoadTableError::NotFound) => {
+            return json_error(StatusCode::NOT_FOUND, "data table not found")
+        }
+        Err(LoadTableError::Invalid(message)) => {
+            return json_error(StatusCode::INTERNAL_SERVER_ERROR, message)
+        }
+        Err(LoadTableError::QueryFailed) => {
+            return json_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "failed to load data table",
+            )
+        }
     };
 
     let existing = match load_row(&state.pool, &table.id, &row_id).await {
         Ok(record) => record,
         Err(LoadRowError::NotFound) => return json_error(StatusCode::NOT_FOUND, "row not found"),
-        Err(LoadRowError::QueryFailed) => return json_error(StatusCode::INTERNAL_SERVER_ERROR, "failed to load row"),
+        Err(LoadRowError::QueryFailed) => {
+            return json_error(StatusCode::INTERNAL_SERVER_ERROR, "failed to load row")
+        }
     };
 
-    if !can_access_row(&claims, &table.access_policy, existing.owner_user_id.as_deref()) {
+    if !can_access_row(
+        &claims,
+        &table.access_policy,
+        existing.owner_user_id.as_deref(),
+    ) {
         return json_error(StatusCode::FORBIDDEN, "row access denied");
     }
 
@@ -1067,11 +1326,30 @@ pub async fn delete_row(
         .execute(&state.pool)
         .await
     {
-        Ok(result) if result.rows_affected() == 0 => json_error(StatusCode::NOT_FOUND, "row not found"),
+        Ok(result) if result.rows_affected() == 0 => {
+            json_error(StatusCode::NOT_FOUND, "row not found")
+        }
         Ok(_) => {
             let previous = parse_json(&existing.data_json).ok();
-            if let Ok(event_id) = record_row_event(&state.pool, &table.id, &row_id, &claims.sub, "delete", previous.as_ref()).await {
-                emit_data_row_event(&state, event_id, &table.name, &row_id, &claims.sub, "delete", previous.as_ref());
+            if let Ok(event_id) = record_row_event(
+                &state.pool,
+                &table.id,
+                &row_id,
+                &claims.sub,
+                "delete",
+                previous.as_ref(),
+            )
+            .await
+            {
+                emit_data_row_event(
+                    &state,
+                    event_id,
+                    &table.name,
+                    &row_id,
+                    &claims.sub,
+                    "delete",
+                    previous.as_ref(),
+                );
             }
             json_message(StatusCode::OK, format!("deleted row {}", row_id))
         }
@@ -1090,9 +1368,18 @@ pub async fn export_table(
 
     let table = match load_table(&state.pool, &table).await {
         Ok(table) => table,
-        Err(LoadTableError::NotFound) => return json_error(StatusCode::NOT_FOUND, "data table not found"),
-        Err(LoadTableError::Invalid(message)) => return json_error(StatusCode::INTERNAL_SERVER_ERROR, message),
-        Err(LoadTableError::QueryFailed) => return json_error(StatusCode::INTERNAL_SERVER_ERROR, "failed to load data table"),
+        Err(LoadTableError::NotFound) => {
+            return json_error(StatusCode::NOT_FOUND, "data table not found")
+        }
+        Err(LoadTableError::Invalid(message)) => {
+            return json_error(StatusCode::INTERNAL_SERVER_ERROR, message)
+        }
+        Err(LoadTableError::QueryFailed) => {
+            return json_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "failed to load data table",
+            )
+        }
     };
 
     let records = match sqlx::query_as::<_, DataRowRecord>(
@@ -1132,36 +1419,44 @@ pub async fn export_table(
             rows,
         }),
     )
-    .into_response()
+        .into_response()
 }
 
-fn build_table_export_checksum(table: &DataTableDetail, rows: &[DataRowResponse]) -> Result<String, String> {
+fn build_table_export_checksum(
+    table: &DataTableDetail,
+    rows: &[DataRowResponse],
+) -> Result<String, String> {
     let payload = serde_json::json!({
         "export_version": TABLE_EXPORT_VERSION,
         "table": table,
         "rows": rows,
     });
-    let encoded = serde_json::to_vec(&payload).map_err(|_| "failed to encode export payload".to_string())?;
+    let encoded =
+        serde_json::to_vec(&payload).map_err(|_| "failed to encode export payload".to_string())?;
     let digest = openssl::sha::sha256(&encoded);
     Ok(digest.iter().map(|byte| format!("{byte:02x}")).collect())
 }
 
-fn build_import_checksum(table: &DataTableDetail, rows: &[ImportRowRequest]) -> Result<String, String> {
+fn build_import_checksum(
+    table: &DataTableDetail,
+    rows: &[ImportRowRequest],
+) -> Result<String, String> {
     let export_rows = rows
         .iter()
         .map(|row| {
             Ok(DataRowResponse {
-                id: row.id.clone().ok_or_else(|| "checksum verification requires row ids".to_string())?,
+                id: row
+                    .id
+                    .clone()
+                    .ok_or_else(|| "checksum verification requires row ids".to_string())?,
                 owner_user_id: row.owner_user_id.clone(),
                 data: row.data.clone(),
-                created_at: row
-                    .created_at
-                    .clone()
-                    .ok_or_else(|| "checksum verification requires row created_at values".to_string())?,
-                updated_at: row
-                    .updated_at
-                    .clone()
-                    .ok_or_else(|| "checksum verification requires row updated_at values".to_string())?,
+                created_at: row.created_at.clone().ok_or_else(|| {
+                    "checksum verification requires row created_at values".to_string()
+                })?,
+                updated_at: row.updated_at.clone().ok_or_else(|| {
+                    "checksum verification requires row updated_at values".to_string()
+                })?,
             })
         })
         .collect::<Result<Vec<_>, String>>()?;
@@ -1169,7 +1464,10 @@ fn build_import_checksum(table: &DataTableDetail, rows: &[ImportRowRequest]) -> 
     build_table_export_checksum(table, &export_rows)
 }
 
-fn resolve_import_checksum_table_detail(current: &LoadedTable, payload: &TableImportRequest) -> Result<DataTableDetail, String> {
+fn resolve_import_checksum_table_detail(
+    current: &LoadedTable,
+    payload: &TableImportRequest,
+) -> Result<DataTableDetail, String> {
     if let Some(table) = payload.table.as_ref() {
         return Ok(DataTableDetail {
             name: table.name.clone(),
@@ -1202,9 +1500,18 @@ pub async fn import_rows(
 
     let mut table = match load_table(&state.pool, &table).await {
         Ok(table) => table,
-        Err(LoadTableError::NotFound) => return json_error(StatusCode::NOT_FOUND, "data table not found"),
-        Err(LoadTableError::Invalid(message)) => return json_error(StatusCode::INTERNAL_SERVER_ERROR, message),
-        Err(LoadTableError::QueryFailed) => return json_error(StatusCode::INTERNAL_SERVER_ERROR, "failed to load data table"),
+        Err(LoadTableError::NotFound) => {
+            return json_error(StatusCode::NOT_FOUND, "data table not found")
+        }
+        Err(LoadTableError::Invalid(message)) => {
+            return json_error(StatusCode::INTERNAL_SERVER_ERROR, message)
+        }
+        Err(LoadTableError::QueryFailed) => {
+            return json_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "failed to load data table",
+            )
+        }
     };
 
     let mode = payload.mode.as_deref().unwrap_or("append");
@@ -1216,13 +1523,21 @@ pub async fn import_rows(
     if payload.verify_checksum.unwrap_or(false) {
         let metadata = match payload.metadata.as_ref() {
             Some(metadata) => metadata,
-            None => return json_error(StatusCode::BAD_REQUEST, "metadata is required when verify_checksum is true"),
+            None => {
+                return json_error(
+                    StatusCode::BAD_REQUEST,
+                    "metadata is required when verify_checksum is true",
+                )
+            }
         };
         if metadata.export_version != TABLE_EXPORT_VERSION {
             return json_error(StatusCode::BAD_REQUEST, "unsupported import export_version");
         }
         if metadata.row_count != payload.rows.len() {
-            return json_error(StatusCode::BAD_REQUEST, "import row count does not match metadata");
+            return json_error(
+                StatusCode::BAD_REQUEST,
+                "import row count does not match metadata",
+            );
         }
 
         let checksum_table = match resolve_import_checksum_table_detail(&table, &payload) {
@@ -1234,7 +1549,10 @@ pub async fn import_rows(
             Err(message) => return json_error(StatusCode::BAD_REQUEST, message),
         };
         if checksum != metadata.checksum_sha256 {
-            return json_error(StatusCode::BAD_REQUEST, "import checksum verification failed");
+            return json_error(
+                StatusCode::BAD_REQUEST,
+                "import checksum verification failed",
+            );
         }
     }
 
@@ -1247,10 +1565,19 @@ pub async fn import_rows(
     let mut effective_table = table.clone();
     if payload.restore_table.unwrap_or(false) {
         let Some(restore_spec) = payload.table.as_ref() else {
-            return json_error(StatusCode::BAD_REQUEST, "table is required when restore_table is true");
+            return json_error(
+                StatusCode::BAD_REQUEST,
+                "table is required when restore_table is true",
+            );
         };
-        let schema_validation_row_count = if mode == "replace" { 0 } else { existing_row_count };
-        if let Err(message) = validate_restore_table_spec(&table, restore_spec, schema_validation_row_count) {
+        let schema_validation_row_count = if mode == "replace" {
+            0
+        } else {
+            existing_row_count
+        };
+        if let Err(message) =
+            validate_restore_table_spec(&table, restore_spec, schema_validation_row_count)
+        {
             return json_error(StatusCode::BAD_REQUEST, message);
         }
         schema_changes = schema_diff_preview(&table.schema, &restore_spec.schema);
@@ -1263,9 +1590,10 @@ pub async fn import_rows(
         if let Err(message) = normalize_row_data(&effective_table.schema, row.data.clone(), false) {
             return json_error(StatusCode::BAD_REQUEST, message);
         }
-        if let Err(message) =
-            normalize_import_owner_user_id(&effective_table.access_policy, row.owner_user_id.clone())
-        {
+        if let Err(message) = normalize_import_owner_user_id(
+            &effective_table.access_policy,
+            row.owner_user_id.clone(),
+        ) {
             return json_error(StatusCode::BAD_REQUEST, message);
         }
     }
@@ -1291,25 +1619,34 @@ pub async fn import_rows(
             .into_response();
     }
 
-    if mode == "replace" {
-        if sqlx::query("DELETE FROM data_rows WHERE table_id = ?")
+    if mode == "replace"
+        && sqlx::query("DELETE FROM data_rows WHERE table_id = ?")
             .bind(&table.id)
             .execute(&state.pool)
             .await
             .is_err()
-        {
-            return json_error(StatusCode::INTERNAL_SERVER_ERROR, "failed to clear existing rows before import");
-        }
+    {
+        return json_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "failed to clear existing rows before import",
+        );
     }
 
     if payload.restore_table.unwrap_or(false) {
         let Some(restore_spec) = payload.table.as_ref() else {
-            return json_error(StatusCode::BAD_REQUEST, "table is required when restore_table is true");
+            return json_error(
+                StatusCode::BAD_REQUEST,
+                "table is required when restore_table is true",
+            );
         };
         match restore_table_definition(&state.pool, &table, restore_spec).await {
             Ok(restored) => table = restored,
-            Err(RestoreTableError::BadRequest(message)) => return json_error(StatusCode::BAD_REQUEST, message),
-            Err(RestoreTableError::Internal(message)) => return json_error(StatusCode::INTERNAL_SERVER_ERROR, message),
+            Err(RestoreTableError::BadRequest(message)) => {
+                return json_error(StatusCode::BAD_REQUEST, message)
+            }
+            Err(RestoreTableError::Internal(message)) => {
+                return json_error(StatusCode::INTERNAL_SERVER_ERROR, message)
+            }
         }
     }
 
@@ -1320,15 +1657,21 @@ pub async fn import_rows(
             Err(message) => return json_error(StatusCode::BAD_REQUEST, message),
         };
 
-        let owner_user_id = match normalize_import_owner_user_id(&table.access_policy, row.owner_user_id) {
-            Ok(owner_user_id) => owner_user_id,
-            Err(message) => return json_error(StatusCode::BAD_REQUEST, message),
-        };
+        let owner_user_id =
+            match normalize_import_owner_user_id(&table.access_policy, row.owner_user_id) {
+                Ok(owner_user_id) => owner_user_id,
+                Err(message) => return json_error(StatusCode::BAD_REQUEST, message),
+            };
 
         let row_id = row.id.unwrap_or_else(|| Uuid::new_v4().to_string());
         let data_json = match serde_json::to_string(&normalized) {
             Ok(value) => value,
-            Err(_) => return json_error(StatusCode::INTERNAL_SERVER_ERROR, "failed to encode imported row data"),
+            Err(_) => {
+                return json_error(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "failed to encode imported row data",
+                )
+            }
         };
 
         let insert_result = sqlx::query(
@@ -1343,8 +1686,25 @@ pub async fn import_rows(
 
         match insert_result {
             Ok(_) => {
-                if let Ok(event_id) = record_row_event(&state.pool, &table.id, &row_id, &claims.sub, "insert", Some(&normalized)).await {
-                    emit_data_row_event(&state, event_id, &table.name, &row_id, &claims.sub, "insert", Some(&normalized));
+                if let Ok(event_id) = record_row_event(
+                    &state.pool,
+                    &table.id,
+                    &row_id,
+                    &claims.sub,
+                    "insert",
+                    Some(&normalized),
+                )
+                .await
+                {
+                    emit_data_row_event(
+                        &state,
+                        event_id,
+                        &table.name,
+                        &row_id,
+                        &claims.sub,
+                        "insert",
+                        Some(&normalized),
+                    );
                 }
                 imported_count += 1;
             }
@@ -1479,7 +1839,10 @@ fn emit_data_row_event(
     });
 }
 
-async fn load_query_presets(pool: &sqlx::SqlitePool, table_id: &str) -> Result<Vec<QueryPresetResponse>, String> {
+async fn load_query_presets(
+    pool: &sqlx::SqlitePool,
+    table_id: &str,
+) -> Result<Vec<QueryPresetResponse>, String> {
     let records = sqlx::query_as::<_, QueryPresetRecord>(
         "SELECT id, name, display_name, params_json, created_at, updated_at FROM data_query_presets WHERE table_id = ? ORDER BY created_at DESC, name ASC",
     )
@@ -1490,12 +1853,19 @@ async fn load_query_presets(pool: &sqlx::SqlitePool, table_id: &str) -> Result<V
 
     let mut presets = Vec::with_capacity(records.len());
     for record in records {
-        presets.push(query_preset_from_record(record).map_err(|_| "failed to decode stored query preset".to_string())?);
+        presets.push(
+            query_preset_from_record(record)
+                .map_err(|_| "failed to decode stored query preset".to_string())?,
+        );
     }
     Ok(presets)
 }
 
-async fn load_query_preset(pool: &sqlx::SqlitePool, table_id: &str, preset_id: &str) -> Result<QueryPresetResponse, LoadPresetError> {
+async fn load_query_preset(
+    pool: &sqlx::SqlitePool,
+    table_id: &str,
+    preset_id: &str,
+) -> Result<QueryPresetResponse, LoadPresetError> {
     let record = sqlx::query_as::<_, QueryPresetRecord>(
         "SELECT id, name, display_name, params_json, created_at, updated_at FROM data_query_presets WHERE table_id = ? AND id = ?",
     )
@@ -1510,7 +1880,8 @@ async fn load_query_preset(pool: &sqlx::SqlitePool, table_id: &str, preset_id: &
 }
 
 fn query_preset_from_record(record: QueryPresetRecord) -> Result<QueryPresetResponse, String> {
-    let params = serde_json::from_str(&record.params_json).map_err(|_| "failed to decode stored query preset".to_string())?;
+    let params = serde_json::from_str(&record.params_json)
+        .map_err(|_| "failed to decode stored query preset".to_string())?;
     Ok(QueryPresetResponse {
         id: record.id,
         name: record.name,
@@ -1521,7 +1892,10 @@ fn query_preset_from_record(record: QueryPresetRecord) -> Result<QueryPresetResp
     })
 }
 
-fn validate_query_preset_payload(schema: &DataTableSchema, payload: &UpsertQueryPresetRequest) -> Result<(), String> {
+fn validate_query_preset_payload(
+    schema: &DataTableSchema,
+    payload: &UpsertQueryPresetRequest,
+) -> Result<(), String> {
     if payload.name.trim().is_empty() {
         return Err("name is required".to_string());
     }
@@ -1530,7 +1904,10 @@ fn validate_query_preset_payload(schema: &DataTableSchema, payload: &UpsertQuery
         .chars()
         .all(|ch| ch.is_ascii_lowercase() || ch.is_ascii_digit() || ch == '_' || ch == '-')
     {
-        return Err("preset name may only contain lowercase letters, digits, underscores, and hyphens".to_string());
+        return Err(
+            "preset name may only contain lowercase letters, digits, underscores, and hyphens"
+                .to_string(),
+        );
     }
     if payload.display_name.trim().is_empty() {
         return Err("display_name is required".to_string());
@@ -1588,7 +1965,10 @@ fn validate_access_policy(policy: &AccessPolicy) -> Result<(), String> {
     }
 }
 
-fn validate_list_rows_params(schema: &DataTableSchema, params: &ListRowsParams) -> Result<(), String> {
+fn validate_list_rows_params(
+    schema: &DataTableSchema,
+    params: &ListRowsParams,
+) -> Result<(), String> {
     if let Some(limit) = params.limit {
         if limit == 0 {
             return Err("limit must be at least 1".to_string());
@@ -1596,7 +1976,10 @@ fn validate_list_rows_params(schema: &DataTableSchema, params: &ListRowsParams) 
     }
 
     if let Some(order_by) = &params.order_by {
-        if order_by != "created_at" && order_by != "updated_at" && !schema.fields.contains_key(order_by) {
+        if order_by != "created_at"
+            && order_by != "updated_at"
+            && !schema.fields.contains_key(order_by)
+        {
             return Err("order_by must be created_at, updated_at, or a declared field".to_string());
         }
     }
@@ -1611,7 +1994,11 @@ fn validate_list_rows_params(schema: &DataTableSchema, params: &ListRowsParams) 
         if search.trim().is_empty() {
             return Err("search must not be empty".to_string());
         }
-        if !schema.fields.values().any(|field| field.field_type == "string") {
+        if !schema
+            .fields
+            .values()
+            .any(|field| field.field_type == "string")
+        {
             return Err("search requires at least one declared string field".to_string());
         }
     }
@@ -1624,15 +2011,24 @@ fn validate_list_rows_params(schema: &DataTableSchema, params: &ListRowsParams) 
         return Err("title_contains filter requires a declared title field".to_string());
     }
 
-    match (&params.filter_field, &params.filter_op, &params.filter_value) {
+    match (
+        &params.filter_field,
+        &params.filter_op,
+        &params.filter_value,
+    ) {
         (None, None, None) => {}
         (Some(field), Some(op), Some(_)) => {
             let Some(spec) = schema.fields.get(field) else {
                 return Err("filter_field must be a declared field".to_string());
             };
             let valid = match spec.field_type.as_str() {
-                "string" => matches!(op.as_str(), "eq" | "ne" | "contains" | "starts_with" | "ends_with"),
-                "integer" | "number" | "datetime" => matches!(op.as_str(), "eq" | "ne" | "gt" | "gte" | "lt" | "lte"),
+                "string" => matches!(
+                    op.as_str(),
+                    "eq" | "ne" | "contains" | "starts_with" | "ends_with"
+                ),
+                "integer" | "number" | "datetime" => {
+                    matches!(op.as_str(), "eq" | "ne" | "gt" | "gte" | "lt" | "lte")
+                }
                 "boolean" => matches!(op.as_str(), "eq" | "ne"),
                 "json" => matches!(op.as_str(), "eq" | "ne"),
                 _ => false,
@@ -1641,13 +2037,21 @@ fn validate_list_rows_params(schema: &DataTableSchema, params: &ListRowsParams) 
                 return Err("filter_op is not supported for the selected field".to_string());
             }
         }
-        _ => return Err("filter_field, filter_op, and filter_value must be provided together".to_string()),
+        _ => {
+            return Err(
+                "filter_field, filter_op, and filter_value must be provided together".to_string(),
+            )
+        }
     }
 
     Ok(())
 }
 
-fn apply_row_filters(rows: Vec<DataRowResponse>, schema: &DataTableSchema, params: &ListRowsParams) -> Vec<DataRowResponse> {
+fn apply_row_filters(
+    rows: Vec<DataRowResponse>,
+    schema: &DataTableSchema,
+    params: &ListRowsParams,
+) -> Vec<DataRowResponse> {
     rows.into_iter()
         .filter(|row| match params.search.as_deref() {
             Some(search) => row_matches_search(row, schema, search),
@@ -1666,9 +2070,17 @@ fn apply_row_filters(rows: Vec<DataRowResponse>, schema: &DataTableSchema, param
             Some(done) => row.data.get("done").and_then(Value::as_bool) == Some(done),
             None => true,
         })
-        .filter(|row| match (&params.filter_field, &params.filter_op, &params.filter_value) {
-            (Some(field), Some(op), Some(value)) => row_matches_generic_filter(row, field, op, value),
-            _ => true,
+        .filter(|row| {
+            match (
+                &params.filter_field,
+                &params.filter_op,
+                &params.filter_value,
+            ) {
+                (Some(field), Some(op), Some(value)) => {
+                    row_matches_generic_filter(row, field, op, value)
+                }
+                _ => true,
+            }
         })
         .collect()
 }
@@ -1724,8 +2136,8 @@ fn row_matches_generic_filter(row: &DataRowResponse, field: &str, op: &str, valu
             None => false,
         },
         _ => match op {
-            "eq" => current.to_string() == value,
-            "ne" => current.to_string() != value,
+            "eq" => current == value,
+            "ne" => current != value,
             _ => false,
         },
     }
@@ -1755,7 +2167,11 @@ fn compare_numbers(current: f64, expected: f64, op: &str) -> bool {
     }
 }
 
-fn compare_rows(left: &DataRowResponse, right: &DataRowResponse, order_by: &str) -> std::cmp::Ordering {
+fn compare_rows(
+    left: &DataRowResponse,
+    right: &DataRowResponse,
+    order_by: &str,
+) -> std::cmp::Ordering {
     match order_by {
         "created_at" => left.created_at.cmp(&right.created_at),
         "updated_at" => left.updated_at.cmp(&right.updated_at),
@@ -1771,7 +2187,10 @@ fn validate_schema_evolution(
     for (field_name, existing_field) in &existing.fields {
         let Some(updated_field) = updated.fields.get(field_name) else {
             if row_count > 0 {
-                return Err(format!("cannot remove field '{}' after rows have been stored", field_name));
+                return Err(format!(
+                    "cannot remove field '{}' after rows have been stored",
+                    field_name
+                ));
             }
             continue;
         };
@@ -1833,8 +2252,12 @@ async fn validate_rows_against_schema(
 
     for row in rows {
         let value = parse_json(&row.data_json)?;
-        normalize_row_data(schema, value, false)
-            .map_err(|message| format!("row {} is incompatible with the updated schema: {}", row.id, message))?;
+        normalize_row_data(schema, value, false).map_err(|message| {
+            format!(
+                "row {} is incompatible with the updated schema: {}",
+                row.id, message
+            )
+        })?;
     }
 
     Ok(())
@@ -1848,7 +2271,11 @@ async fn count_table_rows(pool: &sqlx::SqlitePool, table_id: &str) -> Result<i64
         .map_err(|_| "failed to count existing rows for schema validation".to_string())
 }
 
-fn normalize_row_data(schema: &DataTableSchema, data: Value, allow_partial: bool) -> Result<Value, String> {
+fn normalize_row_data(
+    schema: &DataTableSchema,
+    data: Value,
+    allow_partial: bool,
+) -> Result<Value, String> {
     let mut input = value_to_object(data, "data must be a JSON object")?;
     let mut output = Map::new();
 
@@ -1878,7 +2305,11 @@ fn normalize_row_data(schema: &DataTableSchema, data: Value, allow_partial: bool
     Ok(Value::Object(output))
 }
 
-fn validate_field_value(field_name: &str, field_spec: &DataFieldSpec, value: &Value) -> Result<(), String> {
+fn validate_field_value(
+    field_name: &str,
+    field_spec: &DataFieldSpec,
+    value: &Value,
+) -> Result<(), String> {
     match field_spec.field_type.as_str() {
         "string" => {
             let Some(text) = value.as_str() else {
@@ -1935,8 +2366,13 @@ fn normalize_import_owner_user_id(
         POLICY_OWNER_PRIVATE => owner_user_id
             .filter(|value| !value.trim().is_empty())
             .map(Some)
-            .ok_or_else(|| "owner_user_id is required when importing rows into owner_private tables".to_string()),
-        POLICY_AUTHENTICATED_SHARED_RW => Ok(owner_user_id.filter(|value| !value.trim().is_empty())),
+            .ok_or_else(|| {
+                "owner_user_id is required when importing rows into owner_private tables"
+                    .to_string()
+            }),
+        POLICY_AUTHENTICATED_SHARED_RW => {
+            Ok(owner_user_id.filter(|value| !value.trim().is_empty()))
+        }
         POLICY_ADMIN_ONLY => Ok(None),
         _ => Err("access_policy.mode is invalid".to_string()),
     }
@@ -1993,7 +2429,10 @@ async fn record_row_event(
     Ok(result.last_insert_rowid())
 }
 
-async fn load_table(pool: &sqlx::SqlitePool, table_name: &str) -> Result<LoadedTable, LoadTableError> {
+async fn load_table(
+    pool: &sqlx::SqlitePool,
+    table_name: &str,
+) -> Result<LoadedTable, LoadTableError> {
     let normalized = table_name.trim().to_lowercase();
     let record = sqlx::query_as::<_, DataTableRecord>(
         "SELECT id, name, display_name, schema_json, access_policy_json, created_by, created_at FROM data_tables WHERE name = ?",
@@ -2008,7 +2447,8 @@ async fn load_table(pool: &sqlx::SqlitePool, table_name: &str) -> Result<LoadedT
     };
 
     let schema = parse_schema(&record.schema_json).map_err(LoadTableError::Invalid)?;
-    let access_policy = parse_access_policy(&record.access_policy_json).map_err(LoadTableError::Invalid)?;
+    let access_policy =
+        parse_access_policy(&record.access_policy_json).map_err(LoadTableError::Invalid)?;
 
     Ok(LoadedTable {
         id: record.id,
@@ -2021,7 +2461,11 @@ async fn load_table(pool: &sqlx::SqlitePool, table_name: &str) -> Result<LoadedT
     })
 }
 
-async fn load_row(pool: &sqlx::SqlitePool, table_id: &str, row_id: &str) -> Result<DataRowRecord, LoadRowError> {
+async fn load_row(
+    pool: &sqlx::SqlitePool,
+    table_id: &str,
+    row_id: &str,
+) -> Result<DataRowRecord, LoadRowError> {
     sqlx::query_as::<_, DataRowRecord>(
         "SELECT id, owner_user_id, data_json, created_at, updated_at FROM data_rows WHERE table_id = ? AND id = ?",
     )
@@ -2210,7 +2654,11 @@ mod tests {
         assert_eq!(create_body.table.name, "todos");
         assert_eq!(create_body.table.access_policy.mode, POLICY_OWNER_PRIVATE);
 
-        let list_response = list_tables(State(state.clone()), Extension(claims(&admin.user.id, true))).await;
+        let list_response = list_tables(
+            State(state.clone()),
+            Extension(claims(&admin.user.id, true)),
+        )
+        .await;
         let list_body: DataTablesResponse = test_support::response_json(list_response).await;
         assert_eq!(list_body.tables.len(), 1);
         assert_eq!(list_body.tables[0].name, "todos");
@@ -2298,7 +2746,10 @@ mod tests {
         assert_eq!(update_response.status(), StatusCode::OK);
         let updated: DataTableResponse = test_support::response_json(update_response).await;
         assert_eq!(updated.table.display_name, "My Todos");
-        assert_eq!(updated.table.access_policy.mode, POLICY_AUTHENTICATED_SHARED_RW);
+        assert_eq!(
+            updated.table.access_policy.mode,
+            POLICY_AUTHENTICATED_SHARED_RW
+        );
         assert!(updated.table.schema.fields.contains_key("priority"));
 
         let delete_response = delete_table(
@@ -2375,8 +2826,12 @@ mod tests {
         )
         .await;
         assert_eq!(update_response.status(), StatusCode::BAD_REQUEST);
-        let error: crate::api::common::ApiError = test_support::response_json(update_response).await;
-        assert_eq!(error.error, "cannot change field 'title' type from string to integer");
+        let error: crate::api::common::ApiError =
+            test_support::response_json(update_response).await;
+        assert_eq!(
+            error.error,
+            "cannot change field 'title' type from string to integer"
+        );
     }
 
     #[tokio::test]
@@ -2473,8 +2928,12 @@ mod tests {
         )
         .await;
         assert_eq!(update_response.status(), StatusCode::BAD_REQUEST);
-        let error: crate::api::common::ApiError = test_support::response_json(update_response).await;
-        assert_eq!(error.error, "cannot remove field 'done' after rows have been stored");
+        let error: crate::api::common::ApiError =
+            test_support::response_json(update_response).await;
+        assert_eq!(
+            error.error,
+            "cannot remove field 'done' after rows have been stored"
+        );
     }
 
     #[tokio::test]
@@ -2543,7 +3002,8 @@ mod tests {
         )
         .await;
         assert_eq!(update_response.status(), StatusCode::BAD_REQUEST);
-        let error: crate::api::common::ApiError = test_support::response_json(update_response).await;
+        let error: crate::api::common::ApiError =
+            test_support::response_json(update_response).await;
         assert_eq!(
             error.error,
             "new required field 'priority' must define a default before it can be added to a table with existing rows"
@@ -2592,8 +3052,14 @@ mod tests {
         .await;
         assert_eq!(create_row_response.status(), StatusCode::CREATED);
         let created_row: DataRowResponse = test_support::response_json(create_row_response).await;
-        assert_eq!(created_row.owner_user_id.as_deref(), Some(user_one.user.id.as_str()));
-        assert_eq!(created_row.data, json!({ "done": false, "title": "buy milk" }));
+        assert_eq!(
+            created_row.owner_user_id.as_deref(),
+            Some(user_one.user.id.as_str())
+        );
+        assert_eq!(
+            created_row.data,
+            json!({ "done": false, "title": "buy milk" })
+        );
 
         let list_user_one = list_rows(
             State(state.clone()),
@@ -2675,7 +3141,10 @@ mod tests {
         assert_eq!(filtered.status(), StatusCode::OK);
         let filtered: DataRowsResponse = test_support::response_json(filtered).await;
         assert_eq!(filtered.rows.len(), 1);
-        assert_eq!(filtered.rows[0].data.get("title"), Some(&json!("buy bread")));
+        assert_eq!(
+            filtered.rows[0].data.get("title"),
+            Some(&json!("buy bread"))
+        );
 
         let starts_with = list_rows(
             State(state.clone()),
@@ -2718,9 +3187,13 @@ mod tests {
         )
         .await;
         assert_eq!(search_with_offset.status(), StatusCode::OK);
-        let search_with_offset: DataRowsResponse = test_support::response_json(search_with_offset).await;
+        let search_with_offset: DataRowsResponse =
+            test_support::response_json(search_with_offset).await;
         assert_eq!(search_with_offset.rows.len(), 1);
-        assert_eq!(search_with_offset.rows[0].data.get("title"), Some(&json!("buy milk")));
+        assert_eq!(
+            search_with_offset.rows[0].data.get("title"),
+            Some(&json!("buy milk"))
+        );
 
         let invalid = list_rows(
             State(state.clone()),
@@ -2826,7 +3299,13 @@ mod tests {
         assert_eq!(events_body.events[1].action, "update");
         assert_eq!(events_body.events[2].action, "insert");
         assert_eq!(events_body.events[0].row_id, created_row.id);
-        assert_eq!(events_body.events[2].diff.as_ref().and_then(|value| value.get("title")), Some(&json!("buy milk")));
+        assert_eq!(
+            events_body.events[2]
+                .diff
+                .as_ref()
+                .and_then(|value| value.get("title")),
+            Some(&json!("buy milk"))
+        );
 
         let filtered_response = list_row_events(
             State(state.clone()),
@@ -2841,7 +3320,8 @@ mod tests {
         )
         .await;
         assert_eq!(filtered_response.status(), StatusCode::OK);
-        let filtered_body: DataRowEventsResponse = test_support::response_json(filtered_response).await;
+        let filtered_body: DataRowEventsResponse =
+            test_support::response_json(filtered_response).await;
         assert_eq!(filtered_body.events.len(), 1);
         assert_eq!(filtered_body.events[0].action, "update");
 
@@ -2852,7 +3332,8 @@ mod tests {
         )
         .await;
         assert_eq!(checkpoint_response.status(), StatusCode::OK);
-        let checkpoint_body: DataRowEventCheckpointResponse = test_support::response_json(checkpoint_response).await;
+        let checkpoint_body: DataRowEventCheckpointResponse =
+            test_support::response_json(checkpoint_response).await;
         assert_eq!(checkpoint_body.table_name, "todos");
         assert_eq!(checkpoint_body.latest_event_id, events_body.events[0].id);
 
@@ -2902,7 +3383,8 @@ mod tests {
         )
         .await;
         assert_eq!(create_preset_response.status(), StatusCode::CREATED);
-        let created_preset: QueryPresetResponse = test_support::response_json(create_preset_response).await;
+        let created_preset: QueryPresetResponse =
+            test_support::response_json(create_preset_response).await;
         assert_eq!(created_preset.name, "open-buy-items");
         assert_eq!(created_preset.params.search.as_deref(), Some("buy"));
 
@@ -2937,7 +3419,10 @@ mod tests {
         assert_eq!(run_response.status(), StatusCode::OK);
         let run_body: DataRowsResponse = test_support::response_json(run_response).await;
         assert_eq!(run_body.rows.len(), 1);
-        assert_eq!(run_body.rows[0].data.get("title"), Some(&json!("buy coffee")));
+        assert_eq!(
+            run_body.rows[0].data.get("title"),
+            Some(&json!("buy coffee"))
+        );
 
         let forbidden_run = run_query_preset(
             State(state.clone()),
@@ -2981,10 +3466,14 @@ mod tests {
         )
         .await;
         assert_eq!(update_response.status(), StatusCode::OK);
-        let updated_preset: QueryPresetResponse = test_support::response_json(update_response).await;
+        let updated_preset: QueryPresetResponse =
+            test_support::response_json(update_response).await;
         assert_eq!(updated_preset.name, "open-items");
         assert_eq!(updated_preset.params.offset, Some(5));
-        assert_eq!(updated_preset.params.order_by.as_deref(), Some("updated_at"));
+        assert_eq!(
+            updated_preset.params.order_by.as_deref(),
+            Some("updated_at")
+        );
 
         let delete_response = delete_query_preset(
             State(state.clone()),
@@ -3001,7 +3490,8 @@ mod tests {
         )
         .await;
         assert_eq!(list_after_delete.status(), StatusCode::OK);
-        let presets_after_delete: QueryPresetsResponse = test_support::response_json(list_after_delete).await;
+        let presets_after_delete: QueryPresetsResponse =
+            test_support::response_json(list_after_delete).await;
         assert!(presets_after_delete.presets.is_empty());
     }
 
@@ -3041,7 +3531,10 @@ mod tests {
         assert_eq!(export_body.table.name, "todos");
         assert_eq!(export_body.rows.len(), 1);
         assert_eq!(export_body.rows[0].id, created_row.id);
-        assert_eq!(export_body.rows[0].data.get("title"), Some(&json!("buy milk")));
+        assert_eq!(
+            export_body.rows[0].data.get("title"),
+            Some(&json!("buy milk"))
+        );
     }
 
     #[tokio::test]
@@ -3093,9 +3586,15 @@ mod tests {
         assert_eq!(rows_response.status(), StatusCode::OK);
         let rows_body: DataRowsResponse = test_support::response_json(rows_response).await;
         assert_eq!(rows_body.rows.len(), 1);
-        assert_eq!(rows_body.rows[0].owner_user_id.as_deref(), Some(admin.user.id.as_str()));
+        assert_eq!(
+            rows_body.rows[0].owner_user_id.as_deref(),
+            Some(admin.user.id.as_str())
+        );
         assert_eq!(rows_body.rows[0].data.get("done"), Some(&json!(false)));
-        assert_eq!(rows_body.rows[0].data.get("title"), Some(&json!("buy milk")));
+        assert_eq!(
+            rows_body.rows[0].data.get("title"),
+            Some(&json!("buy milk"))
+        );
 
         let events_response = list_row_events(
             State(state),
@@ -3242,7 +3741,10 @@ mod tests {
         assert_eq!(table_response.status(), StatusCode::OK);
         let table_body: DataTableResponse = test_support::response_json(table_response).await;
         assert_eq!(table_body.table.display_name, "Restored Todos");
-        assert_eq!(table_body.table.access_policy.mode, POLICY_AUTHENTICATED_SHARED_RW);
+        assert_eq!(
+            table_body.table.access_policy.mode,
+            POLICY_AUTHENTICATED_SHARED_RW
+        );
         assert!(table_body.table.schema.fields.contains_key("priority"));
 
         let rows_response = list_rows(
@@ -3256,7 +3758,10 @@ mod tests {
         let rows_body: DataRowsResponse = test_support::response_json(rows_response).await;
         assert_eq!(rows_body.rows.len(), 1);
         assert_eq!(rows_body.rows[0].data.get("priority"), Some(&json!(1)));
-        assert_eq!(rows_body.rows[0].data.get("title"), Some(&json!("buy milk")));
+        assert_eq!(
+            rows_body.rows[0].data.get("title"),
+            Some(&json!("buy milk"))
+        );
     }
 
     #[tokio::test]

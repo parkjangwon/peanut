@@ -193,18 +193,19 @@ pub async fn list_bucket_objects(
         }
     }
 
-    let decoded_continuation_token = match decode_continuation_token(query.continuation_token.as_deref()) {
-        Ok(value) => value,
-        Err(message) => {
-            return s3_error_response(
-                StatusCode::BAD_REQUEST,
-                "InvalidArgument",
-                &message,
-                &format!("/{bucket}"),
-                None,
-            )
-        }
-    };
+    let decoded_continuation_token =
+        match decode_continuation_token(query.continuation_token.as_deref()) {
+            Ok(value) => value,
+            Err(message) => {
+                return s3_error_response(
+                    StatusCode::BAD_REQUEST,
+                    "InvalidArgument",
+                    &message,
+                    &format!("/{bucket}"),
+                    None,
+                )
+            }
+        };
     let decoded_start_after = match normalize_list_start_after(query.start_after.as_deref()) {
         Ok(value) => value,
         Err(message) => {
@@ -589,7 +590,11 @@ pub async fn put_bucket_object(
                 )
             }
         };
-        return match state.storage.set_object_tagging(&scoped_bucket, &key, tagging).await {
+        return match state
+            .storage
+            .set_object_tagging(&scoped_bucket, &key, tagging)
+            .await
+        {
             Ok(_) => apply_s3_response_headers(Response::builder().status(StatusCode::OK))
                 .body(axum::body::Body::empty())
                 .unwrap(),
@@ -700,7 +705,10 @@ pub async fn put_bucket_object(
                 Some(&key),
             );
         }
-        if headers.keys().any(|name| name.as_str().starts_with("x-amz-copy-source-if-")) {
+        if headers
+            .keys()
+            .any(|name| name.as_str().starts_with("x-amz-copy-source-if-"))
+        {
             return s3_error_response(
                 StatusCode::BAD_REQUEST,
                 "InvalidRequest",
@@ -734,7 +742,11 @@ pub async fn put_bucket_object(
                 Some(&key),
             );
         }
-        return match state.storage.get_object(&source_scoped_bucket, &source_key).await {
+        return match state
+            .storage
+            .get_object(&source_scoped_bucket, &source_key)
+            .await
+        {
             Ok(source_object) => {
                 let request_response_headers = extract_standard_response_headers(&headers);
                 let request_tagging = match extract_object_tagging(&headers) {
@@ -749,7 +761,14 @@ pub async fn put_bucket_object(
                         )
                     }
                 };
-                let (target_content_type, target_custom_metadata, target_response_headers, target_checksum_sha256, target_checksum_sha1, target_tagging) = match metadata_directive {
+                let (
+                    target_content_type,
+                    target_custom_metadata,
+                    target_response_headers,
+                    target_checksum_sha256,
+                    target_checksum_sha1,
+                    target_tagging,
+                ) = match metadata_directive {
                     MetadataDirective::Copy => (
                         source_object.metadata.content_type.clone(),
                         source_object.metadata.custom_metadata.clone(),
@@ -788,13 +807,15 @@ pub async fn put_bucket_object(
                     .await
                 {
                     Ok(metadata) => s3_copy_object_response(&bucket, &key, &metadata),
-                    Err(err) if err.kind() == std::io::ErrorKind::InvalidInput => s3_error_response(
-                        StatusCode::BAD_REQUEST,
-                        "InvalidObjectName",
-                        &err.to_string(),
-                        &format!("/{bucket}/{key}"),
-                        Some(&key),
-                    ),
+                    Err(err) if err.kind() == std::io::ErrorKind::InvalidInput => {
+                        s3_error_response(
+                            StatusCode::BAD_REQUEST,
+                            "InvalidObjectName",
+                            &err.to_string(),
+                            &format!("/{bucket}/{key}"),
+                            Some(&key),
+                        )
+                    }
                     Err(_) => s3_error_response(
                         StatusCode::INTERNAL_SERVER_ERROR,
                         "InternalError",
@@ -839,7 +860,10 @@ pub async fn put_bucket_object(
     }
 
     if let (Some(part_number), Some(upload_id)) = (query.part_number, query.upload_id.as_deref()) {
-        if let Some(copy_source) = headers.get("x-amz-copy-source").and_then(|value| value.to_str().ok()) {
+        if let Some(copy_source) = headers
+            .get("x-amz-copy-source")
+            .and_then(|value| value.to_str().ok())
+        {
             let (source_bucket, source_key) = match parse_copy_source(copy_source) {
                 Ok(value) => value,
                 Err(message) => {
@@ -869,40 +893,55 @@ pub async fn put_bucket_object(
                 }
             };
             let source_scoped_bucket = self::scoped_bucket(&claims.sub, &source_bucket);
-            return match state.storage.get_object(&source_scoped_bucket, &source_key).await {
+            return match state
+                .storage
+                .get_object(&source_scoped_bucket, &source_key)
+                .await
+            {
                 Ok(source_object) => {
-                    let source_bytes = match apply_copy_source_range(&source_object.data, source_range) {
-                        Ok(bytes) => bytes,
-                        Err(message) => {
-                            return s3_error_response(
-                                StatusCode::BAD_REQUEST,
-                                "InvalidRequest",
-                                &message,
-                                &format!("/{source_bucket}/{source_key}"),
-                                Some(&source_key),
-                            )
-                        }
-                    };
+                    let source_bytes =
+                        match apply_copy_source_range(&source_object.data, source_range) {
+                            Ok(bytes) => bytes,
+                            Err(message) => {
+                                return s3_error_response(
+                                    StatusCode::BAD_REQUEST,
+                                    "InvalidRequest",
+                                    &message,
+                                    &format!("/{source_bucket}/{source_key}"),
+                                    Some(&source_key),
+                                )
+                            }
+                        };
                     match state
                         .storage
-                        .put_multipart_part(&scoped_bucket, &key, upload_id, part_number, &source_bytes)
+                        .put_multipart_part(
+                            &scoped_bucket,
+                            &key,
+                            upload_id,
+                            part_number,
+                            &source_bytes,
+                        )
                         .await
                     {
                         Ok(part) => s3_copy_part_response(&part.etag),
-                        Err(err) if err.kind() == std::io::ErrorKind::NotFound => s3_error_response(
-                            StatusCode::NOT_FOUND,
-                            "NoSuchUpload",
-                            "multipart upload not found",
-                            &format!("/{bucket}/{key}"),
-                            Some(&key),
-                        ),
-                        Err(err) if err.kind() == std::io::ErrorKind::InvalidInput => s3_error_response(
-                            StatusCode::BAD_REQUEST,
-                            "InvalidRequest",
-                            &err.to_string(),
-                            &format!("/{bucket}/{key}"),
-                            Some(&key),
-                        ),
+                        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+                            s3_error_response(
+                                StatusCode::NOT_FOUND,
+                                "NoSuchUpload",
+                                "multipart upload not found",
+                                &format!("/{bucket}/{key}"),
+                                Some(&key),
+                            )
+                        }
+                        Err(err) if err.kind() == std::io::ErrorKind::InvalidInput => {
+                            s3_error_response(
+                                StatusCode::BAD_REQUEST,
+                                "InvalidRequest",
+                                &err.to_string(),
+                                &format!("/{bucket}/{key}"),
+                                Some(&key),
+                            )
+                        }
                         Err(_) => s3_error_response(
                             StatusCode::INTERNAL_SERVER_ERROR,
                             "InternalError",
@@ -911,7 +950,7 @@ pub async fn put_bucket_object(
                             Some(&key),
                         ),
                     }
-                },
+                }
                 Err(err) if err.kind() == std::io::ErrorKind::NotFound => s3_error_response(
                     StatusCode::NOT_FOUND,
                     "NoSuchKey",
@@ -1011,7 +1050,11 @@ pub async fn delete_bucket_object(
 ) -> Response {
     let scoped_bucket = scoped_bucket(&claims.sub, &bucket);
     if is_tagging_subresource(raw_query.as_deref()) {
-        return match state.storage.set_object_tagging(&scoped_bucket, &key, None).await {
+        return match state
+            .storage
+            .set_object_tagging(&scoped_bucket, &key, None)
+            .await
+        {
             Ok(_) => StatusCode::NO_CONTENT.into_response(),
             Err(err) if err.kind() == std::io::ErrorKind::NotFound => s3_error_response(
                 StatusCode::NOT_FOUND,
@@ -1154,12 +1197,7 @@ fn build_presigned_url(
     jwt_secret: &str,
 ) -> Result<crate::middleware::s3_auth::PresignResponse, String> {
     crate::middleware::s3_auth::build_presigned_url(
-        base_url,
-        access_key,
-        bucket,
-        key,
-        payload,
-        jwt_secret,
+        base_url, access_key, bucket, key, payload, jwt_secret,
     )
 }
 
@@ -1172,7 +1210,8 @@ fn is_tagging_subresource(raw_query: Option<&str>) -> bool {
 }
 
 fn parse_tagging_xml(body: &[u8]) -> Result<Option<String>, String> {
-    let xml = String::from_utf8(body.to_vec()).map_err(|_| "tagging body must be valid UTF-8".to_string())?;
+    let xml = String::from_utf8(body.to_vec())
+        .map_err(|_| "tagging body must be valid UTF-8".to_string())?;
     if !xml.contains("<Tagging") {
         return Err("missing Tagging root element".to_string());
     }
@@ -1218,7 +1257,11 @@ fn canonicalize_tagging_pairs(pairs: Vec<(String, String)>) -> Result<Option<Str
             "{TAGGING_STORAGE_V2_PREFIX}{}",
             normalized
                 .into_iter()
-                .map(|(key, value)| format!("{}={}", percent_encode_s3(&key), percent_encode_s3(&value)))
+                .map(|(key, value)| format!(
+                    "{}={}",
+                    percent_encode_s3(&key),
+                    percent_encode_s3(&value)
+                ))
                 .collect::<Vec<_>>()
                 .join("&")
         )
@@ -1226,11 +1269,12 @@ fn canonicalize_tagging_pairs(pairs: Vec<(String, String)>) -> Result<Option<Str
 }
 
 fn parse_stored_tagging_pairs(value: &str) -> Vec<(String, String)> {
-    let (stored_value, should_decode) = if let Some(stripped) = value.strip_prefix(TAGGING_STORAGE_V2_PREFIX) {
-        (stripped, true)
-    } else {
-        (value, false)
-    };
+    let (stored_value, should_decode) =
+        if let Some(stripped) = value.strip_prefix(TAGGING_STORAGE_V2_PREFIX) {
+            (stripped, true)
+        } else {
+            (value, false)
+        };
 
     stored_value
         .split('&')
@@ -1248,7 +1292,9 @@ fn parse_stored_tagging_pairs(value: &str) -> Vec<(String, String)> {
         .collect()
 }
 
-fn s3_get_object_tagging_response(metadata: &crate::storage::local::StorageObjectMetadata) -> Response {
+fn s3_get_object_tagging_response(
+    metadata: &crate::storage::local::StorageObjectMetadata,
+) -> Response {
     let mut body = String::from("<?xml version=\"1.0\" encoding=\"UTF-8\"?>");
     body.push_str("<Tagging xmlns=\"http://s3.amazonaws.com/doc/2006-03-01/\"><TagSet>");
     if let Some(tagging) = metadata.tagging.as_deref() {
@@ -1278,7 +1324,11 @@ struct MultipartQuery {
 
 fn parse_multipart_query(raw_query: Option<&str>) -> Result<MultipartQuery, String> {
     let mut query = MultipartQuery::default();
-    for part in raw_query.unwrap_or_default().split('&').filter(|value| !value.is_empty()) {
+    for part in raw_query
+        .unwrap_or_default()
+        .split('&')
+        .filter(|value| !value.is_empty())
+    {
         let (name, value) = part.split_once('=').unwrap_or((part, ""));
         match name {
             "uploads" => query.uploads = true,
@@ -1328,7 +1378,8 @@ fn parse_multipart_query(raw_query: Option<&str>) -> Result<MultipartQuery, Stri
 fn parse_complete_multipart_upload_xml(
     body: &[u8],
 ) -> Result<Vec<crate::storage::local::CompletedMultipartPart>, String> {
-    let xml = String::from_utf8(body.to_vec()).map_err(|_| "multipart completion body must be valid UTF-8".to_string())?;
+    let xml = String::from_utf8(body.to_vec())
+        .map_err(|_| "multipart completion body must be valid UTF-8".to_string())?;
     if !xml.contains("<CompleteMultipartUpload") {
         return Err("missing CompleteMultipartUpload root element".to_string());
     }
@@ -1394,8 +1445,12 @@ fn s3_list_multipart_uploads_response(
     let max_uploads = query.max_uploads.unwrap_or(1000).min(1000);
     let key_marker = normalize_marker_key(query.key_marker.as_deref())?;
     let upload_id_marker = normalize_upload_id_marker(query.upload_id_marker.as_deref())?;
-    let (page, is_truncated, next_key_marker, next_upload_id_marker) =
-        paginate_multipart_uploads(uploads, max_uploads, key_marker.as_deref(), upload_id_marker.as_deref());
+    let (page, is_truncated, next_key_marker, next_upload_id_marker) = paginate_multipart_uploads(
+        uploads,
+        max_uploads,
+        key_marker.as_deref(),
+        upload_id_marker.as_deref(),
+    );
 
     let mut body = String::from("<?xml version=\"1.0\" encoding=\"UTF-8\"?>");
     body.push_str("<ListMultipartUploadsResult xmlns=\"http://s3.amazonaws.com/doc/2006-03-01/\">");
@@ -1421,20 +1476,31 @@ fn s3_list_multipart_uploads_response(
         xml_escape(query.prefix.as_deref().unwrap_or(""))
     ));
     body.push_str(&format!("<MaxUploads>{max_uploads}</MaxUploads>"));
-    body.push_str(&format!("<IsTruncated>{}</IsTruncated>", if is_truncated { "true" } else { "false" }));
+    body.push_str(&format!(
+        "<IsTruncated>{}</IsTruncated>",
+        if is_truncated { "true" } else { "false" }
+    ));
     for upload in page {
         body.push_str("<Upload>");
         body.push_str(&format!("<Key>{}</Key>", xml_escape(&upload.key)));
-        body.push_str(&format!("<UploadId>{}</UploadId>", xml_escape(&upload.upload_id)));
-        body.push_str(&format!("<Initiated>{}</Initiated>", xml_escape(&upload.initiated_at)));
+        body.push_str(&format!(
+            "<UploadId>{}</UploadId>",
+            xml_escape(&upload.upload_id)
+        ));
+        body.push_str(&format!(
+            "<Initiated>{}</Initiated>",
+            xml_escape(&upload.initiated_at)
+        ));
         body.push_str("</Upload>");
     }
     body.push_str("</ListMultipartUploadsResult>");
 
-    Ok(apply_s3_response_headers(Response::builder().status(StatusCode::OK))
-        .header(header::CONTENT_TYPE, "application/xml")
-        .body(axum::body::Body::from(body))
-        .unwrap())
+    Ok(
+        apply_s3_response_headers(Response::builder().status(StatusCode::OK))
+            .header(header::CONTENT_TYPE, "application/xml")
+            .body(axum::body::Body::from(body))
+            .unwrap(),
+    )
 }
 
 fn s3_list_parts_response(
@@ -1454,10 +1520,18 @@ fn s3_list_parts_response(
     body.push_str(&format!("<Bucket>{}</Bucket>", xml_escape(bucket)));
     body.push_str(&format!("<Key>{}</Key>", xml_escape(key)));
     body.push_str(&format!("<UploadId>{}</UploadId>", xml_escape(upload_id)));
-    body.push_str(&format!("<PartNumberMarker>{part_number_marker}</PartNumberMarker>"));
-    body.push_str(&format!("<NextPartNumberMarker>{}</NextPartNumberMarker>", next_part_number_marker.unwrap_or(0)));
+    body.push_str(&format!(
+        "<PartNumberMarker>{part_number_marker}</PartNumberMarker>"
+    ));
+    body.push_str(&format!(
+        "<NextPartNumberMarker>{}</NextPartNumberMarker>",
+        next_part_number_marker.unwrap_or(0)
+    ));
     body.push_str(&format!("<MaxParts>{max_parts}</MaxParts>"));
-    body.push_str(&format!("<IsTruncated>{}</IsTruncated>", if is_truncated { "true" } else { "false" }));
+    body.push_str(&format!(
+        "<IsTruncated>{}</IsTruncated>",
+        if is_truncated { "true" } else { "false" }
+    ));
     for part in page {
         body.push_str("<Part>");
         body.push_str(&format!("<PartNumber>{}</PartNumber>", part.part_number));
@@ -1467,10 +1541,12 @@ fn s3_list_parts_response(
     }
     body.push_str("</ListPartsResult>");
 
-    Ok(apply_s3_response_headers(Response::builder().status(StatusCode::OK))
-        .header(header::CONTENT_TYPE, "application/xml")
-        .body(axum::body::Body::from(body))
-        .unwrap())
+    Ok(
+        apply_s3_response_headers(Response::builder().status(StatusCode::OK))
+            .header(header::CONTENT_TYPE, "application/xml")
+            .body(axum::body::Body::from(body))
+            .unwrap(),
+    )
 }
 
 fn s3_copy_part_response(etag: &str) -> Response {
@@ -1635,11 +1711,15 @@ fn paginate_multipart_uploads<'a>(
     (page, is_truncated, next_key_marker, next_upload_id_marker)
 }
 
-fn paginate_multipart_parts<'a>(
-    parts: &'a [crate::storage::local::MultipartUploadPart],
+fn paginate_multipart_parts(
+    parts: &[crate::storage::local::MultipartUploadPart],
     max_parts: usize,
     part_number_marker: u32,
-) -> (Vec<&'a crate::storage::local::MultipartUploadPart>, bool, Option<u32>) {
+) -> (
+    Vec<&crate::storage::local::MultipartUploadPart>,
+    bool,
+    Option<u32>,
+) {
     let filtered = parts
         .iter()
         .filter(|part| part.part_number > part_number_marker)
@@ -1669,14 +1749,11 @@ fn decode_continuation_token(token: Option<&str>) -> Result<Option<String>, Stri
     let decoded = URL_SAFE_NO_PAD
         .decode(token)
         .map_err(|_| "invalid continuation-token".to_string())?;
-    let decoded = String::from_utf8(decoded).map_err(|_| "invalid continuation-token".to_string())?;
-    let normalized = std::path::Path::new(
-        decoded
-            .trim()
-            .trim_start_matches('/'),
-    )
-    .to_string_lossy()
-    .replace('\\', "/");
+    let decoded =
+        String::from_utf8(decoded).map_err(|_| "invalid continuation-token".to_string())?;
+    let normalized = std::path::Path::new(decoded.trim().trim_start_matches('/'))
+        .to_string_lossy()
+        .replace('\\', "/");
     if normalized.trim().is_empty() || normalized.contains("..") {
         return Err("invalid continuation-token".to_string());
     }
@@ -1721,8 +1798,8 @@ fn percent_decode(value: &str) -> Result<String, String> {
             }
             let hex = std::str::from_utf8(&bytes[i + 1..i + 3])
                 .map_err(|_| "invalid percent encoding".to_string())?;
-            let value = u8::from_str_radix(hex, 16)
-                .map_err(|_| "invalid percent encoding".to_string())?;
+            let value =
+                u8::from_str_radix(hex, 16).map_err(|_| "invalid percent encoding".to_string())?;
             out.push(value);
             i += 3;
         } else {
@@ -1737,7 +1814,9 @@ fn percent_encode_s3(value: &str) -> String {
     let mut encoded = String::new();
     for byte in value.as_bytes() {
         match byte {
-            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => encoded.push(*byte as char),
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                encoded.push(*byte as char)
+            }
             _ => encoded.push_str(&format!("%{:02X}", byte)),
         }
     }
@@ -1849,13 +1928,19 @@ fn extract_object_tagging(headers: &HeaderMap) -> Result<Option<String>, String>
 }
 
 fn tagging_count(value: Option<&str>) -> usize {
-    value.map(parse_stored_tagging_pairs).map(|pairs| pairs.len()).unwrap_or(0)
+    value
+        .map(parse_stored_tagging_pairs)
+        .map(|pairs| pairs.len())
+        .unwrap_or(0)
 }
 
 fn extract_standard_response_headers(
     headers: &HeaderMap,
 ) -> crate::storage::local::StorageObjectResponseHeaders {
-    fn optional_header(headers: &HeaderMap, name: axum::http::header::HeaderName) -> Option<String> {
+    fn optional_header(
+        headers: &HeaderMap,
+        name: axum::http::header::HeaderName,
+    ) -> Option<String> {
         headers
             .get(name)
             .and_then(|value| value.to_str().ok())
@@ -1942,7 +2027,10 @@ fn s3_error_response(
         body.push_str(&format!("<Key>{}</Key>", xml_escape(key)));
     }
     body.push_str(&format!("<Resource>{}</Resource>", xml_escape(resource)));
-    body.push_str(&format!("<RequestId>{}</RequestId>", xml_escape(&request_id)));
+    body.push_str(&format!(
+        "<RequestId>{}</RequestId>",
+        xml_escape(&request_id)
+    ));
     body.push_str("</Error>");
 
     apply_s3_response_headers(Response::builder().status(status))
@@ -2006,7 +2094,8 @@ fn build_ranged_object_response(
     end: usize,
 ) -> Response {
     let chunk = data[start..=end].to_vec();
-    let mut response = apply_s3_response_headers(Response::builder().status(StatusCode::PARTIAL_CONTENT));
+    let mut response =
+        apply_s3_response_headers(Response::builder().status(StatusCode::PARTIAL_CONTENT));
     response = response.header(header::CONTENT_TYPE, metadata.content_type.as_str());
     response = response.header(header::CONTENT_LENGTH, chunk.len().to_string());
     response = response.header(
@@ -2034,13 +2123,19 @@ fn s3_list_xml_response(
     owner_id: Option<&str>,
 ) -> Response {
     let key_count = page.objects.len() + page.common_prefixes.len();
-    let encoding_type = query.encoding_type.as_deref().filter(|value| value.eq_ignore_ascii_case("url"));
+    let encoding_type = query
+        .encoding_type
+        .as_deref()
+        .filter(|value| value.eq_ignore_ascii_case("url"));
     let mut body = String::from("<?xml version=\"1.0\" encoding=\"UTF-8\"?>");
     body.push_str("<ListBucketResult xmlns=\"http://s3.amazonaws.com/doc/2006-03-01/\">");
     body.push_str(&format!("<Name>{}</Name>", xml_escape(bucket)));
     body.push_str(&format!(
         "<Prefix>{}</Prefix>",
-        xml_escape(&encode_for_list_xml(query.prefix.as_deref().unwrap_or(""), encoding_type))
+        xml_escape(&encode_for_list_xml(
+            query.prefix.as_deref().unwrap_or(""),
+            encoding_type
+        ))
     ));
     if let Some(delimiter) = query.delimiter.as_deref() {
         body.push_str(&format!(
@@ -2055,7 +2150,10 @@ fn s3_list_xml_response(
         ));
     }
     if let Some(value) = encoding_type {
-        body.push_str(&format!("<EncodingType>{}</EncodingType>", xml_escape(value)));
+        body.push_str(&format!(
+            "<EncodingType>{}</EncodingType>",
+            xml_escape(value)
+        ));
     }
     let fetch_owner = query.fetch_owner.unwrap_or(false);
     if fetch_owner {
@@ -2071,7 +2169,10 @@ fn s3_list_xml_response(
         if page.is_truncated { "true" } else { "false" }
     ));
     if let Some(token) = query.continuation_token.as_deref() {
-        body.push_str(&format!("<ContinuationToken>{}</ContinuationToken>", xml_escape(token)));
+        body.push_str(&format!(
+            "<ContinuationToken>{}</ContinuationToken>",
+            xml_escape(token)
+        ));
     }
     if let Some(token) = page.next_continuation_token.as_deref() {
         body.push_str(&format!(
@@ -2171,7 +2272,9 @@ fn etag_matches(value: &str, etag: &str) -> bool {
         .any(|candidate| candidate == "*" || candidate.trim_matches('"') == etag)
 }
 
-fn parse_http_date(value: Option<&axum::http::HeaderValue>) -> Option<chrono::DateTime<chrono::Utc>> {
+fn parse_http_date(
+    value: Option<&axum::http::HeaderValue>,
+) -> Option<chrono::DateTime<chrono::Utc>> {
     value
         .and_then(|value| value.to_str().ok())
         .and_then(|value| chrono::DateTime::parse_from_rfc2822(value).ok())
@@ -2199,25 +2302,41 @@ fn evaluate_read_preconditions(
         .ok()?
         .with_timezone(&chrono::Utc);
 
-    let if_match = headers.get(header::IF_MATCH).and_then(|value| value.to_str().ok());
+    let if_match = headers
+        .get(header::IF_MATCH)
+        .and_then(|value| value.to_str().ok());
     if let Some(value) = if_match {
         if !etag_matches(value, metadata.etag.as_str()) {
-            return Some(build_conditional_response(StatusCode::PRECONDITION_FAILED, metadata));
+            return Some(build_conditional_response(
+                StatusCode::PRECONDITION_FAILED,
+                metadata,
+            ));
         }
     } else if let Some(value) = parse_http_date(headers.get(header::IF_UNMODIFIED_SINCE)) {
         if updated_at.timestamp() > value.timestamp() {
-            return Some(build_conditional_response(StatusCode::PRECONDITION_FAILED, metadata));
+            return Some(build_conditional_response(
+                StatusCode::PRECONDITION_FAILED,
+                metadata,
+            ));
         }
     }
 
-    let if_none_match = headers.get(header::IF_NONE_MATCH).and_then(|value| value.to_str().ok());
+    let if_none_match = headers
+        .get(header::IF_NONE_MATCH)
+        .and_then(|value| value.to_str().ok());
     if let Some(value) = if_none_match {
         if etag_matches(value, metadata.etag.as_str()) {
-            return Some(build_conditional_response(StatusCode::NOT_MODIFIED, metadata));
+            return Some(build_conditional_response(
+                StatusCode::NOT_MODIFIED,
+                metadata,
+            ));
         }
     } else if let Some(value) = parse_http_date(headers.get(header::IF_MODIFIED_SINCE)) {
         if updated_at.timestamp() <= value.timestamp() {
-            return Some(build_conditional_response(StatusCode::NOT_MODIFIED, metadata));
+            return Some(build_conditional_response(
+                StatusCode::NOT_MODIFIED,
+                metadata,
+            ));
         }
     }
 
@@ -2586,16 +2705,17 @@ mod tests {
         .unwrap();
 
         let app = axum::Router::new()
-            .route("/api/s3/:bucket/*key", axum::routing::get(get_bucket_object))
+            .route(
+                "/api/s3/:bucket/*key",
+                axum::routing::get(get_bucket_object),
+            )
             .layer(axum::middleware::from_fn_with_state(
                 state.clone(),
                 crate::middleware::s3_auth::s3_auth_middleware,
             ))
             .with_state(state);
 
-        let uri = generated
-            .url
-            .replace("https://example.com", "");
+        let uri = generated.url.replace("https://example.com", "");
         let response = tower::ServiceExt::oneshot(
             app,
             axum::http::Request::builder()
@@ -2644,7 +2764,10 @@ mod tests {
         .unwrap();
 
         let app = axum::Router::new()
-            .route("/api/s3/:bucket/*key", axum::routing::head(head_bucket_object))
+            .route(
+                "/api/s3/:bucket/*key",
+                axum::routing::head(head_bucket_object),
+            )
             .layer(axum::middleware::from_fn_with_state(
                 state.clone(),
                 crate::middleware::s3_auth::s3_auth_middleware,
@@ -2663,7 +2786,10 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(response.status(), StatusCode::OK);
-        assert_eq!(response.headers().get(header::CONTENT_LENGTH).unwrap(), "20");
+        assert_eq!(
+            response.headers().get(header::CONTENT_LENGTH).unwrap(),
+            "20"
+        );
     }
 
     #[tokio::test]
@@ -2775,7 +2901,10 @@ mod tests {
         let put_object_response = put_bucket_object(
             State(state.clone()),
             Extension(claims),
-            axum::extract::Path(("assets".to_string(), "notes/presigned-tagging.txt".to_string())),
+            axum::extract::Path((
+                "assets".to_string(),
+                "notes/presigned-tagging.txt".to_string(),
+            )),
             RawQuery(None),
             HeaderMap::new(),
             Bytes::from("hello presigned tagging"),
@@ -2867,7 +2996,10 @@ mod tests {
         let put_object_response = put_bucket_object(
             State(state.clone()),
             Extension(claims.clone()),
-            axum::extract::Path(("assets".to_string(), "notes/presigned-tagging-delete.txt".to_string())),
+            axum::extract::Path((
+                "assets".to_string(),
+                "notes/presigned-tagging-delete.txt".to_string(),
+            )),
             RawQuery(None),
             HeaderMap::new(),
             Bytes::from("hello presigned tagging delete"),
@@ -3038,7 +3170,13 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(upload_part_response.status(), StatusCode::OK);
-        let part_etag = upload_part_response.headers().get(header::ETAG).unwrap().to_str().unwrap().to_string();
+        let part_etag = upload_part_response
+            .headers()
+            .get(header::ETAG)
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .to_string();
 
         let list_parts_request = crate::middleware::s3_auth::PresignRequest {
             method: "GET".to_string(),
@@ -3156,7 +3294,10 @@ mod tests {
         .unwrap();
 
         let put_app = axum::Router::new()
-            .route("/api/s3/:bucket/*key", axum::routing::put(put_bucket_object))
+            .route(
+                "/api/s3/:bucket/*key",
+                axum::routing::put(put_bucket_object),
+            )
             .layer(axum::middleware::from_fn_with_state(
                 state.clone(),
                 crate::middleware::s3_auth::s3_auth_middleware,
@@ -3177,7 +3318,10 @@ mod tests {
         assert_eq!(put_response.status(), StatusCode::OK);
 
         let get_app = axum::Router::new()
-            .route("/api/s3/:bucket/*key", axum::routing::get(get_bucket_object))
+            .route(
+                "/api/s3/:bucket/*key",
+                axum::routing::get(get_bucket_object),
+            )
             .layer(axum::middleware::from_fn_with_state(
                 state.clone(),
                 crate::middleware::s3_auth::s3_auth_middleware,
@@ -3236,7 +3380,10 @@ mod tests {
         .unwrap();
 
         let app = axum::Router::new()
-            .route("/api/s3/:bucket/*key", axum::routing::get(get_bucket_object))
+            .route(
+                "/api/s3/:bucket/*key",
+                axum::routing::get(get_bucket_object),
+            )
             .layer(axum::middleware::from_fn_with_state(
                 state.clone(),
                 crate::middleware::s3_auth::s3_auth_middleware,
@@ -3287,7 +3434,10 @@ mod tests {
         .unwrap();
 
         let app = axum::Router::new()
-            .route("/api/s3/:bucket/*key", axum::routing::get(get_bucket_object))
+            .route(
+                "/api/s3/:bucket/*key",
+                axum::routing::get(get_bucket_object),
+            )
             .layer(axum::middleware::from_fn_with_state(
                 state.clone(),
                 crate::middleware::s3_auth::s3_auth_middleware,
@@ -3324,7 +3474,10 @@ mod tests {
         )
         .unwrap();
         let put_app = axum::Router::new()
-            .route("/api/s3/:bucket/*key", axum::routing::put(put_bucket_object))
+            .route(
+                "/api/s3/:bucket/*key",
+                axum::routing::put(put_bucket_object),
+            )
             .layer(axum::middleware::from_fn_with_state(
                 state.clone(),
                 crate::middleware::s3_auth::s3_auth_middleware,
@@ -3355,7 +3508,10 @@ mod tests {
         )
         .unwrap();
         let head_app = axum::Router::new()
-            .route("/api/s3/:bucket/*key", axum::routing::head(head_bucket_object))
+            .route(
+                "/api/s3/:bucket/*key",
+                axum::routing::head(head_bucket_object),
+            )
             .layer(axum::middleware::from_fn_with_state(
                 state.clone(),
                 crate::middleware::s3_auth::s3_auth_middleware,
@@ -3386,7 +3542,10 @@ mod tests {
         )
         .unwrap();
         let delete_app = axum::Router::new()
-            .route("/api/s3/:bucket/*key", axum::routing::delete(delete_bucket_object))
+            .route(
+                "/api/s3/:bucket/*key",
+                axum::routing::delete(delete_bucket_object),
+            )
             .layer(axum::middleware::from_fn_with_state(
                 state.clone(),
                 crate::middleware::s3_auth::s3_auth_middleware,
@@ -3422,10 +3581,15 @@ mod tests {
             None,
         )
         .unwrap();
-        let bad_auth = signed.authorization.replacen("Signature=", "Signature=deadbeef", 1);
+        let bad_auth = signed
+            .authorization
+            .replacen("Signature=", "Signature=deadbeef", 1);
 
         let app = axum::Router::new()
-            .route("/api/s3/:bucket/*key", axum::routing::get(get_bucket_object))
+            .route(
+                "/api/s3/:bucket/*key",
+                axum::routing::get(get_bucket_object),
+            )
             .layer(axum::middleware::from_fn_with_state(
                 state.clone(),
                 crate::middleware::s3_auth::s3_auth_middleware,
@@ -3523,7 +3687,13 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(part_one.status(), StatusCode::OK);
-        let part_one_etag = part_one.headers().get(header::ETAG).unwrap().to_str().unwrap().to_string();
+        let part_one_etag = part_one
+            .headers()
+            .get(header::ETAG)
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .to_string();
 
         let signed_part_two = crate::middleware::s3_auth::build_signed_header_auth(
             "PUT",
@@ -3552,7 +3722,13 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(part_two.status(), StatusCode::OK);
-        let part_two_etag = part_two.headers().get(header::ETAG).unwrap().to_str().unwrap().to_string();
+        let part_two_etag = part_two
+            .headers()
+            .get(header::ETAG)
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .to_string();
 
         let complete_body = format!(
             "<CompleteMultipartUpload><Part><PartNumber>1</PartNumber><ETag>{part_one_etag}</ETag></Part><Part><PartNumber>2</PartNumber><ETag>{part_two_etag}</ETag></Part></CompleteMultipartUpload>"
@@ -3569,7 +3745,9 @@ mod tests {
             app.clone(),
             axum::http::Request::builder()
                 .method("POST")
-                .uri(format!("/api/s3/assets/videos/movie.txt?uploadId={upload_id}"))
+                .uri(format!(
+                    "/api/s3/assets/videos/movie.txt?uploadId={upload_id}"
+                ))
                 .header("host", "example.com")
                 .header("authorization", complete_signed.authorization)
                 .header("x-amz-date", complete_signed.amz_date)
@@ -3608,7 +3786,10 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(get_response.status(), StatusCode::OK);
-        assert_eq!(get_response.headers().get(header::ETAG).unwrap(), complete_etag.as_str());
+        assert_eq!(
+            get_response.headers().get(header::ETAG).unwrap(),
+            complete_etag.as_str()
+        );
         let object_body = response_text(get_response).await;
         assert_eq!(object_body, format!("{part_one_body}{part_two_body}"));
 
@@ -3635,7 +3816,10 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(head_response.status(), StatusCode::OK);
-        assert_eq!(head_response.headers().get(header::ETAG).unwrap(), complete_etag.as_str());
+        assert_eq!(
+            head_response.headers().get(header::ETAG).unwrap(),
+            complete_etag.as_str()
+        );
     }
 
     #[tokio::test]
@@ -3693,7 +3877,9 @@ mod tests {
             app.clone(),
             axum::http::Request::builder()
                 .method("DELETE")
-                .uri(format!("/api/s3/assets/videos/abort.txt?uploadId={upload_id}"))
+                .uri(format!(
+                    "/api/s3/assets/videos/abort.txt?uploadId={upload_id}"
+                ))
                 .header("host", "example.com")
                 .header("authorization", abort_signed.authorization)
                 .header("x-amz-date", abort_signed.amz_date)
@@ -3818,7 +4004,9 @@ mod tests {
         let list_response = tower::ServiceExt::oneshot(
             app,
             axum::http::Request::builder()
-                .uri(format!("/api/s3/assets/videos/parts.txt?uploadId={upload_id}"))
+                .uri(format!(
+                    "/api/s3/assets/videos/parts.txt?uploadId={upload_id}"
+                ))
                 .header("host", "example.com")
                 .header("authorization", list_signed.authorization)
                 .header("x-amz-date", list_signed.amz_date)
@@ -3904,7 +4092,9 @@ mod tests {
 
         let copy_part_signed = crate::middleware::s3_auth::build_signed_header_auth(
             "PUT",
-            &format!("https://example.com/api/s3/assets/copied.txt?partNumber=1&uploadId={upload_id}"),
+            &format!(
+                "https://example.com/api/s3/assets/copied.txt?partNumber=1&uploadId={upload_id}"
+            ),
             &user.user.id,
             state.jwt_secret.as_str(),
             None,
@@ -3914,7 +4104,9 @@ mod tests {
             app.clone(),
             axum::http::Request::builder()
                 .method("PUT")
-                .uri(format!("/api/s3/assets/copied.txt?partNumber=1&uploadId={upload_id}"))
+                .uri(format!(
+                    "/api/s3/assets/copied.txt?partNumber=1&uploadId={upload_id}"
+                ))
                 .header("host", "example.com")
                 .header("authorization", copy_part_signed.authorization)
                 .header("x-amz-date", copy_part_signed.amz_date)
@@ -4046,8 +4238,14 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(get_response.status(), StatusCode::PARTIAL_CONTENT);
-        assert_eq!(get_response.headers().get(header::CONTENT_RANGE).unwrap(), "bytes 6-10/17");
-        assert_eq!(get_response.headers().get(header::CONTENT_LENGTH).unwrap(), "5");
+        assert_eq!(
+            get_response.headers().get(header::CONTENT_RANGE).unwrap(),
+            "bytes 6-10/17"
+        );
+        assert_eq!(
+            get_response.headers().get(header::CONTENT_LENGTH).unwrap(),
+            "5"
+        );
         assert_eq!(response_text(get_response).await, "range");
     }
 
@@ -4176,7 +4374,13 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(put_response.status(), StatusCode::OK);
-        let etag = put_response.headers().get(header::ETAG).unwrap().to_str().unwrap().to_string();
+        let etag = put_response
+            .headers()
+            .get(header::ETAG)
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .to_string();
         let last_modified = put_response
             .headers()
             .get(header::LAST_MODIFIED)
@@ -4224,7 +4428,10 @@ mod tests {
         )
         .await
         .unwrap();
-        assert_eq!(match_fail_response.status(), StatusCode::PRECONDITION_FAILED);
+        assert_eq!(
+            match_fail_response.status(),
+            StatusCode::PRECONDITION_FAILED
+        );
 
         let modified_since_response = tower::ServiceExt::oneshot(
             app.clone(),
@@ -4261,7 +4468,10 @@ mod tests {
         )
         .await
         .unwrap();
-        assert_eq!(unmodified_since_response.status(), StatusCode::PRECONDITION_FAILED);
+        assert_eq!(
+            unmodified_since_response.status(),
+            StatusCode::PRECONDITION_FAILED
+        );
     }
 
     #[tokio::test]
@@ -4305,7 +4515,13 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(put_response.status(), StatusCode::OK);
-        let etag = put_response.headers().get(header::ETAG).unwrap().to_str().unwrap().to_string();
+        let etag = put_response
+            .headers()
+            .get(header::ETAG)
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .to_string();
         let last_modified = put_response
             .headers()
             .get(header::LAST_MODIFIED)
@@ -4355,7 +4571,10 @@ mod tests {
         )
         .await
         .unwrap();
-        assert_eq!(match_fail_response.status(), StatusCode::PRECONDITION_FAILED);
+        assert_eq!(
+            match_fail_response.status(),
+            StatusCode::PRECONDITION_FAILED
+        );
 
         let modified_since_response = tower::ServiceExt::oneshot(
             app.clone(),
@@ -4394,7 +4613,10 @@ mod tests {
         )
         .await
         .unwrap();
-        assert_eq!(unmodified_since_response.status(), StatusCode::PRECONDITION_FAILED);
+        assert_eq!(
+            unmodified_since_response.status(),
+            StatusCode::PRECONDITION_FAILED
+        );
     }
 
     #[tokio::test]
@@ -4461,7 +4683,10 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(open_ended.status(), StatusCode::PARTIAL_CONTENT);
-        assert_eq!(open_ended.headers().get(header::CONTENT_RANGE).unwrap(), "bytes 6-16/17");
+        assert_eq!(
+            open_ended.headers().get(header::CONTENT_RANGE).unwrap(),
+            "bytes 6-16/17"
+        );
         assert_eq!(response_text(open_ended).await, "range edges");
 
         let suffix = tower::ServiceExt::oneshot(
@@ -4479,7 +4704,10 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(suffix.status(), StatusCode::PARTIAL_CONTENT);
-        assert_eq!(suffix.headers().get(header::CONTENT_RANGE).unwrap(), "bytes 12-16/17");
+        assert_eq!(
+            suffix.headers().get(header::CONTENT_RANGE).unwrap(),
+            "bytes 12-16/17"
+        );
         assert_eq!(response_text(suffix).await, "edges");
 
         let zero_suffix = tower::ServiceExt::oneshot(
@@ -4507,11 +4735,20 @@ mod tests {
 
         let mut headers = HeaderMap::new();
         headers.insert(header::CONTENT_TYPE, HeaderValue::from_static("text/plain"));
-        headers.insert(header::CACHE_CONTROL, HeaderValue::from_static("public, max-age=60"));
-        headers.insert(header::CONTENT_DISPOSITION, HeaderValue::from_static("inline; filename=demo.txt"));
+        headers.insert(
+            header::CACHE_CONTROL,
+            HeaderValue::from_static("public, max-age=60"),
+        );
+        headers.insert(
+            header::CONTENT_DISPOSITION,
+            HeaderValue::from_static("inline; filename=demo.txt"),
+        );
         headers.insert(header::CONTENT_ENCODING, HeaderValue::from_static("gzip"));
         headers.insert(header::CONTENT_LANGUAGE, HeaderValue::from_static("ko-KR"));
-        headers.insert(header::EXPIRES, HeaderValue::from_static("Wed, 21 Oct 2026 07:28:00 +0000"));
+        headers.insert(
+            header::EXPIRES,
+            HeaderValue::from_static("Wed, 21 Oct 2026 07:28:00 +0000"),
+        );
 
         let put_response = put_bucket_object(
             State(state.clone()),
@@ -4523,11 +4760,35 @@ mod tests {
         )
         .await;
         assert_eq!(put_response.status(), StatusCode::OK);
-        assert_eq!(put_response.headers().get(header::CACHE_CONTROL).unwrap(), "public, max-age=60");
-        assert_eq!(put_response.headers().get(header::CONTENT_DISPOSITION).unwrap(), "inline; filename=demo.txt");
-        assert_eq!(put_response.headers().get(header::CONTENT_ENCODING).unwrap(), "gzip");
-        assert_eq!(put_response.headers().get(header::CONTENT_LANGUAGE).unwrap(), "ko-KR");
-        assert_eq!(put_response.headers().get(header::EXPIRES).unwrap(), "Wed, 21 Oct 2026 07:28:00 +0000");
+        assert_eq!(
+            put_response.headers().get(header::CACHE_CONTROL).unwrap(),
+            "public, max-age=60"
+        );
+        assert_eq!(
+            put_response
+                .headers()
+                .get(header::CONTENT_DISPOSITION)
+                .unwrap(),
+            "inline; filename=demo.txt"
+        );
+        assert_eq!(
+            put_response
+                .headers()
+                .get(header::CONTENT_ENCODING)
+                .unwrap(),
+            "gzip"
+        );
+        assert_eq!(
+            put_response
+                .headers()
+                .get(header::CONTENT_LANGUAGE)
+                .unwrap(),
+            "ko-KR"
+        );
+        assert_eq!(
+            put_response.headers().get(header::EXPIRES).unwrap(),
+            "Wed, 21 Oct 2026 07:28:00 +0000"
+        );
 
         let head_response = head_bucket_object(
             State(state.clone()),
@@ -4538,11 +4799,35 @@ mod tests {
         )
         .await;
         assert_eq!(head_response.status(), StatusCode::OK);
-        assert_eq!(head_response.headers().get(header::CACHE_CONTROL).unwrap(), "public, max-age=60");
-        assert_eq!(head_response.headers().get(header::CONTENT_DISPOSITION).unwrap(), "inline; filename=demo.txt");
-        assert_eq!(head_response.headers().get(header::CONTENT_ENCODING).unwrap(), "gzip");
-        assert_eq!(head_response.headers().get(header::CONTENT_LANGUAGE).unwrap(), "ko-KR");
-        assert_eq!(head_response.headers().get(header::EXPIRES).unwrap(), "Wed, 21 Oct 2026 07:28:00 +0000");
+        assert_eq!(
+            head_response.headers().get(header::CACHE_CONTROL).unwrap(),
+            "public, max-age=60"
+        );
+        assert_eq!(
+            head_response
+                .headers()
+                .get(header::CONTENT_DISPOSITION)
+                .unwrap(),
+            "inline; filename=demo.txt"
+        );
+        assert_eq!(
+            head_response
+                .headers()
+                .get(header::CONTENT_ENCODING)
+                .unwrap(),
+            "gzip"
+        );
+        assert_eq!(
+            head_response
+                .headers()
+                .get(header::CONTENT_LANGUAGE)
+                .unwrap(),
+            "ko-KR"
+        );
+        assert_eq!(
+            head_response.headers().get(header::EXPIRES).unwrap(),
+            "Wed, 21 Oct 2026 07:28:00 +0000"
+        );
 
         let get_response = get_bucket_object(
             State(state),
@@ -4553,11 +4838,35 @@ mod tests {
         )
         .await;
         assert_eq!(get_response.status(), StatusCode::OK);
-        assert_eq!(get_response.headers().get(header::CACHE_CONTROL).unwrap(), "public, max-age=60");
-        assert_eq!(get_response.headers().get(header::CONTENT_DISPOSITION).unwrap(), "inline; filename=demo.txt");
-        assert_eq!(get_response.headers().get(header::CONTENT_ENCODING).unwrap(), "gzip");
-        assert_eq!(get_response.headers().get(header::CONTENT_LANGUAGE).unwrap(), "ko-KR");
-        assert_eq!(get_response.headers().get(header::EXPIRES).unwrap(), "Wed, 21 Oct 2026 07:28:00 +0000");
+        assert_eq!(
+            get_response.headers().get(header::CACHE_CONTROL).unwrap(),
+            "public, max-age=60"
+        );
+        assert_eq!(
+            get_response
+                .headers()
+                .get(header::CONTENT_DISPOSITION)
+                .unwrap(),
+            "inline; filename=demo.txt"
+        );
+        assert_eq!(
+            get_response
+                .headers()
+                .get(header::CONTENT_ENCODING)
+                .unwrap(),
+            "gzip"
+        );
+        assert_eq!(
+            get_response
+                .headers()
+                .get(header::CONTENT_LANGUAGE)
+                .unwrap(),
+            "ko-KR"
+        );
+        assert_eq!(
+            get_response.headers().get(header::EXPIRES).unwrap(),
+            "Wed, 21 Oct 2026 07:28:00 +0000"
+        );
     }
 
     #[tokio::test]
@@ -4567,7 +4876,10 @@ mod tests {
 
         let app = axum::Router::new()
             .route("/api/s3/:bucket", axum::routing::get(list_bucket_objects))
-            .route("/api/s3/:bucket/*key", axum::routing::put(put_bucket_object))
+            .route(
+                "/api/s3/:bucket/*key",
+                axum::routing::put(put_bucket_object),
+            )
             .layer(axum::middleware::from_fn_with_state(
                 state.clone(),
                 crate::middleware::s3_auth::s3_auth_middleware,
@@ -4672,9 +4984,20 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(put_response.status(), StatusCode::OK);
-        let etag = put_response.headers().get(header::ETAG).unwrap().to_str().unwrap().to_string();
+        let etag = put_response
+            .headers()
+            .get(header::ETAG)
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .to_string();
         let last_modified = chrono::DateTime::parse_from_rfc2822(
-            put_response.headers().get(header::LAST_MODIFIED).unwrap().to_str().unwrap(),
+            put_response
+                .headers()
+                .get(header::LAST_MODIFIED)
+                .unwrap()
+                .to_str()
+                .unwrap(),
         )
         .unwrap();
         let stale = last_modified
@@ -4852,10 +5175,31 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(head_response.status(), StatusCode::OK);
-        assert_eq!(head_response.headers().get(header::CACHE_CONTROL).unwrap(), "public, max-age=120");
-        assert_eq!(head_response.headers().get(header::CONTENT_LANGUAGE).unwrap(), "en-US");
-        assert_eq!(head_response.headers().get(header::CONTENT_ENCODING).unwrap(), "gzip");
-        assert_eq!(head_response.headers().get(header::CONTENT_DISPOSITION).unwrap(), "attachment; filename=copy.txt");
+        assert_eq!(
+            head_response.headers().get(header::CACHE_CONTROL).unwrap(),
+            "public, max-age=120"
+        );
+        assert_eq!(
+            head_response
+                .headers()
+                .get(header::CONTENT_LANGUAGE)
+                .unwrap(),
+            "en-US"
+        );
+        assert_eq!(
+            head_response
+                .headers()
+                .get(header::CONTENT_ENCODING)
+                .unwrap(),
+            "gzip"
+        );
+        assert_eq!(
+            head_response
+                .headers()
+                .get(header::CONTENT_DISPOSITION)
+                .unwrap(),
+            "attachment; filename=copy.txt"
+        );
     }
 
     #[tokio::test]
@@ -4936,7 +5280,10 @@ mod tests {
 
         let app = axum::Router::new()
             .route("/api/s3/:bucket", axum::routing::get(list_bucket_objects))
-            .route("/api/s3/:bucket/*key", axum::routing::put(put_bucket_object))
+            .route(
+                "/api/s3/:bucket/*key",
+                axum::routing::put(put_bucket_object),
+            )
             .layer(axum::middleware::from_fn_with_state(
                 state.clone(),
                 crate::middleware::s3_auth::s3_auth_middleware,
@@ -5188,8 +5535,14 @@ mod tests {
         let checksum = compute_sha256_hex(body.as_bytes());
 
         let mut headers = HeaderMap::new();
-        headers.insert("x-amz-checksum-sha256", HeaderValue::from_str(&checksum).unwrap());
-        headers.insert("x-amz-tagging", HeaderValue::from_static("color=blue&team=peanut"));
+        headers.insert(
+            "x-amz-checksum-sha256",
+            HeaderValue::from_str(&checksum).unwrap(),
+        );
+        headers.insert(
+            "x-amz-tagging",
+            HeaderValue::from_static("color=blue&team=peanut"),
+        );
 
         let put_response = put_bucket_object(
             State(state.clone()),
@@ -5201,8 +5554,14 @@ mod tests {
         )
         .await;
         assert_eq!(put_response.status(), StatusCode::OK);
-        assert_eq!(put_response.headers().get("x-amz-checksum-sha256").unwrap(), checksum.as_str());
-        assert_eq!(put_response.headers().get("x-amz-tagging-count").unwrap(), "2");
+        assert_eq!(
+            put_response.headers().get("x-amz-checksum-sha256").unwrap(),
+            checksum.as_str()
+        );
+        assert_eq!(
+            put_response.headers().get("x-amz-tagging-count").unwrap(),
+            "2"
+        );
 
         let head_response = head_bucket_object(
             State(state.clone()),
@@ -5213,8 +5572,17 @@ mod tests {
         )
         .await;
         assert_eq!(head_response.status(), StatusCode::OK);
-        assert_eq!(head_response.headers().get("x-amz-checksum-sha256").unwrap(), checksum.as_str());
-        assert_eq!(head_response.headers().get("x-amz-tagging-count").unwrap(), "2");
+        assert_eq!(
+            head_response
+                .headers()
+                .get("x-amz-checksum-sha256")
+                .unwrap(),
+            checksum.as_str()
+        );
+        assert_eq!(
+            head_response.headers().get("x-amz-tagging-count").unwrap(),
+            "2"
+        );
 
         let get_response = get_bucket_object(
             State(state),
@@ -5225,8 +5593,14 @@ mod tests {
         )
         .await;
         assert_eq!(get_response.status(), StatusCode::OK);
-        assert_eq!(get_response.headers().get("x-amz-checksum-sha256").unwrap(), checksum.as_str());
-        assert_eq!(get_response.headers().get("x-amz-tagging-count").unwrap(), "2");
+        assert_eq!(
+            get_response.headers().get("x-amz-checksum-sha256").unwrap(),
+            checksum.as_str()
+        );
+        assert_eq!(
+            get_response.headers().get("x-amz-tagging-count").unwrap(),
+            "2"
+        );
     }
 
     #[tokio::test]
@@ -5236,7 +5610,10 @@ mod tests {
         let claims = claims_for(&user.user.id);
 
         let mut headers = HeaderMap::new();
-        headers.insert("x-amz-checksum-sha256", HeaderValue::from_static("deadbeef"));
+        headers.insert(
+            "x-amz-checksum-sha256",
+            HeaderValue::from_static("deadbeef"),
+        );
 
         let response = put_bucket_object(
             State(state),
@@ -5351,7 +5728,9 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(list_response.status(), StatusCode::OK);
-        assert!(response_text(list_response).await.contains("<Key>sdk-source.txt</Key>"));
+        assert!(response_text(list_response)
+            .await
+            .contains("<Key>sdk-source.txt</Key>"));
 
         let copy_signed = crate::middleware::s3_auth::build_signed_header_auth_with_secret(
             "PUT",
@@ -5509,7 +5888,10 @@ mod tests {
         let checksum = compute_sha1_hex(body.as_bytes());
 
         let mut headers = HeaderMap::new();
-        headers.insert("x-amz-checksum-sha1", HeaderValue::from_str(&checksum).unwrap());
+        headers.insert(
+            "x-amz-checksum-sha1",
+            HeaderValue::from_str(&checksum).unwrap(),
+        );
 
         let put_response = put_bucket_object(
             State(state.clone()),
@@ -5521,7 +5903,10 @@ mod tests {
         )
         .await;
         assert_eq!(put_response.status(), StatusCode::OK);
-        assert_eq!(put_response.headers().get("x-amz-checksum-sha1").unwrap(), checksum.as_str());
+        assert_eq!(
+            put_response.headers().get("x-amz-checksum-sha1").unwrap(),
+            checksum.as_str()
+        );
 
         let head_response = head_bucket_object(
             State(state.clone()),
@@ -5532,7 +5917,10 @@ mod tests {
         )
         .await;
         assert_eq!(head_response.status(), StatusCode::OK);
-        assert_eq!(head_response.headers().get("x-amz-checksum-sha1").unwrap(), checksum.as_str());
+        assert_eq!(
+            head_response.headers().get("x-amz-checksum-sha1").unwrap(),
+            checksum.as_str()
+        );
     }
 
     #[tokio::test]
@@ -5543,8 +5931,14 @@ mod tests {
         let body = "hello multi checksum";
 
         let mut headers = HeaderMap::new();
-        headers.insert("x-amz-checksum-sha256", HeaderValue::from_str(&compute_sha256_hex(body.as_bytes())).unwrap());
-        headers.insert("x-amz-checksum-sha1", HeaderValue::from_str(&compute_sha1_hex(body.as_bytes())).unwrap());
+        headers.insert(
+            "x-amz-checksum-sha256",
+            HeaderValue::from_str(&compute_sha256_hex(body.as_bytes())).unwrap(),
+        );
+        headers.insert(
+            "x-amz-checksum-sha1",
+            HeaderValue::from_str(&compute_sha1_hex(body.as_bytes())).unwrap(),
+        );
 
         let response = put_bucket_object(
             State(state),
@@ -5610,7 +6004,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_s3_like_put_object_normalizes_url_encoded_tagging_header_and_get_tagging_decodes_values() {
+    async fn test_s3_like_put_object_normalizes_url_encoded_tagging_header_and_get_tagging_decodes_values(
+    ) {
         let (state, _dir) = test_support::make_test_state().await;
         let user = register_user(state.clone(), "tagging-header-encoding@example.com").await;
         let claims = claims_for(&user.user.id);
@@ -5631,7 +6026,10 @@ mod tests {
         )
         .await;
         assert_eq!(put_response.status(), StatusCode::OK);
-        assert_eq!(put_response.headers().get("x-amz-tagging-count").unwrap(), "2");
+        assert_eq!(
+            put_response.headers().get("x-amz-tagging-count").unwrap(),
+            "2"
+        );
 
         let get_tagging_response = get_bucket_object(
             State(state.clone()),
@@ -5673,13 +6071,17 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_s3_like_put_object_preserves_leading_and_trailing_spaces_in_encoded_tagging_values() {
+    async fn test_s3_like_put_object_preserves_leading_and_trailing_spaces_in_encoded_tagging_values(
+    ) {
         let (state, _dir) = test_support::make_test_state().await;
         let user = register_user(state.clone(), "tagging-header-padding@example.com").await;
         let claims = claims_for(&user.user.id);
 
         let mut headers = HeaderMap::new();
-        headers.insert("x-amz-tagging", HeaderValue::from_static("label=%20padded%20"));
+        headers.insert(
+            "x-amz-tagging",
+            HeaderValue::from_static("label=%20padded%20"),
+        );
 
         let put_response = put_bucket_object(
             State(state.clone()),
@@ -5753,7 +6155,8 @@ mod tests {
             &user.user.id,
             &secret_access_key,
             None,
-        ).unwrap();
+        )
+        .unwrap();
         let put_response = tower::ServiceExt::oneshot(
             app.clone(),
             axum::http::Request::builder()
@@ -5765,17 +6168,21 @@ mod tests {
                 .header("x-amz-content-sha256", put_signed.payload_hash)
                 .body(axum::body::Body::from("sdk cli body"))
                 .unwrap(),
-        ).await.unwrap();
+        )
+        .await
+        .unwrap();
         assert_eq!(put_response.status(), StatusCode::OK);
 
-        let tagging_body = r#"<Tagging><TagSet><Tag><Key>env</Key><Value>dev</Value></Tag></TagSet></Tagging>"#;
+        let tagging_body =
+            r#"<Tagging><TagSet><Tag><Key>env</Key><Value>dev</Value></Tag></TagSet></Tagging>"#;
         let tagging_signed = crate::middleware::s3_auth::build_signed_header_auth_with_secret(
             "PUT",
             "https://example.com/api/s3/assets/sdk-cli.txt?tagging",
             &user.user.id,
             &secret_access_key,
             None,
-        ).unwrap();
+        )
+        .unwrap();
         let tagging_response = tower::ServiceExt::oneshot(
             app.clone(),
             axum::http::Request::builder()
@@ -5787,7 +6194,9 @@ mod tests {
                 .header("x-amz-content-sha256", tagging_signed.payload_hash)
                 .body(axum::body::Body::from(tagging_body))
                 .unwrap(),
-        ).await.unwrap();
+        )
+        .await
+        .unwrap();
         assert_eq!(tagging_response.status(), StatusCode::OK);
 
         let get_tagging_signed = crate::middleware::s3_auth::build_signed_header_auth_with_secret(
@@ -5796,7 +6205,8 @@ mod tests {
             &user.user.id,
             &secret_access_key,
             None,
-        ).unwrap();
+        )
+        .unwrap();
         let get_tagging_response = tower::ServiceExt::oneshot(
             app.clone(),
             axum::http::Request::builder()
@@ -5807,9 +6217,13 @@ mod tests {
                 .header("x-amz-content-sha256", get_tagging_signed.payload_hash)
                 .body(axum::body::Body::empty())
                 .unwrap(),
-        ).await.unwrap();
+        )
+        .await
+        .unwrap();
         assert_eq!(get_tagging_response.status(), StatusCode::OK);
-        assert!(response_text(get_tagging_response).await.contains("<Key>env</Key><Value>dev</Value>"));
+        assert!(response_text(get_tagging_response)
+            .await
+            .contains("<Key>env</Key><Value>dev</Value>"));
 
         let delete_signed = crate::middleware::s3_auth::build_signed_header_auth_with_secret(
             "DELETE",
@@ -5817,7 +6231,8 @@ mod tests {
             &user.user.id,
             &secret_access_key,
             None,
-        ).unwrap();
+        )
+        .unwrap();
         let delete_response = tower::ServiceExt::oneshot(
             app.clone(),
             axum::http::Request::builder()
@@ -5829,7 +6244,9 @@ mod tests {
                 .header("x-amz-content-sha256", delete_signed.payload_hash)
                 .body(axum::body::Body::empty())
                 .unwrap(),
-        ).await.unwrap();
+        )
+        .await
+        .unwrap();
         assert_eq!(delete_response.status(), StatusCode::NO_CONTENT);
 
         let list_signed = crate::middleware::s3_auth::build_signed_header_auth_with_secret(
@@ -5838,7 +6255,8 @@ mod tests {
             &user.user.id,
             &secret_access_key,
             None,
-        ).unwrap();
+        )
+        .unwrap();
         let list_response = tower::ServiceExt::oneshot(
             app,
             axum::http::Request::builder()
@@ -5849,7 +6267,9 @@ mod tests {
                 .header("x-amz-content-sha256", list_signed.payload_hash)
                 .body(axum::body::Body::empty())
                 .unwrap(),
-        ).await.unwrap();
+        )
+        .await
+        .unwrap();
         assert_eq!(list_response.status(), StatusCode::OK);
         let list_xml = response_text(list_response).await;
         assert!(!list_xml.contains("<Key>sdk-cli.txt</Key>"));
@@ -5949,8 +6369,14 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(head_response.status(), StatusCode::OK);
-        assert_eq!(head_response.headers().get(header::CONTENT_TYPE).unwrap(), "text/plain");
-        assert_eq!(head_response.headers().get("x-amz-meta-color").unwrap(), "blue");
+        assert_eq!(
+            head_response.headers().get(header::CONTENT_TYPE).unwrap(),
+            "text/plain"
+        );
+        assert_eq!(
+            head_response.headers().get("x-amz-meta-color").unwrap(),
+            "blue"
+        );
 
         let get_signed = crate::middleware::s3_auth::build_signed_header_auth(
             "GET",
@@ -6075,9 +6501,18 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(head_response.status(), StatusCode::OK);
-        assert_eq!(head_response.headers().get(header::CONTENT_TYPE).unwrap(), "application/json");
-        assert_eq!(head_response.headers().get("x-amz-meta-color").unwrap(), "red");
-        assert_eq!(head_response.headers().get("x-amz-meta-owner").unwrap(), "jangwon");
+        assert_eq!(
+            head_response.headers().get(header::CONTENT_TYPE).unwrap(),
+            "application/json"
+        );
+        assert_eq!(
+            head_response.headers().get("x-amz-meta-color").unwrap(),
+            "red"
+        );
+        assert_eq!(
+            head_response.headers().get("x-amz-meta-owner").unwrap(),
+            "jangwon"
+        );
 
         let get_signed = crate::middleware::s3_auth::build_signed_header_auth(
             "GET",
@@ -6582,8 +7017,14 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(head_response.status(), StatusCode::OK);
-        assert_eq!(head_response.headers().get(header::CONTENT_TYPE).unwrap(), "application/json");
-        assert_eq!(head_response.headers().get("x-amz-meta-color").unwrap(), "red");
+        assert_eq!(
+            head_response.headers().get(header::CONTENT_TYPE).unwrap(),
+            "application/json"
+        );
+        assert_eq!(
+            head_response.headers().get("x-amz-meta-color").unwrap(),
+            "red"
+        );
     }
 
     #[tokio::test]
@@ -6664,7 +7105,9 @@ mod tests {
             app.clone(),
             axum::http::Request::builder()
                 .method("PUT")
-                .uri(format!("/api/s3/assets/copied-range.txt?partNumber=1&uploadId={upload_id}"))
+                .uri(format!(
+                    "/api/s3/assets/copied-range.txt?partNumber=1&uploadId={upload_id}"
+                ))
                 .header("host", "example.com")
                 .header("authorization", copy_part_signed.authorization)
                 .header("x-amz-date", copy_part_signed.amz_date)
@@ -6695,7 +7138,9 @@ mod tests {
             app.clone(),
             axum::http::Request::builder()
                 .method("POST")
-                .uri(format!("/api/s3/assets/copied-range.txt?uploadId={upload_id}"))
+                .uri(format!(
+                    "/api/s3/assets/copied-range.txt?uploadId={upload_id}"
+                ))
                 .header("host", "example.com")
                 .header("authorization", complete_signed.authorization)
                 .header("x-amz-date", complete_signed.amz_date)
@@ -6740,8 +7185,7 @@ mod tests {
         let app = axum::Router::new()
             .route(
                 "/api/s3/:bucket/*key",
-                axum::routing::post(post_bucket_object)
-                    .put(put_bucket_object),
+                axum::routing::post(post_bucket_object).put(put_bucket_object),
             )
             .layer(axum::middleware::from_fn_with_state(
                 state.clone(),
@@ -6804,7 +7248,15 @@ mod tests {
             .await
             .unwrap();
             assert_eq!(response.status(), StatusCode::OK);
-            etags.push(response.headers().get(header::ETAG).unwrap().to_str().unwrap().to_string());
+            etags.push(
+                response
+                    .headers()
+                    .get(header::ETAG)
+                    .unwrap()
+                    .to_str()
+                    .unwrap()
+                    .to_string(),
+            );
         }
 
         let complete_body = format!(
@@ -6917,7 +7369,9 @@ mod tests {
             app.clone(),
             axum::http::Request::builder()
                 .method("PUT")
-                .uri(format!("/api/s3/assets/sdk-copy-target.txt?partNumber=1&uploadId={upload_id}"))
+                .uri(format!(
+                    "/api/s3/assets/sdk-copy-target.txt?partNumber=1&uploadId={upload_id}"
+                ))
                 .header("host", "example.com")
                 .header("authorization", copy_part_signed.authorization)
                 .header("x-amz-date", copy_part_signed.amz_date)
@@ -6930,7 +7384,8 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(copy_part_response.status(), StatusCode::OK);
-        let copy_part_etag = xml_tag_value(&response_text(copy_part_response).await, "ETag").unwrap();
+        let copy_part_etag =
+            xml_tag_value(&response_text(copy_part_response).await, "ETag").unwrap();
 
         let complete_body = format!(
             "<CompleteMultipartUpload><Part><PartNumber>1</PartNumber><ETag>{copy_part_etag}</ETag></Part></CompleteMultipartUpload>"
@@ -6947,7 +7402,9 @@ mod tests {
             app.clone(),
             axum::http::Request::builder()
                 .method("POST")
-                .uri(format!("/api/s3/assets/sdk-copy-target.txt?uploadId={upload_id}"))
+                .uri(format!(
+                    "/api/s3/assets/sdk-copy-target.txt?uploadId={upload_id}"
+                ))
                 .header("host", "example.com")
                 .header("authorization", complete_signed.authorization)
                 .header("x-amz-date", complete_signed.amz_date)
@@ -6981,8 +7438,7 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(get_response.status(), StatusCode::OK);
-        assert_eq!(response_text(get_response).await, "copy-"
-        );
+        assert_eq!(response_text(get_response).await, "copy-");
     }
 
     #[tokio::test]
@@ -7133,7 +7589,10 @@ mod tests {
 
         let app = axum::Router::new()
             .route("/api/s3/:bucket", axum::routing::get(list_bucket_objects))
-            .route("/api/s3/:bucket/*key", axum::routing::post(post_bucket_object))
+            .route(
+                "/api/s3/:bucket/*key",
+                axum::routing::post(post_bucket_object),
+            )
             .layer(axum::middleware::from_fn_with_state(
                 state.clone(),
                 crate::middleware::s3_auth::s3_auth_middleware,
@@ -7201,7 +7660,10 @@ mod tests {
 
         let app = axum::Router::new()
             .route("/api/s3/:bucket", axum::routing::get(list_bucket_objects))
-            .route("/api/s3/:bucket/*key", axum::routing::post(post_bucket_object))
+            .route(
+                "/api/s3/:bucket/*key",
+                axum::routing::post(post_bucket_object),
+            )
             .layer(axum::middleware::from_fn_with_state(
                 state.clone(),
                 crate::middleware::s3_auth::s3_auth_middleware,
@@ -7377,7 +7839,15 @@ mod tests {
             .await
             .unwrap();
             assert_eq!(response.status(), StatusCode::OK);
-            uploaded_part_etags.push(response.headers().get(header::ETAG).unwrap().to_str().unwrap().to_string());
+            uploaded_part_etags.push(
+                response
+                    .headers()
+                    .get(header::ETAG)
+                    .unwrap()
+                    .to_str()
+                    .unwrap()
+                    .to_string(),
+            );
         }
 
         let list_parts_signed = crate::middleware::s3_auth::build_signed_header_auth_with_secret(
@@ -7391,7 +7861,9 @@ mod tests {
         let list_parts_response = tower::ServiceExt::oneshot(
             app.clone(),
             axum::http::Request::builder()
-                .uri(format!("/api/s3/assets/sdk/multipart.txt?uploadId={upload_id}"))
+                .uri(format!(
+                    "/api/s3/assets/sdk/multipart.txt?uploadId={upload_id}"
+                ))
                 .header("host", "example.com")
                 .header("authorization", list_parts_signed.authorization)
                 .header("x-amz-date", list_parts_signed.amz_date)
@@ -7402,7 +7874,9 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(list_parts_response.status(), StatusCode::OK);
-        assert!(response_text(list_parts_response).await.contains("<ListPartsResult"));
+        assert!(response_text(list_parts_response)
+            .await
+            .contains("<ListPartsResult"));
 
         let complete_body = format!(
             "<CompleteMultipartUpload><Part><PartNumber>1</PartNumber><ETag>{}</ETag></Part><Part><PartNumber>2</PartNumber><ETag>{}</ETag></Part></CompleteMultipartUpload>",
@@ -7420,7 +7894,9 @@ mod tests {
             app.clone(),
             axum::http::Request::builder()
                 .method("POST")
-                .uri(format!("/api/s3/assets/sdk/multipart.txt?uploadId={upload_id}"))
+                .uri(format!(
+                    "/api/s3/assets/sdk/multipart.txt?uploadId={upload_id}"
+                ))
                 .header("host", "example.com")
                 .header("authorization", complete_signed.authorization)
                 .header("x-amz-date", complete_signed.amz_date)
@@ -7454,7 +7930,10 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(get_response.status(), StatusCode::OK);
-        assert_eq!(response_text(get_response).await, format!("{sdk_part_one_body}{sdk_part_two_body}"));
+        assert_eq!(
+            response_text(get_response).await,
+            format!("{sdk_part_one_body}{sdk_part_two_body}")
+        );
     }
 
     #[tokio::test]

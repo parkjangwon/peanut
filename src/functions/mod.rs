@@ -197,6 +197,7 @@ pub async fn execute_in_sandbox(
     fs::create_dir_all(&run_dir)
         .await
         .map_err(|error| format!("failed to create sandbox dir: {error}"))?;
+    set_private_dir_permissions(&run_dir).await?;
 
     let handler_path = run_dir.join(format!("handler.{runtime_ext}"));
     let runner_path = run_dir.join("runner.mjs");
@@ -682,8 +683,15 @@ fn validate_source_code(source_code: &str) -> Result<(), String> {
         "node:",
         "child_process",
         "process.",
+        "globalThis.process",
+        "process",
         "import ",
         "import\t",
+        "import(",
+        "eval",
+        "Function(",
+        "WebAssembly",
+        "Worker",
         "Deno",
         "Bun",
     ];
@@ -694,6 +702,23 @@ fn validate_source_code(source_code: &str) -> Result<(), String> {
         }
     }
 
+    Ok(())
+}
+
+async fn set_private_dir_permissions(path: &Path) -> Result<(), String> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+
+        let permissions = std::fs::Permissions::from_mode(0o700);
+        fs::set_permissions(path, permissions)
+            .await
+            .map_err(|error| format!("failed to restrict sandbox dir permissions: {error}"))?;
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = path;
+    }
     Ok(())
 }
 
@@ -716,6 +741,21 @@ mod tests {
 
     fn is_network_api_unavailable_error(error: &str) -> bool {
         error.contains("fetch is not a function") || error.contains("fetch is not defined")
+    }
+
+    #[test]
+    fn test_source_validation_blocks_runtime_escape_patterns() {
+        for source in [
+            "export default function handler() { return process.env }",
+            "export default function handler() { return globalThis.process }",
+            "export default async function handler() { return await import('node:fs') }",
+            "export default function handler() { return eval('1 + 1') }",
+            "export default function handler() { return Function('return 1')() }",
+            "export default function handler() { return WebAssembly }",
+            "export default function handler() { return Worker }",
+        ] {
+            assert!(validate_source_code(source).is_err(), "{source}");
+        }
     }
 
     #[tokio::test]

@@ -23,10 +23,12 @@ pub async fn request_id_middleware(mut req: Request, next: Next) -> Response {
 
     req.extensions_mut().insert(request_id.clone());
 
-    let mut response = crate::api::common::scope_request_id(request_id.clone(), next.run(req)).await;
+    let mut response =
+        crate::api::common::scope_request_id(request_id.clone(), next.run(req)).await;
     response.headers_mut().insert(
         header_name,
-        HeaderValue::from_str(&request_id).unwrap_or_else(|_| HeaderValue::from_static("invalid-request-id")),
+        HeaderValue::from_str(&request_id)
+            .unwrap_or_else(|_| HeaderValue::from_static("invalid-request-id")),
     );
     response
 }
@@ -34,7 +36,10 @@ pub async fn request_id_middleware(mut req: Request, next: Next) -> Response {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use axum::{body::{to_bytes, Body}, http::{Request as HttpRequest, StatusCode}};
+    use axum::{
+        body::{to_bytes, Body},
+        http::{Request as HttpRequest, StatusCode},
+    };
     use serde_json::Value;
     use tower::ServiceExt;
 

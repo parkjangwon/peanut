@@ -2,10 +2,13 @@ openapi: 3.1.0
 info:
   title: Peanut API
   version: 0.1.0
+  license:
+    name: UNLICENSED
+    identifier: UNLICENSED
   description: >
     Minimal public contract for Peanut's self-host backend API. This document
-    intentionally covers the stable MVP operator surface first; detailed S3-like
-    storage compatibility lives in docs/storage-s3-compat.md.
+    intentionally covers the stable MVP operator surface first. Detailed
+    S3-like storage compatibility lives in docs/storage-s3-compat.md.
 servers:
   - url: http://127.0.0.1:3000
 security:
@@ -13,20 +16,39 @@ security:
 paths:
   /api/health:
     get:
+      operationId: getHealth
       summary: Health check
       security: []
       responses:
         "200":
           description: Localized health status.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HealthResponse"
+        "400":
+          $ref: "#/components/responses/Error"
+        "500":
+          $ref: "#/components/responses/Error"
   /api/ready:
     get:
+      operationId: getReady
       summary: Readiness check
       security: []
       responses:
         "200":
           description: Database, storage, backup, and functions runtime readiness.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ReadyResponse"
+        "400":
+          $ref: "#/components/responses/Error"
+        "500":
+          $ref: "#/components/responses/Error"
   /api/register:
     post:
+      operationId: registerUser
       summary: Register a user
       security: []
       requestBody:
@@ -39,9 +61,10 @@ paths:
         "201":
           description: User registered.
         "409":
-          description: Email already exists.
+          $ref: "#/components/responses/Error"
   /api/login:
     post:
+      operationId: loginUser
       summary: Login with email and password
       security: []
       requestBody:
@@ -53,39 +76,57 @@ paths:
       responses:
         "200":
           description: Access and refresh tokens.
+        "401":
+          $ref: "#/components/responses/Error"
   /api/auth/refresh:
     post:
+      operationId: refreshSession
       summary: Rotate a refresh token
       security: []
       responses:
         "200":
           description: New access and refresh token pair.
+        "401":
+          $ref: "#/components/responses/Error"
   /api/auth/logout:
     post:
+      operationId: logoutUser
       summary: Revoke a refresh token
       security: []
       responses:
         "200":
           description: Session revoked.
+        "400":
+          $ref: "#/components/responses/Error"
   /api/me:
     get:
+      operationId: getCurrentUser
       summary: Return current authenticated user
       responses:
         "200":
           description: Current user.
+        "401":
+          $ref: "#/components/responses/Error"
   /api/admin/users:
     get:
+      operationId: listUsers
       summary: List users
       responses:
         "200":
           description: Admin user list.
+        "403":
+          $ref: "#/components/responses/Error"
   /api/admin/service-tokens:
     get:
+      operationId: listServiceTokens
       summary: List service tokens
       responses:
         "200":
           description: Service token summaries.
+        "403":
+          $ref: "#/components/responses/Error"
     post:
+      operationId: createServiceToken
       summary: Create a service token
       requestBody:
         required: true
@@ -96,48 +137,92 @@ paths:
       responses:
         "201":
           description: Service token summary and one-time plaintext token.
+        "403":
+          $ref: "#/components/responses/Error"
   /api/admin/backups:
     get:
+      operationId: listBackups
       summary: List database backups
       responses:
         "200":
-          description: Backup summaries.
+          description: Backup summaries and pending restore state.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BackupListResponse"
+        "403":
+          $ref: "#/components/responses/Error"
     post:
+      operationId: createBackup
       summary: Create a database backup
       responses:
         "201":
           description: Created backup summary.
+        "403":
+          $ref: "#/components/responses/Error"
+  /api/admin/backups/restore-pending:
+    get:
+      operationId: getRestorePending
+      summary: Inspect the scheduled restore marker
+      responses:
+        "200":
+          description: Pending restore marker state.
+        "403":
+          $ref: "#/components/responses/Error"
+    delete:
+      operationId: deleteRestorePending
+      summary: Clear the scheduled restore marker
+      responses:
+        "200":
+          description: Pending restore marker cleared.
+        "403":
+          $ref: "#/components/responses/Error"
   /api/admin/backups/{backup_name}/download:
     get:
+      operationId: downloadBackup
       summary: Download a database backup
       parameters:
-        - name: backup_name
-          in: path
-          required: true
-          schema:
-            type: string
+        - $ref: "#/components/parameters/BackupName"
       responses:
         "200":
           description: Backup file bytes.
+        "404":
+          $ref: "#/components/responses/Error"
   /api/admin/backups/{backup_name}/restore:
     post:
+      operationId: restoreBackup
       summary: Schedule a database backup restore on next restart
       parameters:
-        - name: backup_name
-          in: path
-          required: true
-          schema:
-            type: string
+        - $ref: "#/components/parameters/BackupName"
       responses:
         "200":
           description: Restore marker created.
+        "404":
+          $ref: "#/components/responses/Error"
+  /api/admin/ops/metrics:
+    get:
+      operationId: getOpsMetrics
+      summary: Return admin-only operational metrics
+      responses:
+        "200":
+          description: Operational metrics.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OpsMetricsResponse"
+        "403":
+          $ref: "#/components/responses/Error"
   /api/data/tables:
     get:
+      operationId: listDataTables
       summary: List logical data tables
       responses:
         "200":
           description: Data table list.
+        "401":
+          $ref: "#/components/responses/Error"
     post:
+      operationId: createDataTable
       summary: Create a logical data table
       requestBody:
         required: true
@@ -148,8 +233,11 @@ paths:
       responses:
         "201":
           description: Created table.
+        "400":
+          $ref: "#/components/responses/Error"
   /api/data/tables/{table}/rows:
     get:
+      operationId: listDataRows
       summary: List rows in a logical table
       parameters:
         - $ref: "#/components/parameters/Table"
@@ -168,7 +256,10 @@ paths:
       responses:
         "200":
           description: Row list.
+        "404":
+          $ref: "#/components/responses/Error"
     post:
+      operationId: createDataRow
       summary: Create a row
       parameters:
         - $ref: "#/components/parameters/Table"
@@ -181,24 +272,33 @@ paths:
       responses:
         "201":
           description: Created row.
+        "400":
+          $ref: "#/components/responses/Error"
   /api/data/tables/{table}/export:
     get:
+      operationId: exportDataTable
       summary: Export a table snapshot
       parameters:
         - $ref: "#/components/parameters/Table"
       responses:
         "200":
           description: Export artifact.
+        "404":
+          $ref: "#/components/responses/Error"
   /api/data/tables/{table}/import:
     post:
+      operationId: importDataRows
       summary: Import rows into a table
       parameters:
         - $ref: "#/components/parameters/Table"
       responses:
         "200":
           description: Import summary.
+        "400":
+          $ref: "#/components/responses/Error"
   /api/data/tables/{table}/events:
     get:
+      operationId: listDataRowEvents
       summary: List row events
       parameters:
         - $ref: "#/components/parameters/Table"
@@ -209,43 +309,71 @@ paths:
       responses:
         "200":
           description: Row events.
+        "404":
+          $ref: "#/components/responses/Error"
   /api/data/tables/{table}/events/checkpoint:
     get:
+      operationId: getDataRowEventCheckpoint
       summary: Get latest durable row event id
       parameters:
         - $ref: "#/components/parameters/Table"
       responses:
         "200":
           description: Latest event checkpoint.
+        "404":
+          $ref: "#/components/responses/Error"
   /api/push/messages:
     post:
+      operationId: enqueuePushMessage
       summary: Queue a push message
       responses:
         "201":
           description: Message queued.
+        "400":
+          $ref: "#/components/responses/Error"
   /api/push/queue:
     get:
+      operationId: listPushQueue
       summary: List push queue items
       responses:
         "200":
           description: Queue items and summary.
+        "401":
+          $ref: "#/components/responses/Error"
   /api/functions:
     get:
+      operationId: listFunctions
       summary: List functions
       responses:
         "200":
           description: Function summaries.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FunctionsListResponse"
+        "401":
+          $ref: "#/components/responses/Error"
         "503":
-          description: Functions runtime disabled.
+          $ref: "#/components/responses/Error"
     post:
+      operationId: createFunction
       summary: Create a function
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateFunctionRequest"
       responses:
         "201":
           description: Created function.
+        "400":
+          $ref: "#/components/responses/Error"
         "503":
-          description: Functions runtime disabled.
+          $ref: "#/components/responses/Error"
   /api/functions/endpoints/{endpoint_slug}:
     post:
+      operationId: invokeFunctionEndpoint
       summary: Invoke a function endpoint
       security:
         - bearerAuth: []
@@ -256,13 +384,25 @@ paths:
           required: true
           schema:
             type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/InvokeFunctionRequest"
       responses:
         "200":
           description: Function invocation result.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/InvokeFunctionResponse"
         "202":
           description: Async invocation accepted.
+        "400":
+          $ref: "#/components/responses/Error"
         "503":
-          description: Functions runtime disabled.
+          $ref: "#/components/responses/Error"
 components:
   securitySchemes:
     bearerAuth:
@@ -275,7 +415,193 @@ components:
       required: true
       schema:
         type: string
+    BackupName:
+      name: backup_name
+      in: path
+      required: true
+      schema:
+        type: string
+  responses:
+    Error:
+      description: Error response.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
   schemas:
+    HealthResponse:
+      type: object
+      required: [status, message]
+      properties:
+        status:
+          type: string
+        message:
+          type: string
+    ReadyResponse:
+      type: object
+      required: [status, checks]
+      properties:
+        status:
+          type: string
+          enum: [ready, not_ready]
+        checks:
+          type: array
+          items:
+            type: object
+            required: [name, ok, message]
+            properties:
+              name:
+                type: string
+              ok:
+                type: boolean
+              message:
+                type: string
+    BackupSummary:
+      type: object
+      required: [name, size_bytes, modified_at]
+      properties:
+        name:
+          type: string
+        size_bytes:
+          type: integer
+        modified_at:
+          type: string
+    RestorePending:
+      type: object
+      required: [backup_name, exists, size_bytes, modified_at]
+      properties:
+        backup_name:
+          type: string
+        exists:
+          type: boolean
+        size_bytes:
+          type: [integer, "null"]
+        modified_at:
+          type: [string, "null"]
+    BackupListResponse:
+      type: object
+      required: [backups, restore_pending]
+      properties:
+        backups:
+          type: array
+          items:
+            $ref: "#/components/schemas/BackupSummary"
+        restore_pending:
+          anyOf:
+            - $ref: "#/components/schemas/RestorePending"
+            - type: "null"
+    OpsMetricsResponse:
+      type: object
+      required: [database, storage, push, functions, system]
+      properties:
+        database:
+          type: object
+          required: [size_bytes, backup_count, restore_pending]
+          properties:
+            size_bytes:
+              type: integer
+            backup_count:
+              type: integer
+            last_backup_at:
+              type: [string, "null"]
+            restore_pending:
+              type: boolean
+        storage:
+          type: object
+          required: [ok, root, object_count, total_bytes, multipart_stale_count]
+          properties:
+            ok:
+              type: boolean
+            error:
+              type: [string, "null"]
+            root:
+              type: string
+            object_count:
+              type: integer
+            total_bytes:
+              type: integer
+            multipart_stale_count:
+              type: integer
+        push:
+          type: object
+          required: [queued, retry_scheduled, retry_overdue, failed_recent]
+          properties:
+            queued:
+              type: integer
+            retry_scheduled:
+              type: integer
+            retry_overdue:
+              type: integer
+            failed_recent:
+              type: integer
+        functions:
+          type: object
+          required:
+            [enabled, network_allowed, running_limit, invocations_24h, failures_24h, timeouts_24h]
+          properties:
+            enabled:
+              type: boolean
+            network_allowed:
+              type: boolean
+            running_limit:
+              type: integer
+            invocations_24h:
+              type: integer
+            failures_24h:
+              type: integer
+            timeouts_24h:
+              type: integer
+        system:
+          type: object
+          required: [version, uptime_seconds]
+          properties:
+            version:
+              type: string
+            uptime_seconds:
+              type: integer
+    FunctionsListResponse:
+      type: object
+      required: [functions]
+      properties:
+        functions:
+          type: array
+          items:
+            type: object
+    CreateFunctionRequest:
+      type: object
+      required: [name, display_name, endpoint_slug, runtime, source_code]
+      properties:
+        name:
+          type: string
+        display_name:
+          type: string
+        endpoint_slug:
+          type: string
+        runtime:
+          type: string
+          enum: [javascript, typescript]
+        source_code:
+          type: string
+    InvokeFunctionRequest:
+      type: object
+      properties:
+        input:
+          type: object
+        api_key:
+          type: [string, "null"]
+        async_invoke:
+          type: boolean
+    InvokeFunctionResponse:
+      type: object
+      required: [invocation_id, status, response, duration_ms]
+      properties:
+        invocation_id:
+          type: string
+        status:
+          type: string
+        response: true
+        duration_ms:
+          type: integer
     RegisterRequest:
       type: object
       required: [email, password]
