@@ -1,5 +1,5 @@
 use openssl::sha::sha256;
-use std::{collections::BTreeMap, convert::Infallible, env};
+use std::{collections::BTreeMap, convert::Infallible};
 
 use axum::{
     extract::{Path, State},
@@ -1040,7 +1040,7 @@ async fn execute_and_finalize_invocation(
             env_payload,
             timeout_ms: invocation.function_version.timeout_ms,
         },
-        &env::temp_dir(),
+        &state.functions_work_dir,
         &sandbox_state,
         claims.clone(),
     )

@@ -79,7 +79,7 @@ pub async fn readiness_check(State(state): State<crate::AppState>) -> Json<Value
         "path": storage_path.to_string_lossy(),
     }));
 
-    let functions_ready = if state.functions_enabled {
+    let node_available = if state.functions_enabled {
         tokio::process::Command::new("node")
             .arg("--version")
             .output()
@@ -89,12 +89,22 @@ pub async fn readiness_check(State(state): State<crate::AppState>) -> Json<Value
     } else {
         true
     };
+    let work_dir_writable = if state.functions_enabled {
+        ensure_storage_ready(&state.functions_work_dir).await.is_ok()
+    } else {
+        true
+    };
+    let functions_ready = node_available && work_dir_writable;
     checks.push(json!({
         "name": "functions",
         "ok": functions_ready,
         "enabled": state.functions_enabled,
+        "node_available": node_available,
+        "network_allowed": state.functions_allow_network,
+        "work_dir_writable": work_dir_writable,
+        "work_dir": state.functions_work_dir.to_string_lossy(),
         "message": if state.functions_enabled {
-            if functions_ready { "node runtime is available" } else { "node runtime is unavailable" }
+            if functions_ready { "functions runtime is available" } else { "functions runtime is unavailable" }
         } else {
             "functions runtime is disabled"
         },

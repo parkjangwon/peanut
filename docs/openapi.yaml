@@ -96,6 +96,41 @@ paths:
       responses:
         "201":
           description: Service token summary and one-time plaintext token.
+  /api/admin/backups:
+    get:
+      summary: List database backups
+      responses:
+        "200":
+          description: Backup summaries.
+    post:
+      summary: Create a database backup
+      responses:
+        "201":
+          description: Created backup summary.
+  /api/admin/backups/{backup_name}/download:
+    get:
+      summary: Download a database backup
+      parameters:
+        - name: backup_name
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Backup file bytes.
+  /api/admin/backups/{backup_name}/restore:
+    post:
+      summary: Schedule a database backup restore on next restart
+      parameters:
+        - name: backup_name
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Restore marker created.
   /api/data/tables:
     get:
       summary: List logical data tables
@@ -162,6 +197,26 @@ paths:
       responses:
         "200":
           description: Import summary.
+  /api/data/tables/{table}/events:
+    get:
+      summary: List row events
+      parameters:
+        - $ref: "#/components/parameters/Table"
+        - name: since_id
+          in: query
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Row events.
+  /api/data/tables/{table}/events/checkpoint:
+    get:
+      summary: Get latest durable row event id
+      parameters:
+        - $ref: "#/components/parameters/Table"
+      responses:
+        "200":
+          description: Latest event checkpoint.
   /api/push/messages:
     post:
       summary: Queue a push message
@@ -247,8 +302,7 @@ components:
         name:
           type: string
         expires_in_days:
-          type: integer
-          nullable: true
+          type: [integer, "null"]
     CreateDataTableRequest:
       type: object
       required: [name, display_name, schema, access_policy]
@@ -276,5 +330,4 @@ components:
         code:
           type: string
         request_id:
-          type: string
-          nullable: true
+          type: [string, "null"]

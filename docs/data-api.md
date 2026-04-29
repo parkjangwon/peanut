@@ -308,6 +308,10 @@ Useful modes:
 - `append`
 - `replace`
 
+Safety preview:
+- add `dry_run: true` to validate checksum/schema/rows without mutating the database
+- dry-run responses include `would_insert`, `would_replace`, `schema_changes`, and `validation_errors`
+
 Practical payload files:
 - `examples/data-api/todos/`
 - `examples/data-api/contacts/`
