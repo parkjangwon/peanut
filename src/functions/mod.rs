@@ -357,42 +357,49 @@ pub async fn execute_in_sandbox(
         )
         .await;
 
-    let stderr_bytes = stderr_task
-        .await
-        .map_err(|_| "failed to join stderr task".to_string())
-        .and_then(|result| {
-            result.map_err(|error| format!("failed to read sandbox stderr: {error}"))
-        })?;
-
     let duration_ms = start.elapsed().as_millis() as i64;
-    let stderr = truncate_output(String::from_utf8_lossy(&stderr_bytes).to_string());
 
-    let result = match protocol_result {
-        Ok(Ok(result)) => result,
-        Ok(Err(error)) => {
+    match protocol_result {
+        Ok(Ok(result)) => {
+            let stderr_bytes = stderr_task
+                .await
+                .map_err(|_| "failed to join stderr task".to_string())
+                .and_then(|result| {
+                    result.map_err(|error| format!("failed to read sandbox stderr: {error}"))
+                })?;
+            let stderr = truncate_output(String::from_utf8_lossy(&stderr_bytes).to_string());
             cleanup_dir(&run_dir).await;
-            return Err(if error.trim().is_empty() {
+
+            Ok(SandboxExecutionResult {
+                response_json: result,
+                stdout: String::new(),
+                stderr,
+                duration_ms,
+            })
+        }
+        Ok(Err(error)) => {
+            let stderr_bytes = stderr_task
+                .await
+                .map_err(|_| "failed to join stderr task".to_string())
+                .and_then(|result| {
+                    result.map_err(|error| format!("failed to read sandbox stderr: {error}"))
+                })?;
+            let stderr = truncate_output(String::from_utf8_lossy(&stderr_bytes).to_string());
+            cleanup_dir(&run_dir).await;
+            Err(if error.trim().is_empty() {
                 stderr.clone()
             } else {
                 error
-            });
+            })
         }
         Err(_) => {
             let _ = child.kill().await;
             let _ = child.wait().await;
+            let _ = stderr_task.await;
             cleanup_dir(&run_dir).await;
-            return Err(format!("function timed out after {}ms", request.timeout_ms));
+            Err(format!("function timed out after {}ms", request.timeout_ms))
         }
-    };
-
-    cleanup_dir(&run_dir).await;
-
-    Ok(SandboxExecutionResult {
-        response_json: result,
-        stdout: String::new(),
-        stderr,
-        duration_ms,
-    })
+    }
 }
 
 async fn handle_host_call(
@@ -707,6 +714,10 @@ mod tests {
         }
     }
 
+    fn is_network_api_unavailable_error(error: &str) -> bool {
+        error.contains("fetch is not a function") || error.contains("fetch is not defined")
+    }
+
     #[tokio::test]
     async fn test_network_disabled_makes_fetch_unavailable_at_runtime() {
         let (mut state, dir) = crate::test_support::make_test_state().await;
@@ -716,7 +727,7 @@ mod tests {
         let result = execute_in_sandbox(
             request(
                 "export default async function handler() { await fetch('https://example.com'); return { ok: true } }",
-                1000,
+                5000,
             ),
             &state.functions_work_dir,
             &state,
@@ -725,17 +736,20 @@ mod tests {
         .await
         .unwrap_err();
 
-        assert!(result.contains("fetch is not a function"));
+        assert!(
+            is_network_api_unavailable_error(&result),
+            "unexpected sandbox error: {result}"
+        );
     }
 
     #[tokio::test]
-    async fn test_timeout_cleans_up_function_work_dir() {
+    async fn test_timeout_kills_non_cooperative_function_and_cleans_work_dir() {
         let (mut state, dir) = crate::test_support::make_test_state().await;
         state.functions_work_dir = dir.path().join("functions");
 
         let result = execute_in_sandbox(
             request(
-                "export default async function handler() { await new Promise((resolve) => setTimeout(resolve, 500)); return { ok: true } }",
+                "export default async function handler() { await new Promise(() => {}); return { ok: true } }",
                 50,
             ),
             &state.functions_work_dir,

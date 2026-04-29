@@ -29,6 +29,9 @@ jobs:
       - name: Compile tests
         run: cargo test --no-run
 
+      - name: Run tests
+        run: cargo test -- --test-threads=1
+
       - name: Start Peanut
         env:
           JWT_SECRET: ci-secret-that-is-long-enough

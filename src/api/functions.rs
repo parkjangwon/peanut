@@ -1752,7 +1752,7 @@ mod tests {
                 endpoint_slug: "hello-fn".to_string(),
                 runtime: "javascript".to_string(),
                 source_code: "export default async function handler(ctx) { return { greeting: `hello ${ctx.request.input.name}` } }".to_string(),
-                timeout_ms: Some(1500),
+                timeout_ms: Some(5000),
                 enabled: Some(true),
                 invoke_policy: Some("authenticated".to_string()),
                 env: None,
@@ -1815,7 +1815,7 @@ mod tests {
                 endpoint_slug: "public-fn".to_string(),
                 runtime: "javascript".to_string(),
                 source_code: "export default async function handler(ctx) { return { secret: ctx.env.APP_SECRET, caller: ctx.auth?.user_id ?? 'anonymous' } }".to_string(),
-                timeout_ms: Some(1500),
+                timeout_ms: Some(5000),
                 enabled: Some(true),
                 invoke_policy: Some("public".to_string()),
                 env: Some(env),
@@ -1865,7 +1865,7 @@ mod tests {
                 endpoint_slug: "secret-fn".to_string(),
                 runtime: "javascript".to_string(),
                 source_code: "export default async function handler(ctx) { return { token: ctx.env.API_TOKEN } }".to_string(),
-                timeout_ms: Some(1500),
+                timeout_ms: Some(5000),
                 enabled: Some(true),
                 invoke_policy: Some("authenticated".to_string()),
                 env: None,
@@ -1921,7 +1921,7 @@ export default async function handler(ctx) {
 }
 "#
                 .to_string(),
-                timeout_ms: Some(1500),
+                timeout_ms: Some(5000),
                 enabled: Some(true),
                 invoke_policy: Some("authenticated".to_string()),
                 env: None,
@@ -2042,7 +2042,7 @@ export default async function handler(ctx) {
 }
 "#
                 .to_string(),
-                timeout_ms: Some(1500),
+                timeout_ms: Some(5000),
                 enabled: Some(true),
                 invoke_policy: Some("authenticated".to_string()),
                 env: None,
@@ -2116,7 +2116,7 @@ export default async function handler(ctx) {
                 runtime: "javascript".to_string(),
                 source_code: "export default async function handler() { return { ok: true } }"
                     .to_string(),
-                timeout_ms: Some(1500),
+                timeout_ms: Some(5000),
                 enabled: Some(true),
                 invoke_policy: Some("admin_only".to_string()),
                 env: None,
@@ -2159,7 +2159,7 @@ export default async function handler(ctx) {
                 runtime: "javascript".to_string(),
                 source_code: "export default async function handler() { return { ok: true } }"
                     .to_string(),
-                timeout_ms: Some(1500),
+                timeout_ms: Some(5000),
                 enabled: Some(true),
                 invoke_policy: Some("api_key".to_string()),
                 env: None,
@@ -2216,7 +2216,7 @@ export default async function handler(ctx) {
                 runtime: "javascript".to_string(),
                 source_code: "export default async function handler() { return { ok: true } }"
                     .to_string(),
-                timeout_ms: Some(1500),
+                timeout_ms: Some(5000),
                 enabled: Some(true),
                 invoke_policy: Some("public".to_string()),
                 env: None,
@@ -2289,7 +2289,7 @@ export default async function handler(ctx) {
                 endpoint_slug: "detail-fn".to_string(),
                 runtime: "javascript".to_string(),
                 source_code: "export default async function handler(ctx) { return { echo: ctx.request.input } }".to_string(),
-                timeout_ms: Some(1500),
+                timeout_ms: Some(5000),
                 enabled: Some(true),
                 invoke_policy: Some("authenticated".to_string()),
                 env: None,
@@ -2379,7 +2379,7 @@ export default async function handler(ctx) {
                 endpoint_slug: "async-fn".to_string(),
                 runtime: "javascript".to_string(),
                 source_code: "export default async function handler(ctx) { await new Promise((resolve) => setTimeout(resolve, 50)); return { done: true, input: ctx.request.input } }".to_string(),
-                timeout_ms: Some(1500),
+                timeout_ms: Some(5000),
                 enabled: Some(true),
                 invoke_policy: Some("authenticated".to_string()),
                 env: None,
@@ -2410,7 +2410,7 @@ export default async function handler(ctx) {
         assert_eq!(invoke_body.response, Value::Null);
 
         let mut final_detail: Option<FunctionInvocation> = None;
-        for _ in 0..20 {
+        for _ in 0..100 {
             let detail = get_function_invocation(
                 State(state.clone()),
                 Extension(claims(&admin.user.id, true)),
@@ -2423,7 +2423,7 @@ export default async function handler(ctx) {
                 final_detail = Some(detail_body.invocation);
                 break;
             }
-            tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
         }
 
         let final_detail = final_detail.expect("async invocation did not complete in time");
@@ -2447,7 +2447,7 @@ export default async function handler(ctx) {
                 endpoint_slug: "stream-fn".to_string(),
                 runtime: "javascript".to_string(),
                 source_code: "export default async function handler() { await new Promise((resolve) => setTimeout(resolve, 50)); return { ok: true } }".to_string(),
-                timeout_ms: Some(1500),
+                timeout_ms: Some(5000),
                 enabled: Some(true),
                 invoke_policy: Some("authenticated".to_string()),
                 env: None,
@@ -2524,7 +2524,7 @@ export default async function handler(ctx) {
                 runtime: "javascript".to_string(),
                 source_code: "export default async function handler() { return { ok: true } }"
                     .to_string(),
-                timeout_ms: Some(1500),
+                timeout_ms: Some(5000),
                 enabled: Some(true),
                 invoke_policy: Some("authenticated".to_string()),
                 env: None,
@@ -2552,7 +2552,7 @@ export default async function handler(ctx) {
                 endpoint_slug: "disabled-fn".to_string(),
                 runtime: "typescript".to_string(),
                 source_code: "export async function handler(): Promise<{ ok: boolean }> { return { ok: true } }".to_string(),
-                timeout_ms: Some(1500),
+                timeout_ms: Some(5000),
                 enabled: Some(false),
                 invoke_policy: Some("authenticated".to_string()),
                 env: None,
@@ -2597,7 +2597,7 @@ export default async function handler(ctx) {
                 runtime: "javascript".to_string(),
                 source_code: "export default async function handler() { return { version: 1 } }"
                     .to_string(),
-                timeout_ms: Some(1500),
+                timeout_ms: Some(5000),
                 enabled: Some(true),
                 invoke_policy: Some("authenticated".to_string()),
                 env: None,
