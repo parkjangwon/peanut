@@ -18,7 +18,7 @@ pub mod middleware;
 pub mod push;
 pub mod storage;
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-utils"))]
 pub mod test_support;
 
 rust_i18n::i18n!("locales", fallback = "en");

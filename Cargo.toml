@@ -32,6 +32,9 @@ dashmap = "6.1.0"
 [build-dependencies]
 rust-i18n = "3.0"
 
+[features]
+test-utils = []
+
 [dev-dependencies]
 tempfile = "3.10"
 tower = { version = "0.5", features = ["util"] }
