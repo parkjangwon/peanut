@@ -269,7 +269,7 @@ Current capabilities:
 - admin-managed functions stored in SQLite
 - JavaScript or TypeScript source managed from the console/API
 - per-function endpoint slug, invoke policy, env/secrets JSON, allowed origins, rate limit, and timeout
-- secrets are stored per function version, never returned in API payloads, and only exposed as `secret_key_count`
+- secrets are stored per function version, encrypted at rest, never returned in API payloads, and only exposed as `secret_key_count`
 - authenticated, public, admin-only, or api-key invoke policy through `POST /api/functions/endpoints/:endpoint_slug`
 - same endpoint supports inline sync execution or queued async execution with `async_invoke: true`
 - admin APIs expose version history through `GET /api/functions/:name/versions`
@@ -607,6 +607,7 @@ Optional:
 - `FUNCTIONS_ALLOW_NETWORK` (default: `false`; keeps `fetch`, `WebSocket`, and `XMLHttpRequest` unavailable inside Functions)
 - `FUNCTIONS_MAX_CONCURRENT` (default: `4`; caps simultaneous Function invocations)
 - `FUNCTIONS_WORK_DIR` (default: OS temp dir plus `peanut-functions`; must be writable and must not be root, home, or the DB directory)
+- `FUNCTIONS_SECRETS_MASTER_KEY` (default: falls back to `JWT_SECRET`; set this explicitly in production if you want Function secret encryption to rotate independently from JWT signing)
 - `BACKUP_ON_STARTUP` (default: `false`; set `true` to run one SQLite backup before the server starts accepting requests)
 - `TRUST_PROXY_HEADERS` (default: `false`; set `true` only behind a trusted reverse proxy so rate limiting can use `x-forwarded-for`)
 - `MULTIPART_STALE_HOURS` (default: `24`; staged multipart uploads older than this can be cleaned up)

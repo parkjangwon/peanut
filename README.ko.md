@@ -269,7 +269,7 @@ Peanut은 이제 작은 백엔드 확장용 함수 런타임을 함께 제공한
 - admin이 SQLite에 function 메타데이터와 소스 저장
 - JavaScript / TypeScript 함수 코드를 콘솔/API에서 관리
 - function별 endpoint slug, invoke policy, env/secrets JSON, allowed origins, rate limit, timeout 설정
-- secret은 함수 버전별로 별도 저장되며 API 응답에는 값이 노출되지 않고 `secret_key_count`만 제공된다
+- secret은 함수 버전별로 별도 저장되고 저장 시 암호화되며, API 응답에는 값이 노출되지 않고 `secret_key_count`만 제공된다
 - `POST /api/functions/endpoints/:endpoint_slug`로 authenticated / public / admin_only / api_key 정책 호출
 - 같은 endpoint에서 `async_invoke: true`로 inline sync 실행 또는 queued async 실행 선택 가능
 - admin API로 `GET /api/functions/:name/versions`에서 함수 버전 이력을 조회 가능
@@ -579,6 +579,11 @@ admin snapshot import:
 - `BIND_ADDR` (기본값: `127.0.0.1:3000`; 유효한 socket address 여야 함)
 - `MAX_UPLOAD_BYTES` (기본값: `5242880`; 0보다 큰 정수여야 함)
 - `PASSWORD_RESET_DELIVERY` (기본값: `inline`; `inline` 또는 `log`)
+- `FUNCTIONS_ENABLED` (기본값: `true`; `false`로 두면 Functions API와 invoke endpoint를 모두 비활성화함)
+- `FUNCTIONS_ALLOW_NETWORK` (기본값: `false`; Functions 내부에서 `fetch`, `WebSocket`, `XMLHttpRequest`를 막음)
+- `FUNCTIONS_MAX_CONCURRENT` (기본값: `4`; 동시 Function invocation 상한)
+- `FUNCTIONS_WORK_DIR` (기본값: OS temp dir + `peanut-functions`; 쓰기 가능해야 하며 root/home/DB 디렉터리를 가리키면 안 됨)
+- `FUNCTIONS_SECRETS_MASTER_KEY` (기본값: `JWT_SECRET` fallback; 운영에서는 Function secret 암호화 키를 JWT 서명 키와 분리하고 싶다면 명시적으로 설정 권장)
 - `AUTH_ALLOWED_ORIGINS` (쉼표 구분 origin 목록; 설정하면 auth route에서 일치하는 `Origin` 헤더가 필요함)
 - `AUTH_ALLOWED_CLIENT_IDS` (쉼표 구분 client id 목록; 설정하면 auth route에서 일치하는 `x-peanut-client-id` 헤더가 필요함)
 - `RUST_LOG` (기본값: `info`)
