@@ -15,7 +15,7 @@ async fn main() {
 
     tokio::fs::create_dir_all(&config.storage_dir)
         .await
-        .unwrap();
+        .expect("failed to create storage directory");
     let functions_work_dir = prepare_functions_work_dir(&config.functions_work_dir)
         .unwrap_or_else(|error| panic!("Invalid FUNCTIONS_WORK_DIR: {error}"));
 
@@ -139,13 +139,13 @@ async fn main() {
 
     let listener = tokio::net::TcpListener::bind(config.bind_addr)
         .await
-        .unwrap();
+        .unwrap_or_else(|e| panic!("failed to bind to {}: {e}", config.bind_addr));
     axum::serve(
         listener,
         app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
     )
     .await
-    .unwrap();
+    .expect("server error");
 }
 
 fn prepare_functions_work_dir(path: &Path) -> std::io::Result<PathBuf> {
