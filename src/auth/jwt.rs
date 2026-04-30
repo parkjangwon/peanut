@@ -26,7 +26,7 @@ pub fn create_jwt(
         &claims,
         &EncodingKey::from_secret(secret.as_ref()),
     )
-    .unwrap()
+    .expect("JWT encode is infallible with valid Claims and non-empty secret")
 }
 
 pub fn verify_jwt(token: &str, secret: &str) -> Result<Claims, jsonwebtoken::errors::Error> {

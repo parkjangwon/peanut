@@ -76,9 +76,10 @@ pub async fn create_row(
                 );
             }
             match load_row(&state.pool, &table.id, &row_id).await {
-                Ok(row) => {
-                    (StatusCode::CREATED, Json(DataRowResponse::from_record(row))).into_response()
-                }
+                Ok(row) => match DataRowResponse::try_from_record(row) {
+                    Ok(resp) => (StatusCode::CREATED, Json(resp)).into_response(),
+                    Err(_) => json_error(StatusCode::INTERNAL_SERVER_ERROR, "failed to parse row data"),
+                },
                 Err(LoadRowError::NotFound) => json_error(
                     StatusCode::INTERNAL_SERVER_ERROR,
                     "created row could not be reloaded",
@@ -302,7 +303,10 @@ pub async fn update_row(
                 emit_data_row_event(&state, event_id, &table.name, &row_id, &claims.sub, "update", Some(&normalized));
             }
             match load_row(&state.pool, &table.id, &row_id).await {
-                Ok(row) => (StatusCode::OK, Json(DataRowResponse::from_record(row))).into_response(),
+                Ok(row) => match DataRowResponse::try_from_record(row) {
+                    Ok(resp) => (StatusCode::OK, Json(resp)).into_response(),
+                    Err(_) => json_error(StatusCode::INTERNAL_SERVER_ERROR, "failed to parse row data"),
+                },
                 Err(LoadRowError::NotFound) => json_error(StatusCode::INTERNAL_SERVER_ERROR, "updated row could not be reloaded"),
                 Err(LoadRowError::QueryFailed) => json_error(StatusCode::INTERNAL_SERVER_ERROR, "failed to load row"),
             }
