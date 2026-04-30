@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 
 use axum::{
     body::Bytes,
-    extract::{Path, Query, RawQuery, State},
+    extract::{Path, Query, State},
     http::{header, HeaderMap, StatusCode},
     response::{IntoResponse, Response},
     Extension, Json,
@@ -15,11 +15,15 @@ use crate::auth::jwt::Claims;
 
 mod basic;
 mod s3_copy;
+mod s3_delete;
 mod s3_error;
+mod s3_get;
+mod s3_head;
 mod s3_list;
 mod s3_multipart;
-mod s3_object;
+mod s3_post;
 mod s3_presign;
+mod s3_put;
 mod s3_tagging;
 mod s3_xml;
 
@@ -30,12 +34,13 @@ use basic::StorageListResponse;
 use s3_list::S3ListQuery;
 
 pub use basic::{delete_object, get_object, list_objects, put_object};
+pub use s3_delete::delete_bucket_object;
+pub use s3_get::get_bucket_object;
+pub use s3_head::head_bucket_object;
 pub use s3_list::list_bucket_objects;
-pub use s3_object::{
-    delete_bucket_object, get_bucket_object, head_bucket_object, post_bucket_object,
-    put_bucket_object,
-};
+pub use s3_post::post_bucket_object;
 pub use s3_presign::create_presigned_url;
+pub use s3_put::put_bucket_object;
 
 const DEFAULT_STORAGE_BUCKET: &str = "default";
 

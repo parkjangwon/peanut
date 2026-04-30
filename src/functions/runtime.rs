@@ -16,6 +16,10 @@ use uuid::Uuid;
 use super::host::handle_host_call;
 
 const MAX_OUTPUT_BYTES: usize = 64 * 1024;
+const MAX_STDOUT_BYTES: usize = 256 * 1024;
+const FUNCTIONS_MAX_HEAP_MB: u32 = 128;
+const FUNCTIONS_SEMI_SPACE_MB: u32 = 8;
+const FUNCTIONS_STACK_KB: u32 = 512;
 const RUNNER_SOURCE: &str = r#"
 import readline from 'node:readline'
 import { pathToFileURL } from 'node:url'
@@ -222,6 +226,10 @@ pub async fn execute_in_sandbox(
     let mut child = Command::new("node")
         .arg("--disable-proto=throw")
         .arg("--disallow-code-generation-from-strings")
+        .arg(format!("--max-old-space-size={FUNCTIONS_MAX_HEAP_MB}"))
+        .arg(format!("--max-semi-space-size={FUNCTIONS_SEMI_SPACE_MB}"))
+        .arg(format!("--stack-size={FUNCTIONS_STACK_KB}"))
+        .arg("--no-warnings")
         .arg(&runner_path)
         .arg(&handler_path)
         .current_dir(&run_dir)
@@ -275,12 +283,20 @@ pub async fn execute_in_sandbox(
 
                 let mut final_result: Option<Value> = None;
                 let mut final_error: Option<String> = None;
+                let mut stdout_bytes_read: usize = 0;
 
                 while let Some(line) = stdout_lines
                     .next_line()
                     .await
                     .map_err(|error| format!("failed to read sandbox stdout: {error}"))?
                 {
+                    stdout_bytes_read += line.len();
+                    if stdout_bytes_read > MAX_STDOUT_BYTES {
+                        return Err(format!(
+                            "function stdout exceeded {} bytes",
+                            MAX_STDOUT_BYTES
+                        ));
+                    }
                     let message: HostStdoutMessage = serde_json::from_str(&line)
                         .map_err(|_| "sandbox emitted invalid protocol message".to_string())?;
                     match message.kind.as_str() {
@@ -415,7 +431,9 @@ pub(crate) fn validate_source_code(source_code: &str) -> Result<(), String> {
         "node:",
         "child_process",
         "process.",
+        "process[",
         "globalThis.process",
+        "globalThis[",
         "process",
         "import ",
         "import\t",
@@ -426,6 +444,8 @@ pub(crate) fn validate_source_code(source_code: &str) -> Result<(), String> {
         "Worker",
         "Deno",
         "Bun",
+        "__proto__",
+        "Object.defineProperty(",
     ];
 
     for fragment in banned_fragments {
