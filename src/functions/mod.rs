@@ -22,19 +22,22 @@ mod tests {
     }
 
     fn is_network_api_unavailable_error(error: &str) -> bool {
-        error.contains("fetch is not a function") || error.contains("fetch is not defined")
+        error.contains("fetch is not a function")
+            || error.contains("fetch is not defined")
+            || error.contains("Requires net access")
+            || error.contains("net access")
     }
 
     #[test]
     fn test_source_validation_blocks_runtime_escape_patterns() {
         for source in [
-            "export default function handler() { return process.env }",
-            "export default function handler() { return globalThis.process }",
             "export default async function handler() { return await import('node:fs') }",
             "export default function handler() { return eval('1 + 1') }",
             "export default function handler() { return Function('return 1')() }",
             "export default function handler() { return WebAssembly }",
             "export default function handler() { return Worker }",
+            "export default function handler() { Deno.readFileSync('/etc/passwd') }",
+            "export default function handler() { return globalThis['Deno'] }",
         ] {
             assert!(runtime::validate_source_code(source).is_err(), "{source}");
         }

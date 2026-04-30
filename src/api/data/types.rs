@@ -222,23 +222,23 @@ pub struct ListRowEventsParams {
 }
 
 #[derive(Debug, Clone, FromRow)]
-pub(super) struct DataTableRecord {
-    pub(super) id: String,
-    pub(super) name: String,
-    pub(super) display_name: String,
-    pub(super) schema_json: String,
-    pub(super) access_policy_json: String,
-    pub(super) created_by: String,
-    pub(super) created_at: String,
+pub(crate) struct DataTableRecord {
+    pub(crate) id: String,
+    pub(crate) name: String,
+    pub(crate) display_name: String,
+    pub(crate) schema_json: String,
+    pub(crate) access_policy_json: String,
+    pub(crate) created_by: String,
+    pub(crate) created_at: String,
 }
 
 #[derive(Debug, Clone, FromRow)]
-pub(super) struct DataRowRecord {
-    pub(super) id: String,
-    pub(super) owner_user_id: Option<String>,
-    pub(super) data_json: String,
-    pub(super) created_at: String,
-    pub(super) updated_at: String,
+pub(crate) struct DataRowRecord {
+    pub(crate) id: String,
+    pub(crate) owner_user_id: Option<String>,
+    pub(crate) data_json: String,
+    pub(crate) created_at: String,
+    pub(crate) updated_at: String,
 }
 
 #[derive(Debug, Clone, FromRow)]
@@ -252,11 +252,11 @@ pub(super) struct DataRowEventRecord {
 }
 
 #[derive(Debug, Clone, FromRow)]
-pub(super) struct QueryPresetRecord {
-    pub(super) id: String,
-    pub(super) name: String,
-    pub(super) display_name: String,
-    pub(super) params_json: String,
-    pub(super) created_at: String,
-    pub(super) updated_at: String,
+pub(crate) struct QueryPresetRecord {
+    pub(crate) id: String,
+    pub(crate) name: String,
+    pub(crate) display_name: String,
+    pub(crate) params_json: String,
+    pub(crate) created_at: String,
+    pub(crate) updated_at: String,
 }

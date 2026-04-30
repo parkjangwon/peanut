@@ -21,19 +21,28 @@ const FUNCTIONS_MAX_HEAP_MB: u32 = 128;
 const FUNCTIONS_SEMI_SPACE_MB: u32 = 8;
 const FUNCTIONS_STACK_KB: u32 = 512;
 const RUNNER_SOURCE: &str = r#"
-import readline from 'node:readline'
-import { pathToFileURL } from 'node:url'
+const decoder = new TextDecoder()
+const encoder = new TextEncoder()
 
-if (process.env.PEANUT_FUNCTIONS_ALLOW_NETWORK !== 'true') {
-  globalThis.fetch = undefined
-  globalThis.WebSocket = undefined
-  globalThis.XMLHttpRequest = undefined
+async function* readLines(readable) {
+  const reader = readable.getReader()
+  let remainder = ''
+  try {
+    while (true) {
+      const { done, value } = await reader.read()
+      if (done) {
+        if (remainder) yield remainder
+        break
+      }
+      const chunk = decoder.decode(value, { stream: true })
+      const lines = (remainder + chunk).split('\n')
+      remainder = lines.pop() ?? ''
+      for (const line of lines) yield line
+    }
+  } finally {
+    reader.releaseLock()
+  }
 }
-
-const rl = readline.createInterface({
-  input: process.stdin,
-  crlfDelay: Infinity,
-})
 
 const pending = new Map()
 let resolveInvoke
@@ -45,11 +54,11 @@ const invokePromise = new Promise((resolve, reject) => {
 let callSeq = 0
 
 const writeMessage = (message) => {
-  process.stdout.write(JSON.stringify(message) + '\n')
+  Deno.stdout.writeSync(encoder.encode(JSON.stringify(message) + '\n'))
 }
 
 const writeStderr = (...args) => {
-  process.stderr.write(args.map((value) => String(value)).join(' ') + '\n')
+  Deno.stderr.writeSync(encoder.encode(args.map((value) => String(value)).join(' ') + '\n'))
 }
 
 console.log = (...args) => writeStderr(...args)
@@ -57,33 +66,35 @@ console.info = (...args) => writeStderr(...args)
 console.warn = (...args) => writeStderr(...args)
 console.error = (...args) => writeStderr(...args)
 
-rl.on('line', (line) => {
-  if (!line.trim()) return
+;(async () => {
+  for await (const line of readLines(Deno.stdin.readable)) {
+    if (!line.trim()) continue
 
-  let message
-  try {
-    message = JSON.parse(line)
-  } catch (error) {
-    rejectInvoke(error)
-    return
-  }
+    let message
+    try {
+      message = JSON.parse(line)
+    } catch (error) {
+      rejectInvoke(error)
+      return
+    }
 
-  if (message.type === 'invoke') {
-    resolveInvoke(message.payload ?? {})
-    return
-  }
+    if (message.type === 'invoke') {
+      resolveInvoke(message.payload ?? {})
+      continue
+    }
 
-  if (message.type === 'host_response') {
-    const pendingCall = pending.get(message.id)
-    if (!pendingCall) return
-    pending.delete(message.id)
-    if (message.ok) {
-      pendingCall.resolve(message.result ?? null)
-    } else {
-      pendingCall.reject(new Error(message.error || 'host call failed'))
+    if (message.type === 'host_response') {
+      const pendingCall = pending.get(message.id)
+      if (!pendingCall) continue
+      pending.delete(message.id)
+      if (message.ok) {
+        pendingCall.resolve(message.result ?? null)
+      } else {
+        pendingCall.reject(new Error(message.error || 'host call failed'))
+      }
     }
   }
-})
+})()
 
 function hostCall(action) {
   return async (args = {}) => {
@@ -117,9 +128,9 @@ function createPeanutHost() {
 }
 
 try {
-  const [, , handlerPath] = process.argv
+  const [handlerPath] = Deno.args
   const payload = await invokePromise
-  const mod = await import(pathToFileURL(handlerPath).href)
+  const mod = await import('file://' + handlerPath)
   const handler = typeof mod.default === 'function' ? mod.default : mod.handler
   if (typeof handler !== 'function') {
     throw new Error('function module must export default or named handler')
@@ -134,11 +145,10 @@ try {
 } catch (error) {
   const message = error instanceof Error ? error.message : String(error)
   writeMessage({ type: 'result', ok: false, error: message })
-  process.stderr.write(message)
-  process.exit(1)
-} finally {
-  rl.close()
+  Deno.stderr.writeSync(encoder.encode(message))
+  Deno.exit(1)
 }
+Deno.exit(0)
 "#;
 
 #[derive(Debug, Clone)]
@@ -222,27 +232,28 @@ pub async fn execute_in_sandbox(
         .map_err(|_| "failed to encode function payload".to_string())?;
 
     let start = Instant::now();
-    let node_path = env::var("PATH").unwrap_or_default();
-    let mut child = Command::new("node")
-        .arg("--disable-proto=throw")
-        .arg("--disallow-code-generation-from-strings")
-        .arg(format!("--max-old-space-size={FUNCTIONS_MAX_HEAP_MB}"))
-        .arg(format!("--max-semi-space-size={FUNCTIONS_SEMI_SPACE_MB}"))
-        .arg(format!("--stack-size={FUNCTIONS_STACK_KB}"))
-        .arg("--no-warnings")
+    let path_env = env::var("PATH").unwrap_or_default();
+    let allow_read = format!("--allow-read={}", run_dir.display());
+    let v8_flags = format!(
+        "--v8-flags=--max-old-space-size={FUNCTIONS_MAX_HEAP_MB},\
+         --max-semi-space-size={FUNCTIONS_SEMI_SPACE_MB},\
+         --stack-size={FUNCTIONS_STACK_KB}"
+    );
+    let mut cmd = Command::new("deno");
+    cmd.arg("run")
+        .arg("--no-npm")
+        .arg("--no-remote")
+        .arg(&allow_read)
+        .arg(&v8_flags);
+    if state.functions_allow_network {
+        cmd.arg("--allow-net");
+    }
+    let mut child = cmd
         .arg(&runner_path)
         .arg(&handler_path)
         .current_dir(&run_dir)
         .env_clear()
-        .env("PATH", node_path)
-        .env(
-            "PEANUT_FUNCTIONS_ALLOW_NETWORK",
-            if state.functions_allow_network {
-                "true"
-            } else {
-                "false"
-            },
-        )
+        .env("PATH", path_env)
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
@@ -352,6 +363,7 @@ pub async fn execute_in_sandbox(
                     }
                 }
 
+                drop(stdin);
                 let status = child
                     .wait()
                     .await
@@ -428,13 +440,6 @@ async fn cleanup_dir(path: &PathBuf) {
 pub(crate) fn validate_source_code(source_code: &str) -> Result<(), String> {
     let banned_fragments = [
         "require(",
-        "node:",
-        "child_process",
-        "process.",
-        "process[",
-        "globalThis.process",
-        "globalThis[",
-        "process",
         "import ",
         "import\t",
         "import(",
@@ -442,10 +447,12 @@ pub(crate) fn validate_source_code(source_code: &str) -> Result<(), String> {
         "Function(",
         "WebAssembly",
         "Worker",
-        "Deno",
         "Bun",
         "__proto__",
         "Object.defineProperty(",
+        "Deno.",
+        "Deno[",
+        "globalThis[",
     ];
 
     for fragment in banned_fragments {

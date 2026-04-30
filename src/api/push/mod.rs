@@ -32,9 +32,6 @@ pub use types::*;
 pub use vapid::get_vapid_public_key;
 
 #[cfg(test)]
-pub use subscriptions::should_retry;
-
-#[cfg(test)]
 mod tests {
     use axum::{
         extract::{Query, State},
