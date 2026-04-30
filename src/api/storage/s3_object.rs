@@ -1,3 +1,16 @@
+use super::s3_copy::{
+    apply_copy_source_range, parse_copy_source, parse_copy_source_range, parse_metadata_directive,
+    s3_copy_object_response, s3_copy_part_response, MetadataDirective,
+};
+use super::s3_error::s3_error_response;
+use super::s3_multipart::{
+    parse_complete_multipart_upload_xml, parse_multipart_query, s3_complete_multipart_response,
+    s3_initiate_multipart_response, s3_list_parts_response,
+};
+use super::s3_tagging::{
+    extract_object_tagging, is_tagging_subresource, parse_tagging_xml,
+    s3_get_object_tagging_response,
+};
 use super::*;
 
 pub async fn head_bucket_object(
