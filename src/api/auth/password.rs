@@ -65,7 +65,8 @@ pub async fn forgot_password(
             Json(ForgotPasswordResponse {
                 message: message.to_string(),
                 reset_token: String::new(),
-                delivery: password_reset_delivery_label(&state.password_reset_delivery).to_string(),
+                delivery: password_reset_delivery_label(&state.auth.password_reset_delivery)
+                    .to_string(),
             }),
         )
             .into_response();
@@ -74,7 +75,7 @@ pub async fn forgot_password(
     match issue_password_reset_token(&state.pool, &user.id).await {
         Ok(reset_token) => {
             let response_token = deliver_password_reset_token(
-                &state.password_reset_delivery,
+                &state.auth.password_reset_delivery,
                 &user.email,
                 &reset_token,
             );
@@ -84,7 +85,7 @@ pub async fn forgot_password(
                 Some(&user.id),
                 "password_reset_requested",
                 Some(serde_json::json!({
-                    "delivery": password_reset_delivery_label(&state.password_reset_delivery),
+                    "delivery": password_reset_delivery_label(&state.auth.password_reset_delivery),
                 })),
             )
             .await;
@@ -93,7 +94,7 @@ pub async fn forgot_password(
                 Json(ForgotPasswordResponse {
                     message: message.to_string(),
                     reset_token: response_token,
-                    delivery: password_reset_delivery_label(&state.password_reset_delivery)
+                    delivery: password_reset_delivery_label(&state.auth.password_reset_delivery)
                         .to_string(),
                 }),
             )

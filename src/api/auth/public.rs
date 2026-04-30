@@ -128,7 +128,7 @@ pub async fn refresh_session(
             let access_token = crate::auth::jwt::create_jwt(
                 &user.id,
                 user.is_admin,
-                state.jwt_secret.as_str(),
+                state.auth.jwt_secret.as_str(),
                 expires_at,
             );
             let _ = record_auth_event(

@@ -5,8 +5,14 @@ use axum::{
     middleware::Next,
     response::Response,
 };
-use std::net::{IpAddr, SocketAddr};
+use std::{
+    collections::VecDeque,
+    net::{IpAddr, SocketAddr},
+};
 use tokio::time::{Duration, Instant};
+
+const AUTH_RATE_LIMIT_WINDOW_SECS: u64 = 60;
+const AUTH_RATE_LIMIT_MAX_REQUESTS: usize = 10;
 
 pub async fn rate_limit_middleware(
     State(state): State<crate::AppState>,
@@ -33,10 +39,58 @@ pub async fn rate_limit_middleware(
         *count += 1;
     }
 
-    // Drop the entry lock before calling next.run to avoid potential deadlocks if other parts of the app access the map
     drop(entry);
 
     Ok(next.run(req).await)
+}
+
+pub async fn auth_rate_limit_middleware(
+    State(state): State<crate::AppState>,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    req: Request,
+    next: Next,
+) -> Result<Response, Response> {
+    let client_ip = get_client_ip(&req, addr, state.trust_proxy_headers);
+    let now = Instant::now();
+    let mut entry = state.auth_rate_limit_state.entry(client_ip).or_default();
+
+    if !record_auth_attempt(
+        entry.value_mut(),
+        now,
+        AUTH_RATE_LIMIT_MAX_REQUESTS,
+        Duration::from_secs(AUTH_RATE_LIMIT_WINDOW_SECS),
+    ) {
+        return Err(json_error(
+            StatusCode::TOO_MANY_REQUESTS,
+            "Too many authentication requests. Please try again later.",
+        ));
+    }
+
+    drop(entry);
+
+    Ok(next.run(req).await)
+}
+
+fn record_auth_attempt(
+    attempts: &mut VecDeque<Instant>,
+    now: Instant,
+    max_requests: usize,
+    window: Duration,
+) -> bool {
+    while attempts
+        .front()
+        .map(|attempt| now.duration_since(*attempt) > window)
+        .unwrap_or(false)
+    {
+        attempts.pop_front();
+    }
+
+    if attempts.len() >= max_requests {
+        return false;
+    }
+
+    attempts.push_back(now);
+    true
 }
 
 fn get_client_ip(req: &Request, addr: SocketAddr, trust_proxy_headers: bool) -> IpAddr {
@@ -60,7 +114,14 @@ fn get_client_ip(req: &Request, addr: SocketAddr, trust_proxy_headers: bool) -> 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use axum::body::Body;
+    use axum::{
+        body::Body,
+        middleware::from_fn_with_state,
+        routing::{get, post},
+        Json, Router,
+    };
+    use std::collections::VecDeque;
+    use tower::ServiceExt;
 
     fn request_with_forwarded_for(value: &str) -> Request {
         Request::builder()
@@ -68,6 +129,20 @@ mod tests {
             .header("x-forwarded-for", value)
             .body(Body::empty())
             .unwrap()
+    }
+
+    fn request_with_connect_info(method: &str, uri: &str, addr: SocketAddr) -> Request {
+        let mut request = Request::builder()
+            .method(method)
+            .uri(uri)
+            .body(Body::empty())
+            .unwrap();
+        request.extensions_mut().insert(ConnectInfo(addr));
+        request
+    }
+
+    async fn ok_handler() -> Json<serde_json::Value> {
+        Json(serde_json::json!({ "ok": true }))
     }
 
     #[test]
@@ -88,5 +163,97 @@ mod tests {
         let ip = get_client_ip(&req, addr, true);
 
         assert_eq!(ip, "203.0.113.10".parse::<IpAddr>().unwrap());
+    }
+
+    #[test]
+    fn test_auth_rate_limit_allows_ten_requests_per_window() {
+        let now = Instant::now();
+        let mut attempts = VecDeque::new();
+
+        for _ in 0..10 {
+            assert!(record_auth_attempt(
+                &mut attempts,
+                now,
+                10,
+                Duration::from_secs(60)
+            ));
+        }
+
+        assert!(!record_auth_attempt(
+            &mut attempts,
+            now,
+            10,
+            Duration::from_secs(60)
+        ));
+    }
+
+    #[test]
+    fn test_auth_rate_limit_resets_after_window() {
+        let now = Instant::now();
+        let mut attempts = VecDeque::new();
+
+        for _ in 0..10 {
+            assert!(record_auth_attempt(
+                &mut attempts,
+                now,
+                10,
+                Duration::from_secs(60)
+            ));
+        }
+
+        let later = now + Duration::from_secs(61);
+        assert!(record_auth_attempt(
+            &mut attempts,
+            later,
+            10,
+            Duration::from_secs(60)
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_auth_rate_limit_middleware_returns_429_on_eleventh_request() {
+        let (state, _dir) = crate::test_support::make_test_state().await;
+        let app = Router::new()
+            .route("/api/login", post(ok_handler))
+            .layer(from_fn_with_state(
+                state.clone(),
+                auth_rate_limit_middleware,
+            ))
+            .with_state(state);
+        let addr = "127.0.0.1:3000".parse::<SocketAddr>().unwrap();
+
+        for _ in 0..10 {
+            let response = app
+                .clone()
+                .oneshot(request_with_connect_info("POST", "/api/login", addr))
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::OK);
+        }
+
+        let response = app
+            .oneshot(request_with_connect_info("POST", "/api/login", addr))
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
+    }
+
+    #[tokio::test]
+    async fn test_regular_route_is_not_affected_without_auth_rate_limit_layer() {
+        let (state, _dir) = crate::test_support::make_test_state().await;
+        let app = Router::new()
+            .route("/api/data", get(ok_handler))
+            .with_state(state);
+        let addr = "127.0.0.1:3000".parse::<SocketAddr>().unwrap();
+
+        for _ in 0..11 {
+            let response = app
+                .clone()
+                .oneshot(request_with_connect_info("GET", "/api/data", addr))
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::OK);
+        }
     }
 }

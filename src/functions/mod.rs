@@ -46,15 +46,15 @@ mod tests {
     #[tokio::test]
     async fn test_network_disabled_makes_fetch_unavailable_at_runtime() {
         let (mut state, dir) = crate::test_support::make_test_state().await;
-        state.functions_allow_network = false;
-        state.functions_work_dir = dir.path().join("functions");
+        state.functions.allow_network = false;
+        state.functions.work_dir = dir.path().join("functions");
 
         let result = execute_in_sandbox(
             request(
                 "export default async function handler() { await fetch('https://example.com'); return { ok: true } }",
                 5000,
             ),
-            &state.functions_work_dir,
+            &state.functions.work_dir,
             &state,
             None,
         )
@@ -70,21 +70,21 @@ mod tests {
     #[tokio::test]
     async fn test_timeout_kills_non_cooperative_function_and_cleans_work_dir() {
         let (mut state, dir) = crate::test_support::make_test_state().await;
-        state.functions_work_dir = dir.path().join("functions");
+        state.functions.work_dir = dir.path().join("functions");
 
         let result = execute_in_sandbox(
             request(
                 "export default async function handler() { await new Promise(() => {}); return { ok: true } }",
                 50,
             ),
-            &state.functions_work_dir,
+            &state.functions.work_dir,
             &state,
             None,
         )
         .await;
 
         assert!(result.unwrap_err().contains("timed out"));
-        let entries = std::fs::read_dir(&state.functions_work_dir)
+        let entries = std::fs::read_dir(&state.functions.work_dir)
             .map(|entries| entries.count())
             .unwrap_or(0);
         assert_eq!(entries, 0);

@@ -1,8 +1,8 @@
 # 피넛 다음 개선 계획
 
-**작성일**: 2026-05-01  
-**브랜치**: master  
-**현재 커밋**: `50e66e0` (chore: delete orphaned s3_object.rs…)
+작성일: 2026-05-01  
+브랜치: master  
+현재 커밋: 50e66e0 (chore: delete orphaned s3_object.rs…)
 
 이 문서는 평가 세션에서 도출된 개선 항목을 우선순위 순서로 정리한 실행 계획이다.
 각 항목은 독립적으로 커밋·푸시할 수 있도록 설계되었다.
@@ -13,20 +13,20 @@
 
 ### 현황
 
-`src/api/data/rows.rs` `execute_list_rows` 함수는 다음 순서로 동작한다:
+src/api/data/rows.rs execute_list_rows 함수는 다음 순서로 동작한다:
 
-1. SQLite에서 테이블의 **모든** 행을 읽어온다 (LIMIT 100 고정, `MAX_LIST_ROWS`).
-2. 메모리에서 `apply_row_filters()` → `sort_rows()` → `skip/take` 로 필터·정렬·페이지를 처리한다.
+1. SQLite에서 테이블의 모든 행을 읽어온다 (LIMIT 100 고정, MAX_LIST_ROWS).
+2. 메모리에서 apply_row_filters() → sort_rows() → skip/take 로 필터·정렬·페이지를 처리한다.
 
 문제:
-- `filter_field` / `filter_op` / `filter_value`, `search`, `title_contains`, `done` 필터가 모두 인메모리 처리.
+- filter_field / filter_op / filter_value, search, title_contains, done 필터가 모두 인메모리 처리.
 - offset이 커도 앞 행을 전부 읽은 후 버린다.
-- `order_by`도 메모리 정렬이라 인덱스를 활용하지 못한다.
+- order_by도 메모리 정렬이라 인덱스를 활용하지 못한다.
 
 ### 목표
 
-`data_rows` 테이블의 `data_json` 컬럼은 JSON 텍스트로 저장된다.  
-SQLite는 `json_extract(data_json, '$.field')` 함수를 지원하므로, 단순 비교 필터와 정렬은 SQL로 내릴 수 있다.
+data_rows 테이블의 data_json 컬럼은 JSON 텍스트로 저장된다.  
+SQLite는 json_extract(data_json, '$.field') 함수를 지원하므로, 단순 비교 필터와 정렬은 SQL로 내릴 수 있다.
 
 ### 구현 방법
 
@@ -34,9 +34,9 @@ SQLite는 `json_extract(data_json, '$.field')` 함수를 지원하므로, 단순
 
 | 파일 | 역할 |
 |------|------|
-| `src/api/data/rows.rs` | `execute_list_rows` 함수 수정 |
-| `src/api/data/query.rs` | SQL 빌더 헬퍼 추가, 기존 `apply_row_filters` 유지(하위호환) |
-| `src/api/data/internal.rs` | `DataRowRecord` sqlx 쿼리 관련 |
+| src/api/data/rows.rs | execute_list_rows 함수 수정 |
+| src/api/data/query.rs | SQL 빌더 헬퍼 추가, 기존 apply_row_filters 유지(하위호환) |
+| src/api/data/internal.rs | DataRowRecord sqlx 쿼리 관련 |
 
 #### SQL 빌더 구현 (query.rs에 추가)
 
@@ -66,289 +66,291 @@ pub(crate) fn build_row_query(
 ) -> RowQuery { ... }
 ```
 
-#### 지원할 필터 (SQL로 내릴 수 있는 것)
+구현 규칙:
+- 기본 WHERE는 `table_id = ?`
+- owner_private 정책이면 `owner_user_id = ?`
+- `search`는 title/body 같은 known field에 한정하지 말고, 기존 로직이 JSON 문자열 전체에 대해 부분 문자열 검사라면 우선 `data_json LIKE ?`로 맞춘다.
+- `title_contains`는 `json_extract(data_json, '$.title') LIKE ?`
+- `done`은 `json_extract(data_json, '$.done') = 1/0`
+- `filter_field/filter_op/filter_value`는 schema에서 field 존재 검증 후 SQL 생성
+- `order_by`는 허용 목록만 SQL 문자열로 매핑해 injection 방지
+  - 예: created_at, updated_at, title
+  - title은 `json_extract(data_json, '$.title')`
+- limit/offset은 validated params 사용
 
-| 파라미터 | SQL 변환 |
-|----------|---------|
-| `filter_field` + `filter_op=eq` + `filter_value` | `json_extract(data_json, '$.{field}') = ?` |
-| `filter_field` + `filter_op=neq` | `json_extract(...) != ?` |
-| `filter_field` + `filter_op=gt` / `lt` / `gte` / `lte` | `json_extract(...) > ?` 등 |
-| `filter_field` + `filter_op=contains` | `json_extract(...) LIKE '%' || ? || '%'` |
-| `done=true/false` | `json_extract(data_json, '$.done') = ?` (1 또는 0) |
-| `title_contains` | `json_extract(data_json, '$.title') LIKE ?` |
-| `search` | 인메모리 유지 (여러 필드 OR — SQL FTS가 없으므로) |
-| `order_by` | `created_at`, `updated_at` → 컬럼명 직접 사용, 스키마 필드 → `json_extract(data_json, '$.{field}')` |
-| `limit` / `offset` | `LIMIT ? OFFSET ?` |
+주의:
+- field path는 절대 사용자 입력을 그대로 SQL 문자열에 넣지 말고, schema의 field name 허용 목록을 거쳐 escape-free path로 조립
+- op도 eq/ne/gt/gte/lt/lte/contains 정도만 enum 매핑
+- contains는 `LIKE '%' || ? || '%'`
 
-**주의**: `filter_field`, `order_by` 값은 반드시 스키마 필드 목록 + `['created_at', 'updated_at', 'id']` 허용 목록에 대조하여 검증한 후에만 SQL에 삽입한다 (이미 `validate_list_rows_params`에서 수행 중이므로 동일 로직 재사용).
+#### rows.rs 수정
 
-#### execute_list_rows 변경 포인트 (rows.rs)
-
-현재 (lines 143–160):
-```rust
-let rows_result = if table.access_policy.mode == POLICY_OWNER_PRIVATE && !claims.is_admin {
-    sqlx::query_as::<_, DataRowRecord>(
-        "SELECT ... FROM data_rows WHERE table_id = ? AND owner_user_id = ? ORDER BY created_at DESC LIMIT ?",
-    )
-    .bind(&table.id).bind(&claims.sub).bind(MAX_LIST_ROWS)
-    .fetch_all(&state.pool).await
-} else {
-    sqlx::query_as::<_, DataRowRecord>(
-        "SELECT ... FROM data_rows WHERE table_id = ? ORDER BY created_at DESC LIMIT ?",
-    )
-    .bind(&table.id).bind(MAX_LIST_ROWS)
-    .fetch_all(&state.pool).await
-};
-```
+기존:
+- load_rows_for_table(...)
+- apply_row_filters(...)
+- sort_rows(...)
+- skip/take
 
 변경 후:
-```rust
-let query = build_row_query(params, &table.schema, &table.id, owner_clause);
-let sql = format!(
-    "SELECT id, owner_user_id, data_json, created_at, updated_at \
-     FROM data_rows \
-     WHERE table_id = ? {where_part} \
-     ORDER BY {order} \
-     LIMIT ? OFFSET ?",
-    where_part = if query.where_clauses.is_empty() { String::new() }
-                 else { format!("AND {}", query.where_clauses.join(" AND ")) },
-    order = query.order_sql,
-);
-// bind table_id, then each query.binds, then limit, offset
-```
+- validated params 확보
+- build_row_query(...) 호출
+- SQL 문자열 조립:
+  ```sql
+  SELECT id, table_id, owner_user_id, data_json, created_at, updated_at
+  FROM data_rows
+  WHERE ...
+  ORDER BY ...
+  LIMIT ? OFFSET ?
+  ```
+- sqlx::query_as::<_, DataRowRecord>(&sql) + binds 적용
+- 결과를 그대로 RowResponse 변환
 
-sqlx는 동적 쿼리에 대해 `query_as` + 개별 `bind` 체인을 지원한다.  
-bind 개수가 런타임에 달라지므로 `sqlx::query_as` 의 반환 타입을 `QueryAs`로 받아 반복 bind 후 실행한다.
+#### 테스트
 
-#### search는 인메모리 유지
+추가/수정할 테스트:
+- search 필터 결과 동일성
+- title_contains 결과 동일성
+- done=true/false 결과 동일성
+- numeric field gt/gte/lt/lte
+- owner_private 정책에서 자기 row만 나오는지
+- order_by=title / created_at / updated_at
+- offset, limit 동작
 
-`search` 파라미터는 스키마의 모든 string 타입 필드에 대한 OR 검색이다.  
-SQLite FTS5 없이 이를 SQL로 표현하면 필드 수만큼 `OR json_extract(...) LIKE ?` 가 생성되어 관리가 복잡해진다.  
-→ `search`가 있으면 SQL LIMIT을 크게 잡고(MAX_LIST_ROWS 그대로) 인메모리 필터 후 페이지 적용하는 현행 방식 유지.  
-→ `search`가 없으면 SQL에서 limit/offset을 직접 적용.
+테스트 위치:
+- src/api/data/rows.rs 의 #[cfg(test)] 또는 query.rs 테스트 모듈
 
-#### 테스트 요구사항
+#### 완료 기준
 
-- `tests/data_test.rs` (새 파일) 에 다음 케이스 추가:
-  - `filter_op=eq` 로 특정 필드 값 필터링
-  - `filter_op=contains` 로 부분 문자열 필터링
-  - `done=true` 필터
-  - `order_by=created_at&order=asc` 정렬
-  - `limit=2&offset=2` 페이지네이션
-  - owner_private 테이블에서 본인 rows만 반환 확인
+- 기존 list_rows API 응답 스키마 불변
+- 기존 테스트 통과
+- 새 SQL 푸시다운 테스트 추가
+- apply_row_filters()는 당장 삭제하지 말고 fallback/test helper로 남겨도 됨
+
+#### 권장 커밋 메시지
+
+`refactor: push row filters down into sqlite queries`
 
 ---
 
-## 항목 2 — Auth 엔드포인트 전용 레이트 리밋 (Medium)
+## 항목 2 — Auth 엔드포인트 전용 레이트 리밋 추가 (Medium)
 
 ### 현황
 
-`src/middleware/rate_limit.rs`의 `rate_limit_middleware`는 IP당 100req/60s 전역 버킷 하나만 사용한다.  
-`/api/login` 브루트포스는 다른 API 호출과 같은 버킷을 공유하므로, 공격자가 다른 경로를 호출하지 않으면 분당 100번 패스워드 시도가 가능하다.
+현재 middleware/rate_limit.rs는 전역 단일 버킷으로 IP당 분당 100 요청을 제한한다.
+로그인, 비밀번호 재설정, 세션 갱신 같은 auth 엔드포인트도 같은 정책을 사용한다.
+
+문제:
+- 로그인 brute-force 방지 관점에서 너무 느슨함
+- 일반 API burst와 auth endpoint를 구분하지 않음
 
 ### 목표
 
-`/api/login`, `/api/register`, `/api/auth/refresh` 에 대해 **IP + 엔드포인트** 단위로 별도의 엄격한 제한을 적용한다.
+auth endpoint 전용 미들웨어를 하나 더 둬서 민감 경로에 stricter rate limit을 적용한다.
 
 ### 구현 방법
 
 #### 대상 파일
 
-| 파일 | 변경 내용 |
-|------|---------|
-| `src/middleware/rate_limit.rs` | auth 전용 미들웨어 추가 |
-| `src/app.rs` | auth route group에 새 미들웨어 레이어 추가 |
-| `src/lib.rs` (`AppState`) | auth 전용 레이트리밋 상태 필드 추가 |
+| 파일 | 역할 |
+|------|------|
+| src/middleware/rate_limit.rs | AuthRateLimiter 추가 |
+| src/app.rs | auth public/protected routes에 미들웨어 장착 |
+| src/config.rs | auth_rate_limit_* 설정 추가 (선택) |
 
-#### AppState 변경 (lib.rs)
+#### 정책
+
+최소 구현:
+- IP당 60초에 10회
+- 대상 경로:
+  - /login
+  - /auth/refresh
+  - /auth/forgot-password
+  - /auth/reset-password
+  - 필요 시 /auth/change-password
+
+구조 제안:
 
 ```rust
-// 기존
-pub rate_limit_state: Arc<DashMap<IpAddr, (u32, Instant)>>,
-
-// 추가
-pub auth_rate_limit_state: Arc<DashMap<IpAddr, (u32, Instant)>>,
-```
-
-`main.rs`에서 초기화 시 `auth_rate_limit_state: Arc::new(DashMap::new())` 추가.
-
-#### 새 미들웨어 (rate_limit.rs에 추가)
-
-```rust
-/// /api/login, /api/register, /api/auth/refresh 전용 엄격한 레이트리밋
-/// IP당 10req/60s
-pub async fn auth_rate_limit_middleware(
-    State(state): State<crate::AppState>,
-    ConnectInfo(addr): ConnectInfo<SocketAddr>,
-    req: Request,
-    next: Next,
-) -> Result<Response, Response> {
-    const AUTH_LIMIT: u32 = 10;
-
-    let client_ip = get_client_ip(&req, addr, state.trust_proxy_headers);
-    let now = Instant::now();
-    let mut entry = state.auth_rate_limit_state.entry(client_ip).or_insert((0, now));
-    let (count, last_reset) = entry.value_mut();
-
-    if now.duration_since(*last_reset) > Duration::from_secs(60) {
-        *count = 1;
-        *last_reset = now;
-    } else {
-        if *count >= AUTH_LIMIT {
-            return Err(json_error(
-                StatusCode::TOO_MANY_REQUESTS,
-                "Too many authentication attempts. Please try again later.",
-            ));
-        }
-        *count += 1;
-    }
-    drop(entry);
-    Ok(next.run(req).await)
+#[derive(Clone)]
+pub struct AuthRateLimiter {
+    inner: Arc<Mutex<HashMap<String, VecDeque<Instant>>>>,
+    max_requests: usize,
+    window: Duration,
 }
 ```
 
-#### app.rs 라우터 변경
+또는 기존 RateLimiter를 일반화해 두 개 인스턴스를 app state에 둘 수도 있음.
 
-```rust
-// 현재 public_auth_routes 그룹에 .layer(middleware::from_fn_with_state(...auth_rate_limit...)) 추가
-let public_auth_routes = Router::new()
-    .route("/api/register", post(auth::register))
-    .route("/api/login", post(auth::login))
-    .route("/api/auth/refresh", post(auth::refresh_token))
-    // ... 기타 공개 auth 라우트
-    .layer(middleware::from_fn_with_state(state.clone(), auth_rate_limit_middleware));
-```
+#### app.rs 적용
 
-#### 테스트 요구사항
+build_auth_public_routes / build_auth_protected_routes 레벨에:
+- global rate limit은 유지
+- auth 전용 stricter middleware를 추가로 레이어링
 
-- `tests/auth_test.rs` 또는 `tests/rate_limit_test.rs`에 추가:
-  - 10번 로그인 시도 후 11번째에 429 반환 확인
-  - 60초 후 카운트 리셋 확인 (mock 시간 사용 불가하면 단위 테스트로)
-  - 일반 API 엔드포인트는 auth 레이트리밋에 영향받지 않음 확인
+#### 테스트
 
----
+- 같은 IP에서 10회까지 허용, 11회째 429
+- 60초 window 경과 후 다시 허용
+- 일반 data endpoint는 영향 없음
 
-## 항목 3 — JWT 알고리즘 명시적 허용 목록 (Low, 빠른 작업)
+#### 완료 기준
 
-### 현황
+- 로그인/비밀번호 재설정 계열 경로에 stricter limit 적용
+- 기존 global limiter 동작 유지
+- 429 응답 포맷 기존 에러 구조와 일치
 
-`src/auth/jwt.rs:36`:
-```rust
-&Validation::default()
-```
+#### 권장 커밋 메시지
 
-`jsonwebtoken` 의 `Validation::default()`는 현재 HS256 알고리즘 허용 목록을 포함하지만, 라이브러리 버전 업데이트 시 기본값이 바뀔 수 있다.
-
-### 구현 방법
-
-```rust
-// src/auth/jwt.rs
-use jsonwebtoken::{decode, encode, Algorithm, DecodingKey, EncodingKey, Header, Validation};
-
-pub fn verify_jwt(token: &str, secret: &str) -> Result<Claims, jsonwebtoken::errors::Error> {
-    let mut validation = Validation::new(Algorithm::HS256);
-    validation.validate_exp = true;
-    let token_data = decode::<Claims>(
-        token,
-        &DecodingKey::from_secret(secret.as_ref()),
-        &validation,
-    )?;
-    Ok(token_data.claims)
-}
-```
-
-**단일 파일, 5줄 변경.** 기존 테스트(`test_jwt_flow`)가 그대로 통과해야 한다.
+`feat: add stricter rate limiting for auth endpoints`
 
 ---
 
-## 항목 4 — AppState 필드 그룹화 (Medium, 아키텍처)
+## 항목 3 — JWT Validation에 알고리즘 허용 목록 명시 (Low, quick win)
 
 ### 현황
 
-`src/lib.rs`의 `AppState`는 17개 공개 필드를 가진 평탄한 구조체다.  
-기능이 추가될 때마다 필드가 늘어나고, `test_support.rs`의 `make_test_state()`도 함께 수정해야 한다.
+src/auth/jwt.rs 에서 jsonwebtoken::Validation::default() 사용.
+라이브러리 기본값이 HS256이긴 하지만, 코드상 의도가 명시되지 않는다.
 
 ### 목표
 
-논리적 그룹 3개로 분리하여 응집도를 높인다.
+허용 알고리즘을 명시적으로 고정한다.
+
+### 구현 방법
+
+#### 대상 파일
+
+| 파일 | 역할 |
+|------|------|
+| src/auth/jwt.rs | validation.algorithms 명시 |
+
+#### 변경
+
+```rust
+use jsonwebtoken::Algorithm;
+
+let mut validation = Validation::default();
+validation.algorithms = vec![Algorithm::HS256];
+validation.validate_exp = true;
+```
+
+가능하면 issuer / audience 검증도 현 config 모델과 맞으면 추가 검토하되, 이번 단계에서는 scope를 최소화한다.
+
+#### 테스트
+
+- 기존 JWT encode/decode 테스트 유지
+- 가능하면 algorithms list 명시 후도 정상 decode 확인
+
+#### 완료 기준
+
+- HS256만 허용됨이 코드상 명확
+- 테스트 통과
+
+#### 권장 커밋 메시지
+
+`security: pin accepted jwt algorithm to hs256`
+
+---
+
+## 항목 4 — AppState 기능 그룹화 (Medium)
+
+### 현황
+
+src/lib.rs 의 AppState가 현재 약 17개 필드의 평탄 구조다.
+새 기능이 추가될 때마다 테스트 helper, 라우터 setup, clone 지점이 광범위하게 깨진다.
+
+### 목표
+
+AppState를 완전히 DI 프레임워크화하지 말고, 최소한 기능별 config 묶음으로 그룹화한다.
+
+### 구현 방향
+
+#### 대상 파일
+
+| 파일 | 역할 |
+|------|------|
+| src/lib.rs | AppState 구조 재정의 |
+| src/app.rs | field access 변경 |
+| src/api/* | state.<field> 접근 일부 수정 |
+| tests/* | state 생성 helper 수정 |
+
+#### 제안 구조
 
 ```rust
 #[derive(Clone)]
-pub struct AppState {
-    pub pool: sqlx::SqlitePool,
-    pub storage: Arc<crate::storage::local::LocalStorage>,
-    pub auth: AuthConfig,
-    pub functions: FunctionsConfig,
-    pub system: SystemConfig,
-}
-
-#[derive(Clone)]
-pub struct AuthConfig {
+pub struct AuthState {
     pub jwt_secret: Arc<String>,
-    pub password_reset_delivery: crate::config::PasswordResetDelivery,
-    pub allowed_origins: Arc<Vec<String>>,
-    pub allowed_client_ids: Arc<Vec<String>>,
-    pub rate_limit_state: Arc<DashMap<IpAddr, (u32, Instant)>>,
-    pub auth_rate_limit_state: Arc<DashMap<IpAddr, (u32, Instant)>>,
+    pub access_token_ttl_seconds: i64,
+    pub refresh_token_ttl_seconds: i64,
+    pub auth_clients: Arc<Vec<AuthClientConfig>>,
+    pub password_reset_token_ttl_seconds: i64,
 }
 
 #[derive(Clone)]
-pub struct FunctionsConfig {
-    pub enabled: bool,
-    pub allow_network: bool,
-    pub work_dir: PathBuf,
-    pub max_concurrent: usize,
-    pub semaphore: Arc<tokio::sync::Semaphore>,
-    pub event_sender: tokio::sync::broadcast::Sender<...>,
+pub struct FunctionsState {
+    pub functions_store: FunctionsStore,
+    pub functions_queue: FunctionInvocationQueue,
+    pub functions_event_bus: EventBus<FunctionInvocationEvent>,
+    pub functions_runtime: FunctionsRuntimeHandle,
 }
 
 #[derive(Clone)]
-pub struct SystemConfig {
-    pub database_url: Arc<String>,
-    pub trust_proxy_headers: bool,
-    pub multipart_stale_hours: u64,
-    pub last_backup_at: Arc<tokio::sync::RwLock<Option<...>>>,
-    pub started_at: std::time::Instant,
-    pub data_event_sender: tokio::sync::broadcast::Sender<...>,
+pub struct PushState {
+    pub vapid: Option<VapidConfig>,
+    pub push_queue: PushDeliveryQueue,
+}
+
+#[derive(Clone)]
+pub struct AppState {
+    pub pool: SqlitePool,
+    pub storage: Arc<dyn ObjectStorage>,
+    pub auth: AuthState,
+    pub functions: FunctionsState,
+    pub push: PushState,
+    pub service_tokens_enabled: bool,
+    pub max_upload_bytes: usize,
+    pub request_id_header: Arc<String>,
+    ...
 }
 ```
 
-### 주의사항
+핵심:
+- 너무 과하게 쪼개지 말 것
+- config/runtime/bus/queue가 섞인 현재 필드만 논리적으로 묶어 테스트 영향을 줄이는 수준
 
-- 이 작업은 **전체 코드베이스에 영향**을 준다 (`state.jwt_secret` → `state.auth.jwt_secret` 등).
-- `grep -rn "state\." src/` 로 참조 위치 전체 파악 후 진행할 것.
-- `src/test_support.rs` 의 `make_test_state()`도 함께 업데이트해야 한다.
-- **항목 1, 2, 3을 먼저 완료한 후 별도 커밋으로 처리** 권장.
+#### 리팩터링 순서
+
+1. 새 nested state struct 추가
+2. app bootstrap에서 조립
+3. compile error 따라 state 접근부 수정
+4. test helper 업데이트
+5. cargo test 전체 검증
+
+#### 완료 기준
+
+- 기능 변화 없음
+- AppState 필드 수 체감 감소
+- auth/functions/push 관련 state access가 grouped path로 정리
+
+#### 권장 커밋 메시지
+
+`refactor: group app state by feature area`
 
 ---
 
-## 실행 순서
+## 실행 순서 제안
 
-```
-항목 3 (JWT 알고리즘)   → 5분, 위험 없음, 먼저 처리
-항목 2 (auth 레이트리밋) → 1~2시간, 중간 난이도
-항목 1 (SQL 필터 pushdown) → 3~4시간, 가장 임팩트 큼
-항목 4 (AppState 리팩토링) → 2~3시간, 마지막 처리
-```
+1. 항목 3 (JWT 알고리즘 명시) — 5분, 빠른 보안 개선
+2. 항목 2 (Auth rate limit) — 범위 작고 효과 큼
+3. 항목 1 (Row filter SQL pushdown) — 가장 큰 성능 개선
+4. 항목 4 (AppState 그룹화) — 리스크가 있어 마지막
 
-각 항목은 독립 커밋으로 `master`에 직접 푸시한다.  
-커밋 컨벤션: `fix:`, `feat:`, `perf:`, `refactor:` 프리픽스 사용.  
-커밋 사용자: `parkjangwon <vim@kakao.com>`
+실제 작업 시에는 항목별로:
+- 구현
+- cargo fmt
+- cargo test
+- 필요 시 ./scripts/build.sh
+- 커밋
+- 푸시
 
----
-
-## 참조 파일 목록
-
-| 파일 | 관련 항목 |
-|------|---------|
-| `src/api/data/rows.rs` | 항목 1 (execute_list_rows 함수) |
-| `src/api/data/query.rs` | 항목 1 (apply_row_filters, SQL 빌더 추가) |
-| `src/api/data/types.rs` | 항목 1 (ListRowsParams 구조체) |
-| `src/api/data/internal.rs` | 항목 1 (DataRowRecord, load_row) |
-| `src/middleware/rate_limit.rs` | 항목 2 (auth_rate_limit_middleware 추가) |
-| `src/app.rs` | 항목 2 (라우터에 미들웨어 추가) |
-| `src/auth/jwt.rs` | 항목 3 (verify_jwt Validation 수정) |
-| `src/lib.rs` | 항목 2 (AppState 필드), 항목 4 (그룹화) |
-| `src/main.rs` | 항목 2 (AppState 초기화), 항목 4 |
-| `src/test_support.rs` | 항목 2, 4 (make_test_state 업데이트) |
-| `tests/auth_test.rs` | 항목 2 (레이트리밋 테스트) |
+순으로 독립 진행하는 것을 권장한다.

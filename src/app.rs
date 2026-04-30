@@ -35,23 +35,51 @@ pub fn build_app(state: crate::AppState, config: &crate::config::AppConfig) -> R
 }
 
 fn build_auth_public_routes(state: crate::AppState) -> Router<crate::AppState> {
+    let auth_client_policy = axum::middleware::from_fn_with_state(
+        state.clone(),
+        crate::middleware::auth_client_policy::auth_client_policy_middleware,
+    );
+    let auth_rate_limit = axum::middleware::from_fn_with_state(
+        state.clone(),
+        crate::middleware::rate_limit::auth_rate_limit_middleware,
+    );
+
     Router::new()
         .route("/register", post(crate::api::auth::register))
-        .route("/login", post(crate::api::auth::login))
-        .route("/auth/refresh", post(crate::api::auth::refresh_session))
         .route("/auth/logout", post(crate::api::auth::logout))
-        .route("/auth/forgot-password", post(crate::api::auth::forgot_password))
-        .route("/auth/reset-password", post(crate::api::auth::reset_password))
-        .layer(axum::middleware::from_fn_with_state(
-            state,
-            crate::middleware::auth_client_policy::auth_client_policy_middleware,
-        ))
+        .merge(
+            Router::new()
+                .route("/login", post(crate::api::auth::login))
+                .route("/auth/refresh", post(crate::api::auth::refresh_session))
+                .route(
+                    "/auth/forgot-password",
+                    post(crate::api::auth::forgot_password),
+                )
+                .route(
+                    "/auth/reset-password",
+                    post(crate::api::auth::reset_password),
+                )
+                .layer(auth_rate_limit),
+        )
+        .layer(auth_client_policy)
 }
 
 fn build_auth_protected_routes(state: crate::AppState) -> Router<crate::AppState> {
+    let auth_client_policy = axum::middleware::from_fn_with_state(
+        state.clone(),
+        crate::middleware::auth_client_policy::auth_client_policy_middleware,
+    );
+    let auth_middleware = axum::middleware::from_fn_with_state(
+        state.clone(),
+        crate::middleware::auth::auth_middleware,
+    );
+    let auth_rate_limit = axum::middleware::from_fn_with_state(
+        state,
+        crate::middleware::rate_limit::auth_rate_limit_middleware,
+    );
+
     Router::new()
         .route("/me", get(crate::api::auth::me))
-        .route("/auth/change-password", post(crate::api::auth::change_password))
         .route("/auth/sessions", get(crate::api::auth::list_sessions))
         .route("/auth/events", get(crate::api::auth::list_auth_events))
         .route(
@@ -62,17 +90,22 @@ fn build_auth_protected_routes(state: crate::AppState) -> Router<crate::AppState
             "/auth/sessions/:session_id",
             delete(crate::api::auth::revoke_session),
         )
-        .layer(axum::middleware::from_fn_with_state(
-            state.clone(),
-            crate::middleware::auth::auth_middleware,
-        ))
-        .layer(axum::middleware::from_fn_with_state(
-            state,
-            crate::middleware::auth_client_policy::auth_client_policy_middleware,
-        ))
+        .merge(
+            Router::new()
+                .route(
+                    "/auth/change-password",
+                    post(crate::api::auth::change_password),
+                )
+                .layer(auth_rate_limit),
+        )
+        .layer(auth_middleware)
+        .layer(auth_client_policy)
 }
 
-fn build_protected_routes(state: crate::AppState, max_upload_bytes: usize) -> Router<crate::AppState> {
+fn build_protected_routes(
+    state: crate::AppState,
+    max_upload_bytes: usize,
+) -> Router<crate::AppState> {
     Router::new()
         .route("/admin/users", get(crate::api::admin::list_users))
         .route("/admin/backups", get(crate::api::backups::list_backups))
@@ -255,7 +288,10 @@ fn build_data_routes() -> Router<crate::AppState> {
         .route("/data/tables", post(crate::api::data::create_table))
         .route("/data/tables/:table", get(crate::api::data::get_table))
         .route("/data/tables/:table", patch(crate::api::data::update_table))
-        .route("/data/tables/:table", delete(crate::api::data::delete_table))
+        .route(
+            "/data/tables/:table",
+            delete(crate::api::data::delete_table),
+        )
         .route(
             "/data/tables/:table/presets",
             get(crate::api::data::list_query_presets),
@@ -276,10 +312,19 @@ fn build_data_routes() -> Router<crate::AppState> {
             "/data/tables/:table/presets/:preset_id",
             delete(crate::api::data::delete_query_preset),
         )
-        .route("/data/tables/:table/export", get(crate::api::data::export_table))
-        .route("/data/tables/:table/import", post(crate::api::data::import_rows))
+        .route(
+            "/data/tables/:table/export",
+            get(crate::api::data::export_table),
+        )
+        .route(
+            "/data/tables/:table/import",
+            post(crate::api::data::import_rows),
+        )
         .route("/data/tables/:table/rows", get(crate::api::data::list_rows))
-        .route("/data/tables/:table/rows", post(crate::api::data::create_row))
+        .route(
+            "/data/tables/:table/rows",
+            post(crate::api::data::create_row),
+        )
         .route(
             "/data/tables/:table/events",
             get(crate::api::data::list_row_events),

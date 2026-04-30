@@ -315,7 +315,7 @@ async fn authenticate_presigned_request(
         "UNSIGNED-PAYLOAD",
     );
     let credential_scope = format!("{scope_date}/{REGION}/{SERVICE}/{TERMINATOR}");
-    let signing_key = signing_key(state.jwt_secret.as_str(), &access_key, &scope_date);
+    let signing_key = signing_key(state.auth.jwt_secret.as_str(), &access_key, &scope_date);
     let computed = hex_encode(&hmac_sha256(
         &signing_key,
         string_to_sign(&amz_date, &credential_scope, &canonical_request).as_bytes(),
@@ -379,7 +379,7 @@ async fn authenticate_header_signed_request(
         &payload_hash,
     );
     let credential_scope = format!("{scope_date}/{REGION}/{SERVICE}/{TERMINATOR}");
-    let signing_key = signing_key(state.jwt_secret.as_str(), &access_key, &scope_date);
+    let signing_key = signing_key(state.auth.jwt_secret.as_str(), &access_key, &scope_date);
     let computed = hex_encode(&hmac_sha256(
         &signing_key,
         string_to_sign(&amz_date, &credential_scope, &canonical_request).as_bytes(),

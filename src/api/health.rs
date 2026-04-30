@@ -99,7 +99,7 @@ pub async fn readiness_check(State(state): State<crate::AppState>) -> Json<Value
         "path": storage_path.to_string_lossy(),
     }));
 
-    let node_available = if state.functions_enabled {
+    let node_available = if state.functions.enabled {
         tokio::process::Command::new("node")
             .arg("--version")
             .output()
@@ -109,8 +109,8 @@ pub async fn readiness_check(State(state): State<crate::AppState>) -> Json<Value
     } else {
         true
     };
-    let work_dir_writable = if state.functions_enabled {
-        ensure_storage_ready(&state.functions_work_dir)
+    let work_dir_writable = if state.functions.enabled {
+        ensure_storage_ready(&state.functions.work_dir)
             .await
             .is_ok()
     } else {
@@ -120,12 +120,12 @@ pub async fn readiness_check(State(state): State<crate::AppState>) -> Json<Value
     checks.push(json!({
         "name": "functions",
         "ok": functions_ready,
-        "enabled": state.functions_enabled,
+        "enabled": state.functions.enabled,
         "node_available": node_available,
-        "network_allowed": state.functions_allow_network,
+        "network_allowed": state.functions.allow_network,
         "work_dir_writable": work_dir_writable,
-        "work_dir": state.functions_work_dir.to_string_lossy(),
-        "message": if state.functions_enabled {
+        "work_dir": state.functions.work_dir.to_string_lossy(),
+        "message": if state.functions.enabled {
             if functions_ready { "functions runtime is available" } else { "functions runtime is unavailable" }
         } else {
             "functions runtime is disabled"
@@ -208,7 +208,7 @@ mod tests {
     #[tokio::test]
     async fn test_readiness_check_reports_functions_disabled_as_skipped() {
         let (mut state, _dir) = crate::test_support::make_test_state().await;
-        state.functions_enabled = false;
+        state.functions.enabled = false;
 
         let response = readiness_check(State(state)).await;
         assert_eq!(response.0["status"], "ready");

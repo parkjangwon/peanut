@@ -39,6 +39,7 @@ pub struct AppConfig {
     pub functions_allow_network: bool,
     pub functions_work_dir: PathBuf,
     pub functions_max_concurrent: usize,
+    pub functions_secrets_master_key: String,
 }
 
 pub fn load_config_from_env() -> Result<AppConfig, String> {
@@ -135,6 +136,11 @@ fn load_config_from_map(values: &HashMap<String, String>) -> Result<AppConfig, S
         "FUNCTIONS_MAX_CONCURRENT",
         DEFAULT_FUNCTIONS_MAX_CONCURRENT,
     )?;
+    let functions_secrets_master_key = values
+        .get("FUNCTIONS_SECRETS_MASTER_KEY")
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| jwt_secret.clone());
 
     Ok(AppConfig {
         database_url,
@@ -155,6 +161,7 @@ fn load_config_from_map(values: &HashMap<String, String>) -> Result<AppConfig, S
         functions_allow_network,
         functions_work_dir,
         functions_max_concurrent,
+        functions_secrets_master_key,
     })
 }
 
@@ -332,6 +339,7 @@ mod tests {
             config.functions_max_concurrent,
             DEFAULT_FUNCTIONS_MAX_CONCURRENT
         );
+        assert_eq!(config.functions_secrets_master_key, "test-secret");
     }
 
     #[test]
@@ -522,6 +530,7 @@ mod tests {
             ("FUNCTIONS_ALLOW_NETWORK", "true"),
             ("FUNCTIONS_WORK_DIR", "/tmp/peanut-test-functions"),
             ("FUNCTIONS_MAX_CONCURRENT", "8"),
+            ("FUNCTIONS_SECRETS_MASTER_KEY", "dedicated-functions-key"),
         ]);
 
         let config = load_config_from_map(&values).unwrap();
@@ -531,6 +540,10 @@ mod tests {
             PathBuf::from("/tmp/peanut-test-functions")
         );
         assert_eq!(config.functions_max_concurrent, 8);
+        assert_eq!(
+            config.functions_secrets_master_key,
+            "dedicated-functions-key"
+        );
     }
 
     #[test]

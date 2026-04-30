@@ -128,36 +128,36 @@ pub(crate) async fn execute_list_rows(
         return json_error(StatusCode::FORBIDDEN, "read access denied");
     }
 
-    let limit = params
-        .limit
-        .unwrap_or(MAX_LIST_ROWS as usize)
-        .min(MAX_LIST_ROWS as usize);
-    let offset = params.offset.unwrap_or(0);
-    let order_by = params.order_by.as_deref().unwrap_or("created_at");
-    let descending = !matches!(params.order.as_deref(), Some("asc"));
-
     if let Err(message) = validate_list_rows_params(&table.schema, params) {
         return json_error(StatusCode::BAD_REQUEST, message);
     }
 
-    let rows_result = if table.access_policy.mode == POLICY_OWNER_PRIVATE && !claims.is_admin {
-        sqlx::query_as::<_, DataRowRecord>(
-            "SELECT id, owner_user_id, data_json, created_at, updated_at FROM data_rows WHERE table_id = ? AND owner_user_id = ? ORDER BY created_at DESC LIMIT ?",
-        )
-        .bind(&table.id)
-        .bind(&claims.sub)
-        .bind(MAX_LIST_ROWS)
-        .fetch_all(&state.pool)
-        .await
+    let owner_user_id = if table.access_policy.mode == POLICY_OWNER_PRIVATE && !claims.is_admin {
+        Some(claims.sub.as_str())
     } else {
-        sqlx::query_as::<_, DataRowRecord>(
-            "SELECT id, owner_user_id, data_json, created_at, updated_at FROM data_rows WHERE table_id = ? ORDER BY created_at DESC LIMIT ?",
-        )
-        .bind(&table.id)
-        .bind(MAX_LIST_ROWS)
-        .fetch_all(&state.pool)
-        .await
+        None
     };
+    let row_query = build_row_query(params, &table.schema, &table.id, owner_user_id);
+    let sql = format!(
+        "SELECT id, owner_user_id, data_json, created_at, updated_at FROM data_rows WHERE {} {} LIMIT ? OFFSET ?",
+        row_query.where_clauses.join(" AND "),
+        row_query.order_sql,
+    );
+
+    let mut query = sqlx::query_as::<_, DataRowRecord>(&sql);
+    for bind in row_query.binds {
+        query = match bind {
+            RowQueryBind::Text(value) => query.bind(value),
+            RowQueryBind::Bool(value) => query.bind(value),
+            RowQueryBind::Int(value) => query.bind(value),
+            RowQueryBind::Float(value) => query.bind(value),
+        };
+    }
+    let rows_result = query
+        .bind(row_query.limit)
+        .bind(row_query.offset)
+        .fetch_all(&state.pool)
+        .await;
 
     match rows_result {
         Ok(records) => {
@@ -169,11 +169,7 @@ pub(crate) async fn execute_list_rows(
                 }
             }
 
-            let filtered = apply_row_filters(rows, &table.schema, params);
-            let mut filtered = filtered;
-            sort_rows(&mut filtered, order_by, descending);
-            let filtered: Vec<_> = filtered.into_iter().skip(offset).take(limit).collect();
-            (StatusCode::OK, Json(DataRowsResponse { rows: filtered })).into_response()
+            (StatusCode::OK, Json(DataRowsResponse { rows })).into_response()
         }
         Err(_) => json_error(StatusCode::INTERNAL_SERVER_ERROR, "failed to list rows"),
     }

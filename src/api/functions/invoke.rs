@@ -63,7 +63,7 @@ fn emit_function_event(
     invocation: &InvocationContext,
     status: &str,
 ) {
-    let _ = state.function_event_sender.send(FunctionRealtimeEvent {
+    let _ = state.functions.event_sender.send(FunctionRealtimeEvent {
         event: "invocation.status_changed".to_string(),
         function_name: function_name.to_string(),
         invocation_id: invocation.invocation_id.clone(),
@@ -187,7 +187,8 @@ async fn execute_and_finalize_invocation(
     input: Value,
 ) -> Result<(Value, i64), String> {
     let _permit = state
-        .functions_semaphore
+        .functions
+        .semaphore
         .clone()
         .acquire_owned()
         .await
@@ -198,13 +199,18 @@ async fn execute_and_finalize_invocation(
         None => Value::Null,
     };
     let mut runtime_env = parse_env_map(&invocation.function_version.env_json);
-    let secret_values = load_function_secrets(&state.pool, &invocation.function_version.id)
+    let secret_values = load_function_secrets(
+        &state.pool,
+        &state.function_secrets_key,
+        &invocation.function_version.id,
+    )
         .await
         .map_err(|_| "failed to load function secrets".to_string())?;
     for (key, value) in &secret_values {
         runtime_env.insert(key.clone(), value.clone());
     }
     let env_payload = serde_json::to_value(runtime_env).unwrap_or(Value::Null);
+    let sandbox_state = state.clone();
     let sandbox_result = execute_in_sandbox(
         SandboxExecutionRequest {
             runtime: &invocation.function_version.runtime,
@@ -215,15 +221,15 @@ async fn execute_and_finalize_invocation(
             env_payload,
             timeout_ms: invocation.function_version.timeout_ms,
         },
-        &state.functions_work_dir,
-        state,
-        claims,
+        &state.functions.work_dir,
+        &sandbox_state,
+        claims.clone(),
     )
     .await;
 
     match sandbox_result {
         Ok(result) => {
-            let redacted_response = redact_json_value(result.response_json, &secret_values);
+            let redacted_response = redact_json_value(result.response_json.clone(), &secret_values);
             let redacted_logs = compose_log_text(&result.stdout, &result.stderr)
                 .map(|text| redact_secret_text(text, &secret_values));
             let response_json = match serde_json::to_string(&redacted_response) {
@@ -250,7 +256,7 @@ async fn execute_and_finalize_invocation(
             Ok((redacted_response, result.duration_ms))
         }
         Err(error) => {
-            let redacted_error = redact_secret_text(error, &secret_values);
+            let redacted_error = redact_secret_text(error.clone(), &secret_values);
             let _ = mark_invocation_failed(
                 &state.pool,
                 &invocation.invocation_id,

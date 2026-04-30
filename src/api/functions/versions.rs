@@ -92,7 +92,7 @@ pub async fn rollback_function_version(
         source_code: version.source_code.clone(),
         invoke_policy: version.invoke_policy.clone(),
         env_json: version.env_json.clone(),
-        secret_values: load_function_secrets(&state.pool, &version.id)
+        secret_values: load_function_secrets(&state.pool, &state.function_secrets_key, &version.id)
             .await
             .unwrap_or_default(),
         api_key_hash: version.api_key_hash.clone(),

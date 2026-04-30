@@ -174,9 +174,9 @@ async fn build_ops_metrics(state: &crate::AppState) -> Result<OpsMetricsResponse
         storage,
         push,
         functions: FunctionsMetrics {
-            enabled: state.functions_enabled,
-            network_allowed: state.functions_allow_network,
-            running_limit: state.functions_max_concurrent,
+            enabled: state.functions.enabled,
+            network_allowed: state.functions.allow_network,
+            running_limit: state.functions.max_concurrent,
             invocations_24h: function_counts.invocations_24h,
             failures_24h: function_counts.failures_24h,
             timeouts_24h: function_counts.timeouts_24h,

@@ -16,7 +16,11 @@ pub(crate) fn can_write_table(claims: &Claims, policy: &AccessPolicy) -> bool {
     }
 }
 
-pub(crate) fn can_access_row(claims: &Claims, policy: &AccessPolicy, owner_user_id: Option<&str>) -> bool {
+pub(crate) fn can_access_row(
+    claims: &Claims,
+    policy: &AccessPolicy,
+    owner_user_id: Option<&str>,
+) -> bool {
     if claims.is_admin {
         return true;
     }

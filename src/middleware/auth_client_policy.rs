@@ -13,12 +13,12 @@ pub async fn auth_client_policy_middleware(
     next: Next,
 ) -> Result<Response, Response> {
     if let Some(response) =
-        require_allowed_origin(req.headers(), state.auth_allowed_origins.as_ref())
+        require_allowed_origin(req.headers(), state.auth.allowed_origins.as_ref())
     {
         return Err(response);
     }
     if let Some(response) =
-        require_allowed_client_id(req.headers(), state.auth_allowed_client_ids.as_ref())
+        require_allowed_client_id(req.headers(), state.auth.allowed_client_ids.as_ref())
     {
         return Err(response);
     }
@@ -99,7 +99,7 @@ mod tests {
     #[tokio::test]
     async fn test_auth_client_policy_rejects_unknown_origin() {
         let (mut state, _dir) = crate::test_support::make_test_state().await;
-        state.auth_allowed_origins = Arc::new(vec!["https://app.example.com".to_string()]);
+        state.auth.allowed_origins = Arc::new(vec!["https://app.example.com".to_string()]);
 
         let app = Router::new()
             .route("/api/login", post(ok_handler))
@@ -129,7 +129,7 @@ mod tests {
     #[tokio::test]
     async fn test_auth_client_policy_rejects_missing_client_id() {
         let (mut state, _dir) = crate::test_support::make_test_state().await;
-        state.auth_allowed_client_ids = Arc::new(vec!["web-app".to_string()]);
+        state.auth.allowed_client_ids = Arc::new(vec!["web-app".to_string()]);
 
         let app = Router::new()
             .route("/api/login", post(ok_handler))
@@ -161,8 +161,8 @@ mod tests {
     #[tokio::test]
     async fn test_auth_client_policy_allows_known_origin_and_client_id() {
         let (mut state, _dir) = crate::test_support::make_test_state().await;
-        state.auth_allowed_origins = Arc::new(vec!["https://app.example.com".to_string()]);
-        state.auth_allowed_client_ids = Arc::new(vec!["web-app".to_string()]);
+        state.auth.allowed_origins = Arc::new(vec!["https://app.example.com".to_string()]);
+        state.auth.allowed_client_ids = Arc::new(vec!["web-app".to_string()]);
 
         let app = Router::new()
             .route("/api/login", post(ok_handler))

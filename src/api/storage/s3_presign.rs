@@ -14,7 +14,7 @@ pub async fn create_presigned_url(
         &bucket,
         &key,
         &payload,
-        state.jwt_secret.as_str(),
+        state.auth.jwt_secret.as_str(),
     ) {
         Ok(response) => (StatusCode::OK, Json(response)).into_response(),
         Err(message) => json_error(StatusCode::BAD_REQUEST, message),

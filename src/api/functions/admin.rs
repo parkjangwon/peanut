@@ -76,16 +76,24 @@ pub async fn create_function(
         );
     }
 
-    let version =
-        match insert_function_version(&mut tx, &function_id, 1, &validated, &claims.sub).await {
-            Ok(version) => version,
-            Err(_) => {
-                return json_error(
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    "failed to persist function version",
-                )
-            }
-        };
+    let version = match insert_function_version(
+        &mut tx,
+        &state.function_secrets_key,
+        &function_id,
+        1,
+        &validated,
+        &claims.sub,
+    )
+    .await
+    {
+        Ok(version) => version,
+        Err(_) => {
+            return json_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "failed to persist function version",
+            )
+        }
+    };
 
     if activate_function_version(&mut tx, &function_id, &validated, &version, &claims.sub)
         .await
@@ -156,7 +164,7 @@ pub async fn update_function(
     };
 
     let existing_secret_values =
-        match load_function_secrets(&state.pool, &existing.active_version_id).await {
+        match load_function_secrets(&state.pool, &state.function_secrets_key, &existing.active_version_id).await {
             Ok(secrets) => secrets,
             Err(_) => {
                 return json_error(
@@ -185,6 +193,7 @@ pub async fn update_function(
 
     let version = match insert_function_version(
         &mut tx,
+        &state.function_secrets_key,
         &validated.id,
         next_version_number,
         &validated,

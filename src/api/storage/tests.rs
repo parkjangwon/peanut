@@ -345,7 +345,7 @@ async fn test_presigned_get_round_trip_uses_sigv4_query_auth() {
         "assets",
         "notes/file.txt",
         &request,
-        state.jwt_secret.as_str(),
+        state.auth.jwt_secret.as_str(),
     )
     .unwrap();
 
@@ -404,7 +404,7 @@ async fn test_presigned_head_round_trip_uses_sigv4_query_auth() {
         "assets",
         "notes/presigned-head.txt",
         &request,
-        state.jwt_secret.as_str(),
+        state.auth.jwt_secret.as_str(),
     )
     .unwrap();
 
@@ -570,7 +570,7 @@ async fn test_presigned_put_tagging_round_trip_uses_sigv4_query_auth() {
         "assets",
         "notes/presigned-tagging.txt",
         &put_request,
-        state.jwt_secret.as_str(),
+        state.auth.jwt_secret.as_str(),
     )
     .unwrap();
 
@@ -614,7 +614,7 @@ async fn test_presigned_put_tagging_round_trip_uses_sigv4_query_auth() {
         "assets",
         "notes/presigned-tagging.txt",
         &get_request,
-        state.jwt_secret.as_str(),
+        state.auth.jwt_secret.as_str(),
     )
     .unwrap();
     let get_uri = get_generated.url.replace("https://example.com", "");
@@ -690,7 +690,7 @@ async fn test_presigned_delete_tagging_round_trip_uses_sigv4_query_auth() {
         "assets",
         "notes/presigned-tagging-delete.txt",
         &delete_request,
-        state.jwt_secret.as_str(),
+        state.auth.jwt_secret.as_str(),
     )
     .unwrap();
     let delete_uri = delete_generated.url.replace("https://example.com", "");
@@ -720,7 +720,7 @@ async fn test_presigned_delete_tagging_round_trip_uses_sigv4_query_auth() {
         "assets",
         "notes/presigned-tagging-delete.txt",
         &get_request,
-        state.jwt_secret.as_str(),
+        state.auth.jwt_secret.as_str(),
     )
     .unwrap();
     let get_uri = get_generated.url.replace("https://example.com", "");
@@ -771,7 +771,7 @@ async fn test_presigned_multipart_round_trip_uses_sigv4_query_auth() {
         "assets",
         "videos/presigned-multipart.txt",
         &create_request,
-        state.jwt_secret.as_str(),
+        state.auth.jwt_secret.as_str(),
     )
     .unwrap();
     let create_response = tower::ServiceExt::oneshot(
@@ -801,7 +801,7 @@ async fn test_presigned_multipart_round_trip_uses_sigv4_query_auth() {
         "assets",
         "videos/presigned-multipart.txt",
         &upload_part_request,
-        state.jwt_secret.as_str(),
+        state.auth.jwt_secret.as_str(),
     )
     .unwrap();
     let upload_part_response = tower::ServiceExt::oneshot(
@@ -837,7 +837,7 @@ async fn test_presigned_multipart_round_trip_uses_sigv4_query_auth() {
         "assets",
         "videos/presigned-multipart.txt",
         &list_parts_request,
-        state.jwt_secret.as_str(),
+        state.auth.jwt_secret.as_str(),
     )
     .unwrap();
     let list_parts_response = tower::ServiceExt::oneshot(
@@ -871,7 +871,7 @@ async fn test_presigned_multipart_round_trip_uses_sigv4_query_auth() {
         "assets",
         "videos/presigned-multipart.txt",
         &complete_request,
-        state.jwt_secret.as_str(),
+        state.auth.jwt_secret.as_str(),
     )
     .unwrap();
     let complete_response = tower::ServiceExt::oneshot(
@@ -900,7 +900,7 @@ async fn test_presigned_multipart_round_trip_uses_sigv4_query_auth() {
         "assets",
         "videos/presigned-multipart.txt",
         &get_request,
-        state.jwt_secret.as_str(),
+        state.auth.jwt_secret.as_str(),
     )
     .unwrap();
     let get_response = tower::ServiceExt::oneshot(
@@ -935,7 +935,7 @@ async fn test_presigned_put_round_trip_uses_sigv4_query_auth() {
         "assets",
         "notes/presigned-put.txt",
         &request,
-        state.jwt_secret.as_str(),
+        state.auth.jwt_secret.as_str(),
     )
     .unwrap();
 
@@ -1020,7 +1020,7 @@ async fn test_sdk_presigned_get_smoke_interop() {
         "GET",
         "https://example.com/api/s3/assets/notes/sdk.txt",
         &user.user.id,
-        &format!("{}:{}", state.jwt_secret.as_str(), user.user.id),
+        &format!("{}:{}", state.auth.jwt_secret.as_str(), user.user.id),
         None,
     )
     .unwrap();
@@ -1074,7 +1074,7 @@ async fn test_header_sigv4_get_round_trip_uses_authorization_header() {
         "GET",
         "https://example.com/api/s3/assets/notes/header.txt",
         &user.user.id,
-        state.jwt_secret.as_str(),
+        state.auth.jwt_secret.as_str(),
         None,
     )
     .unwrap();
@@ -1115,7 +1115,7 @@ async fn test_header_sigv4_put_head_and_delete_round_trip() {
         "PUT",
         "https://example.com/api/s3/assets/notes/multi.txt",
         &user.user.id,
-        state.jwt_secret.as_str(),
+        state.auth.jwt_secret.as_str(),
         None,
     )
     .unwrap();
@@ -1149,7 +1149,7 @@ async fn test_header_sigv4_put_head_and_delete_round_trip() {
         "HEAD",
         "https://example.com/api/s3/assets/notes/multi.txt",
         &user.user.id,
-        state.jwt_secret.as_str(),
+        state.auth.jwt_secret.as_str(),
         None,
     )
     .unwrap();
@@ -1183,7 +1183,7 @@ async fn test_header_sigv4_put_head_and_delete_round_trip() {
         "DELETE",
         "https://example.com/api/s3/assets/notes/multi.txt",
         &user.user.id,
-        state.jwt_secret.as_str(),
+        state.auth.jwt_secret.as_str(),
         None,
     )
     .unwrap();
@@ -1223,7 +1223,7 @@ async fn test_header_sigv4_rejects_invalid_signature() {
         "GET",
         "https://example.com/api/s3/assets/notes/missing.txt",
         &user.user.id,
-        state.jwt_secret.as_str(),
+        state.auth.jwt_secret.as_str(),
         None,
     )
     .unwrap();
@@ -1281,7 +1281,7 @@ async fn test_s3_like_multipart_upload_round_trip() {
         "POST",
         "https://example.com/api/s3/assets/videos/movie.txt?uploads=1",
         &user.user.id,
-        state.jwt_secret.as_str(),
+        state.auth.jwt_secret.as_str(),
         None,
     )
     .unwrap();
@@ -1312,7 +1312,7 @@ async fn test_s3_like_multipart_upload_round_trip() {
             "https://example.com/api/s3/assets/videos/movie.txt?partNumber=1&uploadId={upload_id}"
         ),
         &user.user.id,
-        state.jwt_secret.as_str(),
+        state.auth.jwt_secret.as_str(),
         None,
     )
     .unwrap();
@@ -1347,7 +1347,7 @@ async fn test_s3_like_multipart_upload_round_trip() {
             "https://example.com/api/s3/assets/videos/movie.txt?partNumber=2&uploadId={upload_id}"
         ),
         &user.user.id,
-        state.jwt_secret.as_str(),
+        state.auth.jwt_secret.as_str(),
         None,
     )
     .unwrap();
@@ -1383,7 +1383,7 @@ async fn test_s3_like_multipart_upload_round_trip() {
         "POST",
         &format!("https://example.com/api/s3/assets/videos/movie.txt?uploadId={upload_id}"),
         &user.user.id,
-        state.jwt_secret.as_str(),
+        state.auth.jwt_secret.as_str(),
         None,
     )
     .unwrap();
@@ -1414,7 +1414,7 @@ async fn test_s3_like_multipart_upload_round_trip() {
         "GET",
         "https://example.com/api/s3/assets/videos/movie.txt",
         &user.user.id,
-        state.jwt_secret.as_str(),
+        state.auth.jwt_secret.as_str(),
         None,
     )
     .unwrap();
@@ -1443,7 +1443,7 @@ async fn test_s3_like_multipart_upload_round_trip() {
         "HEAD",
         "https://example.com/api/s3/assets/videos/movie.txt",
         &user.user.id,
-        state.jwt_secret.as_str(),
+        state.auth.jwt_secret.as_str(),
         None,
     )
     .unwrap();
@@ -1490,7 +1490,7 @@ async fn test_s3_like_abort_multipart_upload_returns_no_such_upload_on_complete(
         "POST",
         "https://example.com/api/s3/assets/videos/abort.txt?uploads=1",
         &user.user.id,
-        state.jwt_secret.as_str(),
+        state.auth.jwt_secret.as_str(),
         None,
     )
     .unwrap();
@@ -1515,7 +1515,7 @@ async fn test_s3_like_abort_multipart_upload_returns_no_such_upload_on_complete(
         "DELETE",
         &format!("https://example.com/api/s3/assets/videos/abort.txt?uploadId={upload_id}"),
         &user.user.id,
-        state.jwt_secret.as_str(),
+        state.auth.jwt_secret.as_str(),
         None,
     )
     .unwrap();
@@ -1541,7 +1541,7 @@ async fn test_s3_like_abort_multipart_upload_returns_no_such_upload_on_complete(
         "POST",
         &format!("https://example.com/api/s3/assets/videos/abort.txt?uploadId={upload_id}"),
         &user.user.id,
-        state.jwt_secret.as_str(),
+        state.auth.jwt_secret.as_str(),
         None,
     )
     .unwrap();
@@ -1589,7 +1589,7 @@ async fn test_s3_like_list_parts_returns_uploaded_parts() {
         "POST",
         "https://example.com/api/s3/assets/videos/parts.txt?uploads=1",
         &user.user.id,
-        state.jwt_secret.as_str(),
+        state.auth.jwt_secret.as_str(),
         None,
     )
     .unwrap();
@@ -1616,7 +1616,7 @@ async fn test_s3_like_list_parts_returns_uploaded_parts() {
                 "https://example.com/api/s3/assets/videos/parts.txt?partNumber={part_number}&uploadId={upload_id}"
             ),
             &user.user.id,
-            state.jwt_secret.as_str(),
+            state.auth.jwt_secret.as_str(),
             None,
         )
         .unwrap();
@@ -1643,7 +1643,7 @@ async fn test_s3_like_list_parts_returns_uploaded_parts() {
         "GET",
         &format!("https://example.com/api/s3/assets/videos/parts.txt?uploadId={upload_id}"),
         &user.user.id,
-        state.jwt_secret.as_str(),
+        state.auth.jwt_secret.as_str(),
         None,
     )
     .unwrap();
@@ -1691,7 +1691,7 @@ async fn test_s3_like_copy_part_round_trip() {
         "PUT",
         "https://example.com/api/s3/assets/source.txt",
         &user.user.id,
-        state.jwt_secret.as_str(),
+        state.auth.jwt_secret.as_str(),
         None,
     )
     .unwrap();
@@ -1715,7 +1715,7 @@ async fn test_s3_like_copy_part_round_trip() {
         "POST",
         "https://example.com/api/s3/assets/copied.txt?uploads=1",
         &user.user.id,
-        state.jwt_secret.as_str(),
+        state.auth.jwt_secret.as_str(),
         None,
     )
     .unwrap();
@@ -1740,7 +1740,7 @@ async fn test_s3_like_copy_part_round_trip() {
         "PUT",
         &format!("https://example.com/api/s3/assets/copied.txt?partNumber=1&uploadId={upload_id}"),
         &user.user.id,
-        state.jwt_secret.as_str(),
+        state.auth.jwt_secret.as_str(),
         None,
     )
     .unwrap();
@@ -1773,7 +1773,7 @@ async fn test_s3_like_copy_part_round_trip() {
         "POST",
         &format!("https://example.com/api/s3/assets/copied.txt?uploadId={upload_id}"),
         &user.user.id,
-        state.jwt_secret.as_str(),
+        state.auth.jwt_secret.as_str(),
         None,
     )
     .unwrap();
@@ -1797,7 +1797,7 @@ async fn test_s3_like_copy_part_round_trip() {
         "GET",
         "https://example.com/api/s3/assets/copied.txt",
         &user.user.id,
-        state.jwt_secret.as_str(),
+        state.auth.jwt_secret.as_str(),
         None,
     )
     .unwrap();
@@ -1838,7 +1838,7 @@ async fn test_s3_like_get_object_supports_single_byte_range() {
         "PUT",
         "https://example.com/api/s3/assets/range-demo.txt",
         &user.user.id,
-        state.jwt_secret.as_str(),
+        state.auth.jwt_secret.as_str(),
         None,
     )
     .unwrap();
@@ -1863,7 +1863,7 @@ async fn test_s3_like_get_object_supports_single_byte_range() {
         "GET",
         "https://example.com/api/s3/assets/range-demo.txt",
         &user.user.id,
-        state.jwt_secret.as_str(),
+        state.auth.jwt_secret.as_str(),
         None,
     )
     .unwrap();
@@ -1913,7 +1913,7 @@ async fn test_s3_like_get_object_rejects_invalid_range_requests() {
         "PUT",
         "https://example.com/api/s3/assets/range-invalid.txt",
         &user.user.id,
-        state.jwt_secret.as_str(),
+        state.auth.jwt_secret.as_str(),
         None,
     )
     .unwrap();
@@ -1937,7 +1937,7 @@ async fn test_s3_like_get_object_rejects_invalid_range_requests() {
         "GET",
         "https://example.com/api/s3/assets/range-invalid.txt",
         &user.user.id,
-        state.jwt_secret.as_str(),
+        state.auth.jwt_secret.as_str(),
         None,
     )
     .unwrap();
@@ -1999,7 +1999,7 @@ async fn test_s3_like_get_object_honors_conditional_headers() {
         "PUT",
         "https://example.com/api/s3/assets/conditional.txt",
         &user.user.id,
-        state.jwt_secret.as_str(),
+        state.auth.jwt_secret.as_str(),
         None,
     )
     .unwrap();
@@ -2037,7 +2037,7 @@ async fn test_s3_like_get_object_honors_conditional_headers() {
         "GET",
         "https://example.com/api/s3/assets/conditional.txt",
         &user.user.id,
-        state.jwt_secret.as_str(),
+        state.auth.jwt_secret.as_str(),
         None,
     )
     .unwrap();
@@ -2140,7 +2140,7 @@ async fn test_s3_like_head_object_honors_conditional_headers() {
         "PUT",
         "https://example.com/api/s3/assets/conditional-head.txt",
         &user.user.id,
-        state.jwt_secret.as_str(),
+        state.auth.jwt_secret.as_str(),
         None,
     )
     .unwrap();
@@ -2178,7 +2178,7 @@ async fn test_s3_like_head_object_honors_conditional_headers() {
         "HEAD",
         "https://example.com/api/s3/assets/conditional-head.txt",
         &user.user.id,
-        state.jwt_secret.as_str(),
+        state.auth.jwt_secret.as_str(),
         None,
     )
     .unwrap();
@@ -2283,7 +2283,7 @@ async fn test_s3_like_get_object_supports_open_ended_and_suffix_ranges() {
         "PUT",
         "https://example.com/api/s3/assets/range-edges.txt",
         &user.user.id,
-        state.jwt_secret.as_str(),
+        state.auth.jwt_secret.as_str(),
         None,
     )
     .unwrap();
@@ -2307,7 +2307,7 @@ async fn test_s3_like_get_object_supports_open_ended_and_suffix_ranges() {
         "GET",
         "https://example.com/api/s3/assets/range-edges.txt",
         &user.user.id,
-        state.jwt_secret.as_str(),
+        state.auth.jwt_secret.as_str(),
         None,
     )
     .unwrap();
@@ -2536,7 +2536,7 @@ async fn test_s3_like_list_objects_v2_supports_start_after_and_encoding_type_url
             "PUT",
             &format!("https://example.com/api/s3/assets/{encoded_key}"),
             &user.user.id,
-            state.jwt_secret.as_str(),
+            state.auth.jwt_secret.as_str(),
             None,
         )
         .unwrap();
@@ -2561,7 +2561,7 @@ async fn test_s3_like_list_objects_v2_supports_start_after_and_encoding_type_url
         "GET",
         "https://example.com/api/s3/assets?list-type=2&prefix=notes/&start-after=notes/a%20file.txt&encoding-type=url",
         &user.user.id,
-        state.jwt_secret.as_str(),
+        state.auth.jwt_secret.as_str(),
         None,
     )
     .unwrap();
@@ -2609,7 +2609,7 @@ async fn test_s3_like_read_precondition_precedence_prefers_etag_validators_over_
         "PUT",
         "https://example.com/api/s3/assets/precedence.txt",
         &user.user.id,
-        state.jwt_secret.as_str(),
+        state.auth.jwt_secret.as_str(),
         None,
     )
     .unwrap();
@@ -2653,7 +2653,7 @@ async fn test_s3_like_read_precondition_precedence_prefers_etag_validators_over_
         "GET",
         "https://example.com/api/s3/assets/precedence.txt",
         &user.user.id,
-        state.jwt_secret.as_str(),
+        state.auth.jwt_secret.as_str(),
         None,
     )
     .unwrap();
@@ -2700,7 +2700,7 @@ async fn test_s3_like_read_precondition_precedence_prefers_etag_validators_over_
         "HEAD",
         "https://example.com/api/s3/assets/precedence.txt",
         &user.user.id,
-        state.jwt_secret.as_str(),
+        state.auth.jwt_secret.as_str(),
         None,
     )
     .unwrap();
@@ -2745,7 +2745,7 @@ async fn test_s3_like_copy_object_replace_preserves_unspecified_standard_headers
         "PUT",
         "https://example.com/api/s3/assets/source-replace-headers.txt",
         &user.user.id,
-        state.jwt_secret.as_str(),
+        state.auth.jwt_secret.as_str(),
         None,
     )
     .unwrap();
@@ -2773,7 +2773,7 @@ async fn test_s3_like_copy_object_replace_preserves_unspecified_standard_headers
         "PUT",
         "https://example.com/api/s3/assets/replaced-headers-object.txt",
         &user.user.id,
-        state.jwt_secret.as_str(),
+        state.auth.jwt_secret.as_str(),
         None,
     )
     .unwrap();
@@ -2800,7 +2800,7 @@ async fn test_s3_like_copy_object_replace_preserves_unspecified_standard_headers
         "HEAD",
         "https://example.com/api/s3/assets/replaced-headers-object.txt",
         &user.user.id,
-        state.jwt_secret.as_str(),
+        state.auth.jwt_secret.as_str(),
         None,
     )
     .unwrap();
@@ -2920,7 +2920,7 @@ async fn test_s3_like_list_objects_v2_supports_fetch_owner_and_zero_max_keys() {
 async fn test_sdk_list_objects_v2_smoke_interop_supports_fetch_owner() {
     let (state, _dir) = test_support::make_test_state().await;
     let user = register_user(state.clone(), "sdk-list-owner@example.com").await;
-    let secret_access_key = format!("{}:{}", state.jwt_secret, user.user.id);
+    let secret_access_key = format!("{}:{}", state.auth.jwt_secret, user.user.id);
 
     let app = axum::Router::new()
         .route("/api/s3/:bucket", axum::routing::get(list_bucket_objects))
@@ -3120,7 +3120,7 @@ async fn test_s3_like_copy_object_rejects_unsupported_copy_source_conditionals()
         "PUT",
         "https://example.com/api/s3/assets/source-conditional-copy.txt",
         &user.user.id,
-        state.jwt_secret.as_str(),
+        state.auth.jwt_secret.as_str(),
         None,
     )
     .unwrap();
@@ -3144,7 +3144,7 @@ async fn test_s3_like_copy_object_rejects_unsupported_copy_source_conditionals()
         "PUT",
         "https://example.com/api/s3/assets/conditional-copy-target.txt",
         &user.user.id,
-        state.jwt_secret.as_str(),
+        state.auth.jwt_secret.as_str(),
         None,
     )
     .unwrap();
@@ -3310,7 +3310,7 @@ async fn test_s3_like_list_objects_v2_rejects_invalid_encoding_type() {
 async fn test_sdk_cp_like_smoke_interop_supports_list_copy_and_head() {
     let (state, _dir) = test_support::make_test_state().await;
     let user = register_user(state.clone(), "sdk-cp@example.com").await;
-    let secret_access_key = format!("{}:{}", state.jwt_secret, user.user.id);
+    let secret_access_key = format!("{}:{}", state.auth.jwt_secret, user.user.id);
 
     let app = axum::Router::new()
         .route("/api/s3/:bucket", axum::routing::get(list_bucket_objects))
@@ -3775,7 +3775,7 @@ fn test_s3_get_object_tagging_response_preserves_legacy_raw_percent_sequences() 
 async fn test_sdk_cli_like_tagging_and_delete_smoke_interop() {
     let (state, _dir) = test_support::make_test_state().await;
     let user = register_user(state.clone(), "sdk-cli-delete@example.com").await;
-    let secret_access_key = format!("{}:{}", state.jwt_secret, user.user.id);
+    let secret_access_key = format!("{}:{}", state.auth.jwt_secret, user.user.id);
 
     let app = axum::Router::new()
         .route("/api/s3/:bucket", axum::routing::get(list_bucket_objects))
@@ -3940,7 +3940,7 @@ async fn test_s3_like_copy_object_copies_body_and_metadata_by_default() {
         "PUT",
         "https://example.com/api/s3/assets/source-copy.txt",
         &user.user.id,
-        state.jwt_secret.as_str(),
+        state.auth.jwt_secret.as_str(),
         None,
     )
     .unwrap();
@@ -3966,7 +3966,7 @@ async fn test_s3_like_copy_object_copies_body_and_metadata_by_default() {
         "PUT",
         "https://example.com/api/s3/assets/copied-object.txt",
         &user.user.id,
-        state.jwt_secret.as_str(),
+        state.auth.jwt_secret.as_str(),
         None,
     )
     .unwrap();
@@ -3993,7 +3993,7 @@ async fn test_s3_like_copy_object_copies_body_and_metadata_by_default() {
         "HEAD",
         "https://example.com/api/s3/assets/copied-object.txt",
         &user.user.id,
-        state.jwt_secret.as_str(),
+        state.auth.jwt_secret.as_str(),
         None,
     )
     .unwrap();
@@ -4025,7 +4025,7 @@ async fn test_s3_like_copy_object_copies_body_and_metadata_by_default() {
         "GET",
         "https://example.com/api/s3/assets/copied-object.txt",
         &user.user.id,
-        state.jwt_secret.as_str(),
+        state.auth.jwt_secret.as_str(),
         None,
     )
     .unwrap();
@@ -4068,7 +4068,7 @@ async fn test_s3_like_copy_object_supports_metadata_replace() {
         "PUT",
         "https://example.com/api/s3/assets/source-replace.txt",
         &user.user.id,
-        state.jwt_secret.as_str(),
+        state.auth.jwt_secret.as_str(),
         None,
     )
     .unwrap();
@@ -4094,7 +4094,7 @@ async fn test_s3_like_copy_object_supports_metadata_replace() {
         "PUT",
         "https://example.com/api/s3/assets/replaced-object.txt",
         &user.user.id,
-        state.jwt_secret.as_str(),
+        state.auth.jwt_secret.as_str(),
         None,
     )
     .unwrap();
@@ -4125,7 +4125,7 @@ async fn test_s3_like_copy_object_supports_metadata_replace() {
         "HEAD",
         "https://example.com/api/s3/assets/replaced-object.txt",
         &user.user.id,
-        state.jwt_secret.as_str(),
+        state.auth.jwt_secret.as_str(),
         None,
     )
     .unwrap();
@@ -4161,7 +4161,7 @@ async fn test_s3_like_copy_object_supports_metadata_replace() {
         "GET",
         "https://example.com/api/s3/assets/replaced-object.txt",
         &user.user.id,
-        state.jwt_secret.as_str(),
+        state.auth.jwt_secret.as_str(),
         None,
     )
     .unwrap();
@@ -4204,7 +4204,7 @@ async fn test_s3_like_copy_object_rejects_self_copy_without_metadata_change() {
         "PUT",
         "https://example.com/api/s3/assets/self-copy.txt",
         &user.user.id,
-        state.jwt_secret.as_str(),
+        state.auth.jwt_secret.as_str(),
         None,
     )
     .unwrap();
@@ -4230,7 +4230,7 @@ async fn test_s3_like_copy_object_rejects_self_copy_without_metadata_change() {
         "PUT",
         "https://example.com/api/s3/assets/self-copy.txt",
         &user.user.id,
-        state.jwt_secret.as_str(),
+        state.auth.jwt_secret.as_str(),
         None,
     )
     .unwrap();
@@ -4276,7 +4276,7 @@ async fn test_s3_like_copy_object_rejects_invalid_metadata_directive() {
         "PUT",
         "https://example.com/api/s3/assets/source-bad-directive.txt",
         &user.user.id,
-        state.jwt_secret.as_str(),
+        state.auth.jwt_secret.as_str(),
         None,
     )
     .unwrap();
@@ -4300,7 +4300,7 @@ async fn test_s3_like_copy_object_rejects_invalid_metadata_directive() {
         "PUT",
         "https://example.com/api/s3/assets/bad-directive-target.txt",
         &user.user.id,
-        state.jwt_secret.as_str(),
+        state.auth.jwt_secret.as_str(),
         None,
     )
     .unwrap();
@@ -4348,7 +4348,7 @@ async fn test_s3_like_copy_object_rejects_copy_source_without_leading_slash() {
         "PUT",
         "https://example.com/api/s3/assets/source-no-leading-slash.txt",
         &user.user.id,
-        state.jwt_secret.as_str(),
+        state.auth.jwt_secret.as_str(),
         None,
     )
     .unwrap();
@@ -4372,7 +4372,7 @@ async fn test_s3_like_copy_object_rejects_copy_source_without_leading_slash() {
         "PUT",
         "https://example.com/api/s3/assets/target-no-leading-slash.txt",
         &user.user.id,
-        state.jwt_secret.as_str(),
+        state.auth.jwt_secret.as_str(),
         None,
     )
     .unwrap();
@@ -4419,7 +4419,7 @@ async fn test_s3_like_copy_part_rejects_copy_source_without_leading_slash() {
         "PUT",
         "https://example.com/api/s3/assets/source-part-no-leading-slash.txt",
         &user.user.id,
-        state.jwt_secret.as_str(),
+        state.auth.jwt_secret.as_str(),
         None,
     )
     .unwrap();
@@ -4443,7 +4443,7 @@ async fn test_s3_like_copy_part_rejects_copy_source_without_leading_slash() {
         "POST",
         "https://example.com/api/s3/assets/copied-part-no-leading-slash.txt?uploads=1",
         &user.user.id,
-        state.jwt_secret.as_str(),
+        state.auth.jwt_secret.as_str(),
         None,
     )
     .unwrap();
@@ -4468,7 +4468,7 @@ async fn test_s3_like_copy_part_rejects_copy_source_without_leading_slash() {
         "PUT",
         &format!("https://example.com/api/s3/assets/copied-part-no-leading-slash.txt?partNumber=1&uploadId={upload_id}"),
         &user.user.id,
-        state.jwt_secret.as_str(),
+        state.auth.jwt_secret.as_str(),
         None,
     )
     .unwrap();
@@ -4520,7 +4520,7 @@ async fn test_s3_like_copy_object_rejects_copy_source_range_header() {
         "PUT",
         "https://example.com/api/s3/assets/source-range-object.txt",
         &user.user.id,
-        state.jwt_secret.as_str(),
+        state.auth.jwt_secret.as_str(),
         None,
     )
     .unwrap();
@@ -4544,7 +4544,7 @@ async fn test_s3_like_copy_object_rejects_copy_source_range_header() {
         "PUT",
         "https://example.com/api/s3/assets/range-target.txt",
         &user.user.id,
-        state.jwt_secret.as_str(),
+        state.auth.jwt_secret.as_str(),
         None,
     )
     .unwrap();
@@ -4592,7 +4592,7 @@ async fn test_s3_like_copy_object_allows_self_copy_with_metadata_replace() {
         "PUT",
         "https://example.com/api/s3/assets/self-copy-replace.txt",
         &user.user.id,
-        state.jwt_secret.as_str(),
+        state.auth.jwt_secret.as_str(),
         None,
     )
     .unwrap();
@@ -4618,7 +4618,7 @@ async fn test_s3_like_copy_object_allows_self_copy_with_metadata_replace() {
         "PUT",
         "https://example.com/api/s3/assets/self-copy-replace.txt",
         &user.user.id,
-        state.jwt_secret.as_str(),
+        state.auth.jwt_secret.as_str(),
         None,
     )
     .unwrap();
@@ -4646,7 +4646,7 @@ async fn test_s3_like_copy_object_allows_self_copy_with_metadata_replace() {
         "HEAD",
         "https://example.com/api/s3/assets/self-copy-replace.txt",
         &user.user.id,
-        state.jwt_secret.as_str(),
+        state.auth.jwt_secret.as_str(),
         None,
     )
     .unwrap();
@@ -4697,7 +4697,7 @@ async fn test_s3_like_copy_part_supports_source_range() {
         "PUT",
         "https://example.com/api/s3/assets/source-range.txt",
         &user.user.id,
-        state.jwt_secret.as_str(),
+        state.auth.jwt_secret.as_str(),
         None,
     )
     .unwrap();
@@ -4721,7 +4721,7 @@ async fn test_s3_like_copy_part_supports_source_range() {
         "POST",
         "https://example.com/api/s3/assets/copied-range.txt?uploads=1",
         &user.user.id,
-        state.jwt_secret.as_str(),
+        state.auth.jwt_secret.as_str(),
         None,
     )
     .unwrap();
@@ -4747,7 +4747,7 @@ async fn test_s3_like_copy_part_supports_source_range() {
             "https://example.com/api/s3/assets/copied-range.txt?partNumber=1&uploadId={upload_id}"
         ),
         &user.user.id,
-        state.jwt_secret.as_str(),
+        state.auth.jwt_secret.as_str(),
         None,
     )
     .unwrap();
@@ -4780,7 +4780,7 @@ async fn test_s3_like_copy_part_supports_source_range() {
         "POST",
         &format!("https://example.com/api/s3/assets/copied-range.txt?uploadId={upload_id}"),
         &user.user.id,
-        state.jwt_secret.as_str(),
+        state.auth.jwt_secret.as_str(),
         None,
     )
     .unwrap();
@@ -4806,7 +4806,7 @@ async fn test_s3_like_copy_part_supports_source_range() {
         "GET",
         "https://example.com/api/s3/assets/copied-range.txt",
         &user.user.id,
-        state.jwt_secret.as_str(),
+        state.auth.jwt_secret.as_str(),
         None,
     )
     .unwrap();
@@ -4847,7 +4847,7 @@ async fn test_s3_like_complete_rejects_non_final_parts_smaller_than_five_mebibyt
         "POST",
         "https://example.com/api/s3/assets/too-small.txt?uploads=1",
         &user.user.id,
-        state.jwt_secret.as_str(),
+        state.auth.jwt_secret.as_str(),
         None,
     )
     .unwrap();
@@ -4877,7 +4877,7 @@ async fn test_s3_like_complete_rejects_non_final_parts_smaller_than_five_mebibyt
                 "https://example.com/api/s3/assets/too-small.txt?partNumber={part_number}&uploadId={upload_id}"
             ),
             &user.user.id,
-            state.jwt_secret.as_str(),
+            state.auth.jwt_secret.as_str(),
             None,
         )
         .unwrap();
@@ -4917,7 +4917,7 @@ async fn test_s3_like_complete_rejects_non_final_parts_smaller_than_five_mebibyt
         "POST",
         &format!("https://example.com/api/s3/assets/too-small.txt?uploadId={upload_id}"),
         &user.user.id,
-        state.jwt_secret.as_str(),
+        state.auth.jwt_secret.as_str(),
         None,
     )
     .unwrap();
@@ -4944,7 +4944,7 @@ async fn test_s3_like_complete_rejects_non_final_parts_smaller_than_five_mebibyt
 async fn test_sdk_copy_part_smoke_interop_supports_source_range() {
     let (state, _dir) = test_support::make_test_state().await;
     let user = register_user(state.clone(), "sdk-copy-part@example.com").await;
-    let secret_access_key = format!("{}:{}", state.jwt_secret.as_str(), user.user.id);
+    let secret_access_key = format!("{}:{}", state.auth.jwt_secret.as_str(), user.user.id);
 
     let app = axum::Router::new()
         .route(
@@ -5113,7 +5113,7 @@ async fn test_s3_like_list_parts_supports_part_number_markers() {
         "POST",
         "https://example.com/api/s3/assets/videos/parts-markers.txt?uploads=1",
         &user.user.id,
-        state.jwt_secret.as_str(),
+        state.auth.jwt_secret.as_str(),
         None,
     )
     .unwrap();
@@ -5140,7 +5140,7 @@ async fn test_s3_like_list_parts_supports_part_number_markers() {
                 "https://example.com/api/s3/assets/videos/parts-markers.txt?partNumber={part_number}&uploadId={upload_id}"
             ),
             &user.user.id,
-            state.jwt_secret.as_str(),
+            state.auth.jwt_secret.as_str(),
             None,
         )
         .unwrap();
@@ -5170,7 +5170,7 @@ async fn test_s3_like_list_parts_supports_part_number_markers() {
         "GET",
         &first_page_url,
         &user.user.id,
-        state.jwt_secret.as_str(),
+        state.auth.jwt_secret.as_str(),
         None,
     )
     .unwrap();
@@ -5204,7 +5204,7 @@ async fn test_s3_like_list_parts_supports_part_number_markers() {
         "GET",
         &second_page_url,
         &user.user.id,
-        state.jwt_secret.as_str(),
+        state.auth.jwt_secret.as_str(),
         None,
     )
     .unwrap();
@@ -5253,7 +5253,7 @@ async fn test_s3_like_list_multipart_uploads_returns_active_uploads() {
             "POST",
             &format!("https://example.com/api/s3/assets/{key}?uploads=1"),
             &user.user.id,
-            state.jwt_secret.as_str(),
+            state.auth.jwt_secret.as_str(),
             None,
         )
         .unwrap();
@@ -5278,7 +5278,7 @@ async fn test_s3_like_list_multipart_uploads_returns_active_uploads() {
         "GET",
         "https://example.com/api/s3/assets?uploads=1&prefix=videos/",
         &user.user.id,
-        state.jwt_secret.as_str(),
+        state.auth.jwt_secret.as_str(),
         None,
     )
     .unwrap();
@@ -5324,7 +5324,7 @@ async fn test_s3_like_list_multipart_uploads_supports_key_and_upload_id_markers(
             "POST",
             &format!("https://example.com/api/s3/assets/{key}?uploads=1"),
             &user.user.id,
-            state.jwt_secret.as_str(),
+            state.auth.jwt_secret.as_str(),
             None,
         )
         .unwrap();
@@ -5349,7 +5349,7 @@ async fn test_s3_like_list_multipart_uploads_supports_key_and_upload_id_markers(
         "GET",
         "https://example.com/api/s3/assets?uploads=1&prefix=videos/&max-uploads=1",
         &user.user.id,
-        state.jwt_secret.as_str(),
+        state.auth.jwt_secret.as_str(),
         None,
     )
     .unwrap();
@@ -5382,7 +5382,7 @@ async fn test_s3_like_list_multipart_uploads_supports_key_and_upload_id_markers(
         "GET",
         &second_page_url,
         &user.user.id,
-        state.jwt_secret.as_str(),
+        state.auth.jwt_secret.as_str(),
         None,
     )
     .unwrap();
@@ -5413,7 +5413,7 @@ async fn test_s3_like_list_multipart_uploads_supports_key_and_upload_id_markers(
 async fn test_sdk_multipart_smoke_interop() {
     let (state, _dir) = test_support::make_test_state().await;
     let user = register_user(state.clone(), "sdk-multipart@example.com").await;
-    let secret_access_key = format!("{}:{}", state.jwt_secret.as_str(), user.user.id);
+    let secret_access_key = format!("{}:{}", state.auth.jwt_secret.as_str(), user.user.id);
 
     let app = axum::Router::new()
         .route(

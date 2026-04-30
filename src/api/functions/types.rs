@@ -120,8 +120,6 @@ pub struct FunctionRealtimeEvent {
 #[derive(Debug, Clone, FromRow)]
 pub(super) struct LoadedFunctionVersion {
     pub(super) id: String,
-    #[allow(dead_code)]
-    pub(super) function_id: String,
     pub(super) version_number: i64,
     pub(super) runtime: String,
     pub(super) source_code: String,

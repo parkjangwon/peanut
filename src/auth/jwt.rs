@@ -1,5 +1,5 @@
 use chrono::{DateTime, Utc};
-use jsonwebtoken::{decode, encode, DecodingKey, EncodingKey, Header, Validation};
+use jsonwebtoken::{decode, encode, Algorithm, DecodingKey, EncodingKey, Header, Validation};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -7,6 +7,13 @@ pub struct Claims {
     pub sub: String,
     pub exp: i64,
     pub is_admin: bool,
+}
+
+fn jwt_validation() -> Validation {
+    let mut validation = Validation::default();
+    validation.algorithms = vec![Algorithm::HS256];
+    validation.validate_exp = true;
+    validation
 }
 
 pub fn create_jwt(
@@ -33,7 +40,7 @@ pub fn verify_jwt(token: &str, secret: &str) -> Result<Claims, jsonwebtoken::err
     let token_data = decode::<Claims>(
         token,
         &DecodingKey::from_secret(secret.as_ref()),
-        &Validation::default(),
+        &jwt_validation(),
     )?;
     Ok(token_data.claims)
 }
@@ -42,6 +49,7 @@ pub fn verify_jwt(token: &str, secret: &str) -> Result<Claims, jsonwebtoken::err
 mod tests {
     use super::*;
     use chrono::Duration;
+    use jsonwebtoken::Algorithm;
 
     #[test]
     fn test_jwt_flow() {
@@ -50,5 +58,12 @@ mod tests {
         let claims = verify_jwt(&token, secret).unwrap();
         assert_eq!(claims.sub, "user123");
         assert!(claims.is_admin);
+    }
+
+    #[test]
+    fn test_validation_is_pinned_to_hs256() {
+        let validation = jwt_validation();
+        assert_eq!(validation.algorithms, vec![Algorithm::HS256]);
+        assert!(validation.validate_exp);
     }
 }

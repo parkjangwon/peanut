@@ -10,7 +10,7 @@ pub async fn functions_enabled_middleware(
     req: Request,
     next: Next,
 ) -> Result<Response, Response> {
-    if !state.functions_enabled {
+    if !state.functions.enabled {
         return Err(crate::api::common::json_error(
             StatusCode::SERVICE_UNAVAILABLE,
             "functions runtime is disabled",
@@ -39,7 +39,7 @@ mod tests {
     #[tokio::test]
     async fn test_functions_disabled_middleware_returns_service_unavailable() {
         let (mut state, _dir) = crate::test_support::make_test_state().await;
-        state.functions_enabled = false;
+        state.functions.enabled = false;
 
         let app = Router::new()
             .route("/fn", get(ok_handler))

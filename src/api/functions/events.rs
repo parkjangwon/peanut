@@ -14,7 +14,7 @@ pub async fn stream_function_events(
     }
 
     let stream =
-        BroadcastStream::new(state.function_event_sender.subscribe()).filter_map(move |message| {
+        BroadcastStream::new(state.functions.event_sender.subscribe()).filter_map(move |message| {
             match message {
                 Ok(event) if event.function_name == name => Some(Ok::<Event, Infallible>(
                     Event::default()

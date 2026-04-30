@@ -43,7 +43,7 @@ pub async fn authenticate_bearer_token(
         .and_then(|h| h.strip_prefix("Bearer "))
         .ok_or_else(|| json_error(StatusCode::UNAUTHORIZED, "missing bearer token"))?;
 
-    if let Ok(token_claims) = verify_jwt(token, state.jwt_secret.as_str()) {
+    if let Ok(token_claims) = verify_jwt(token, state.auth.jwt_secret.as_str()) {
         return validate_user_claims(state, &token_claims.sub, token_claims.exp).await;
     }
 
