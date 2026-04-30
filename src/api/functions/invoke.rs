@@ -205,7 +205,6 @@ async fn execute_and_finalize_invocation(
         runtime_env.insert(key.clone(), value.clone());
     }
     let env_payload = serde_json::to_value(runtime_env).unwrap_or(Value::Null);
-    let sandbox_state = state.clone();
     let sandbox_result = execute_in_sandbox(
         SandboxExecutionRequest {
             runtime: &invocation.function_version.runtime,
@@ -217,14 +216,14 @@ async fn execute_and_finalize_invocation(
             timeout_ms: invocation.function_version.timeout_ms,
         },
         &state.functions_work_dir,
-        &sandbox_state,
-        claims.clone(),
+        state,
+        claims,
     )
     .await;
 
     match sandbox_result {
         Ok(result) => {
-            let redacted_response = redact_json_value(result.response_json.clone(), &secret_values);
+            let redacted_response = redact_json_value(result.response_json, &secret_values);
             let redacted_logs = compose_log_text(&result.stdout, &result.stderr)
                 .map(|text| redact_secret_text(text, &secret_values));
             let response_json = match serde_json::to_string(&redacted_response) {
@@ -251,7 +250,7 @@ async fn execute_and_finalize_invocation(
             Ok((redacted_response, result.duration_ms))
         }
         Err(error) => {
-            let redacted_error = redact_secret_text(error.clone(), &secret_values);
+            let redacted_error = redact_secret_text(error, &secret_values);
             let _ = mark_invocation_failed(
                 &state.pool,
                 &invocation.invocation_id,
