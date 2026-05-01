@@ -27,6 +27,7 @@ mod s3_presign;
 mod s3_put;
 mod s3_tagging;
 mod s3_xml;
+mod sdk;
 
 use self::s3_tagging::tagging_count;
 use self::s3_xml::format_last_modified_header;
@@ -46,6 +47,7 @@ pub use s3_list::list_bucket_objects;
 pub use s3_post::post_bucket_object;
 pub use s3_presign::create_presigned_url;
 pub use s3_put::put_bucket_object;
+pub use sdk::{delete_sdk_object, get_sdk_object, list_sdk_objects, put_sdk_object};
 
 const DEFAULT_STORAGE_BUCKET: &str = "default";
 

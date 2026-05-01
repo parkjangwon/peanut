@@ -11,6 +11,7 @@ pub fn build_app(state: crate::AppState, config: &crate::config::AppConfig) -> R
     let auth_public_routes = build_auth_public_routes(state.clone());
     let auth_protected_routes = build_auth_protected_routes(state.clone());
     let protected_routes = build_protected_routes(state.clone(), config.max_upload_bytes);
+    let sdk_routes = build_sdk_routes(state.clone(), config.max_upload_bytes);
     let s3_routes = build_s3_routes(state.clone(), config.max_upload_bytes);
     let function_invoke_routes = build_function_invoke_routes(state.clone());
 
@@ -21,6 +22,7 @@ pub fn build_app(state: crate::AppState, config: &crate::config::AppConfig) -> R
         .nest("/api", s3_routes)
         .nest("/api", function_invoke_routes)
         .nest("/api", auth_protected_routes)
+        .nest("/api", sdk_routes)
         .nest("/api", protected_routes)
         .fallback(crate::console::static_handler)
         .layer(axum::middleware::from_fn_with_state(
@@ -244,6 +246,31 @@ fn build_s3_routes(state: crate::AppState, max_upload_bytes: usize) -> Router<cr
         .layer(axum::middleware::from_fn_with_state(
             state,
             crate::middleware::s3_auth::s3_auth_middleware,
+        ))
+}
+
+fn build_sdk_routes(state: crate::AppState, max_upload_bytes: usize) -> Router<crate::AppState> {
+    Router::new()
+        .route(
+            "/apps/:app_id/storage/buckets/:bucket/objects",
+            get(crate::api::storage::list_sdk_objects),
+        )
+        .route(
+            "/apps/:app_id/storage/buckets/:bucket/objects/*key",
+            get(crate::api::storage::get_sdk_object),
+        )
+        .route(
+            "/apps/:app_id/storage/buckets/:bucket/objects/*key",
+            put(crate::api::storage::put_sdk_object),
+        )
+        .route(
+            "/apps/:app_id/storage/buckets/:bucket/objects/*key",
+            delete(crate::api::storage::delete_sdk_object),
+        )
+        .layer(DefaultBodyLimit::max(max_upload_bytes))
+        .layer(axum::middleware::from_fn_with_state(
+            state,
+            crate::middleware::sdk_auth::sdk_auth_middleware,
         ))
 }
 
