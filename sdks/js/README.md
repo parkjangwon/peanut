@@ -6,7 +6,9 @@ import { PeanutClient } from "@peanut-backend/sdk";
 const peanut = new PeanutClient({
   baseUrl: "http://localhost:8080",
   appId: "default",
-  apiKey: "pk_..."
+  apiKey: "pk_...",
+  retry: { maxRetries: 2, baseDelayMs: 200 },
+  timeoutMs: 30_000
 });
 
 const session = await peanut.auth.login("me@example.com", "password123");

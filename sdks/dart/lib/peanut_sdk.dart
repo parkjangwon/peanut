@@ -18,12 +18,24 @@ class PeanutException implements Exception {
   String toString() => 'PeanutException($statusCode): $message';
 }
 
+class PeanutRetryOptions {
+  const PeanutRetryOptions({
+    this.maxRetries = 0,
+    this.baseDelay = const Duration(milliseconds: 200),
+  });
+
+  final int maxRetries;
+  final Duration baseDelay;
+}
+
 class PeanutClient {
   PeanutClient({
     required String baseUrl,
     required this.appId,
     required this.apiKey,
     String? accessToken,
+    this.retry = const PeanutRetryOptions(),
+    this.timeout = const Duration(seconds: 30),
     http.Client? httpClient,
   }) : baseUrl = baseUrl.replaceFirst(RegExp(r'/+$'), ''),
        _accessToken = accessToken,
@@ -38,6 +50,8 @@ class PeanutClient {
   final String baseUrl;
   final String appId;
   final String apiKey;
+  final PeanutRetryOptions retry;
+  final Duration timeout;
   final http.Client _httpClient;
   String? _accessToken;
 
@@ -58,9 +72,7 @@ class PeanutClient {
     if (body != null) {
       request.body = jsonEncode(body);
     }
-    final response = await http.Response.fromStream(
-      await _httpClient.send(request),
-    );
+    final response = await _sendWithRetry(request);
     if (response.statusCode == 204) {
       return null as T;
     }
@@ -90,9 +102,7 @@ class PeanutClient {
     if (body != null) {
       request.bodyBytes = body;
     }
-    final response = await http.Response.fromStream(
-      await _httpClient.send(request),
-    );
+    final response = await _sendWithRetry(request);
     if (response.statusCode < 200 || response.statusCode >= 300) {
       final decoded = _decodeBody(response);
       throw PeanutException(
@@ -118,6 +128,37 @@ class PeanutClient {
     return headers;
   }
 
+  Future<http.Response> _sendWithRetry(http.Request request) async {
+    Object? lastError;
+    for (var attempt = 0; attempt <= retry.maxRetries; attempt++) {
+      try {
+        final response = await http.Response.fromStream(
+          await _httpClient.send(_copyRequest(request)).timeout(timeout),
+        );
+        if (!_isTransientStatus(response.statusCode) ||
+            attempt == retry.maxRetries) {
+          return response;
+        }
+      } catch (error) {
+        lastError = error;
+        if (attempt == retry.maxRetries) {
+          rethrow;
+        }
+      }
+      await Future<void>.delayed(retry.baseDelay * (attempt + 1));
+    }
+    throw lastError ?? StateError('Peanut request failed');
+  }
+
+  http.Request _copyRequest(http.Request request) {
+    return http.Request(request.method, request.url)
+      ..headers.addAll(request.headers)
+      ..bodyBytes = request.bodyBytes
+      ..followRedirects = request.followRedirects
+      ..maxRedirects = request.maxRedirects
+      ..persistentConnection = request.persistentConnection;
+  }
+
   Object? _decodeBody(http.Response response) {
     final contentType = response.headers['content-type'] ?? '';
     if (contentType.contains('application/json')) {
@@ -135,6 +176,10 @@ class PeanutClient {
     }
     return 'Peanut request failed';
   }
+}
+
+bool _isTransientStatus(int statusCode) {
+  return statusCode == 408 || statusCode == 429 || statusCode >= 500;
 }
 
 class PeanutAuthClient {

@@ -11,6 +11,7 @@ let package = Package(
         .library(name: "PeanutSDK", targets: ["PeanutSDK"])
     ],
     targets: [
-        .target(name: "PeanutSDK")
+        .target(name: "PeanutSDK"),
+        .testTarget(name: "PeanutSDKTests", dependencies: ["PeanutSDK"])
     ]
 )

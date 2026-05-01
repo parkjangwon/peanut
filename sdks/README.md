@@ -23,4 +23,6 @@ The SDKs expose the same service groups:
 - Push: subscriptions, VAPID public key, enqueue message
 - Functions: invoke endpoint
 
+Every SDK now includes a small request test suite and configurable retry handling for transient HTTP failures (`408`, `429`, and `5xx`).
+
 These are intentionally thin wrappers over the HTTP API so they remain easy to audit and keep in sync with Peanut's self-hosted runtime.

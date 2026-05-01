@@ -11,7 +11,14 @@ export interface PeanutClientOptions {
   appId: string;
   apiKey: string;
   accessToken?: string;
+  timeoutMs?: number;
+  retry?: PeanutRetryOptions;
   fetch?: typeof globalThis.fetch;
+}
+
+export interface PeanutRetryOptions {
+  maxRetries?: number;
+  baseDelayMs?: number;
 }
 
 export interface PeanutUser {
@@ -61,6 +68,8 @@ export class PeanutClient {
   private readonly apiKey: string;
   private accessToken?: string;
   private readonly fetchImpl: typeof globalThis.fetch;
+  private readonly timeoutMs: number;
+  private readonly retry: Required<PeanutRetryOptions>;
 
   constructor(options: PeanutClientOptions) {
     this.baseUrl = options.baseUrl.replace(/\/+$/, "");
@@ -68,6 +77,11 @@ export class PeanutClient {
     this.apiKey = options.apiKey;
     this.accessToken = options.accessToken;
     this.fetchImpl = options.fetch ?? globalThis.fetch;
+    this.timeoutMs = options.timeoutMs ?? 30_000;
+    this.retry = {
+      maxRetries: options.retry?.maxRetries ?? 0,
+      baseDelayMs: options.retry?.baseDelayMs ?? 200,
+    };
     if (!this.fetchImpl) {
       throw new Error("A fetch implementation is required");
     }
@@ -97,7 +111,7 @@ export class PeanutClient {
       headers.set("Content-Type", "application/json");
       body = JSON.stringify(options.body);
     }
-    const response = await this.fetchImpl(`${this.baseUrl}${path}`, {
+    const response = await this.fetchWithRetry(`${this.baseUrl}${path}`, {
       method,
       headers,
       body,
@@ -121,7 +135,7 @@ export class PeanutClient {
     if (this.accessToken) {
       headers.set("Authorization", `Bearer ${this.accessToken}`);
     }
-    const response = await this.fetchImpl(`${this.baseUrl}${path}`, { method, headers });
+    const response = await this.fetchWithRetry(`${this.baseUrl}${path}`, { method, headers });
     if (!response.ok) {
       const contentType = response.headers.get("content-type") ?? "";
       const value = contentType.includes("application/json")
@@ -143,7 +157,7 @@ export class PeanutClient {
     if (this.accessToken) {
       headers.set("Authorization", `Bearer ${this.accessToken}`);
     }
-    const response = await this.fetchImpl(`${this.baseUrl}${path}`, { method, headers, body });
+    const response = await this.fetchWithRetry(`${this.baseUrl}${path}`, { method, headers, body });
     if (!response.ok) {
       const contentType = response.headers.get("content-type") ?? "";
       const value = contentType.includes("application/json")
@@ -156,6 +170,31 @@ export class PeanutClient {
 
   appPath(path: string): string {
     return `/api/apps/${encodeURIComponent(this.appId)}${path}`;
+  }
+
+  private async fetchWithRetry(input: string, init: RequestInit): Promise<Response> {
+    let attempt = 0;
+    let lastError: unknown;
+    while (attempt <= this.retry.maxRetries) {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), this.timeoutMs);
+      try {
+        const response = await this.fetchImpl(input, { ...init, signal: controller.signal });
+        clearTimeout(timeout);
+        if (!isTransientStatus(response.status) || attempt === this.retry.maxRetries) {
+          return response;
+        }
+      } catch (error) {
+        clearTimeout(timeout);
+        lastError = error;
+        if (attempt === this.retry.maxRetries) {
+          throw error;
+        }
+      }
+      await delay(this.retry.baseDelayMs * Math.max(1, attempt + 1));
+      attempt += 1;
+    }
+    throw lastError;
   }
 }
 
@@ -328,4 +367,12 @@ function errorMessage(value: unknown): string {
     return String((value as { error: unknown }).error);
   }
   return typeof value === "string" && value ? value : "Peanut request failed";
+}
+
+function isTransientStatus(status: number): boolean {
+  return status === 408 || status === 429 || status >= 500;
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }

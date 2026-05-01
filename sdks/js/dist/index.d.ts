@@ -6,7 +6,13 @@ export interface PeanutClientOptions {
     appId: string;
     apiKey: string;
     accessToken?: string;
+    timeoutMs?: number;
+    retry?: PeanutRetryOptions;
     fetch?: typeof globalThis.fetch;
+}
+export interface PeanutRetryOptions {
+    maxRetries?: number;
+    baseDelayMs?: number;
 }
 export interface PeanutUser {
     id: string;
@@ -44,6 +50,8 @@ export declare class PeanutClient {
     private readonly apiKey;
     private accessToken?;
     private readonly fetchImpl;
+    private readonly timeoutMs;
+    private readonly retry;
     constructor(options: PeanutClientOptions);
     setAccessToken(accessToken?: string): void;
     request<T>(method: string, path: string, options?: {
@@ -54,6 +62,7 @@ export declare class PeanutClient {
     requestBinary(method: string, path: string): Promise<Response>;
     requestBinaryWithBody(method: string, path: string, body: BodyInit, contentType?: string): Promise<Response>;
     appPath(path: string): string;
+    private fetchWithRetry;
 }
 export declare class PeanutAuthClient {
     private readonly client;

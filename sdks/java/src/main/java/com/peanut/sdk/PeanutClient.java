@@ -18,6 +18,7 @@ public final class PeanutClient {
     private final String appId;
     private final String apiKey;
     private final HttpClient httpClient;
+    private final RetryOptions retry;
     private volatile String accessToken;
 
     private final Auth auth = new Auth();
@@ -31,6 +32,7 @@ public final class PeanutClient {
         this.appId = required(builder.appId, "appId");
         this.apiKey = required(builder.apiKey, "apiKey");
         this.accessToken = builder.accessToken;
+        this.retry = builder.retry;
         this.httpClient = builder.httpClient == null
                 ? HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(10)).build()
                 : builder.httpClient;
@@ -104,7 +106,7 @@ public final class PeanutClient {
 
     private String sendText(HttpRequest request) {
         try {
-            HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
+            HttpResponse<String> response = sendWithRetry(request, HttpResponse.BodyHandlers.ofString());
             if (response.statusCode() < 200 || response.statusCode() >= 300) {
                 throw new PeanutException(response.statusCode(), response.body());
             }
@@ -119,7 +121,7 @@ public final class PeanutClient {
 
     private HttpResponse<byte[]> sendBytes(HttpRequest request) {
         try {
-            HttpResponse<byte[]> response = httpClient.send(request, HttpResponse.BodyHandlers.ofByteArray());
+            HttpResponse<byte[]> response = sendWithRetry(request, HttpResponse.BodyHandlers.ofByteArray());
             if (response.statusCode() < 200 || response.statusCode() >= 300) {
                 throw new PeanutException(response.statusCode(), new String(response.body(), StandardCharsets.UTF_8));
             }
@@ -130,6 +132,19 @@ public final class PeanutClient {
             Thread.currentThread().interrupt();
             throw new PeanutException("Peanut request interrupted", e);
         }
+    }
+
+    private <T> HttpResponse<T> sendWithRetry(HttpRequest request, HttpResponse.BodyHandler<T> bodyHandler)
+            throws IOException, InterruptedException {
+        HttpResponse<T> response = null;
+        for (int attempt = 0; attempt <= retry.maxRetries(); attempt++) {
+            response = httpClient.send(request, bodyHandler);
+            if (!isTransientStatus(response.statusCode()) || attempt == retry.maxRetries()) {
+                return response;
+            }
+            Thread.sleep(retry.baseDelay().multipliedBy(attempt + 1).toMillis());
+        }
+        return response;
     }
 
     public final class Auth {
@@ -271,6 +286,7 @@ public final class PeanutClient {
         private String apiKey;
         private String accessToken;
         private HttpClient httpClient;
+        private RetryOptions retry = new RetryOptions(0, Duration.ofMillis(200));
 
         public Builder baseUrl(String baseUrl) {
             this.baseUrl = baseUrl;
@@ -297,8 +313,24 @@ public final class PeanutClient {
             return this;
         }
 
+        public Builder retry(RetryOptions retry) {
+            this.retry = retry == null ? new RetryOptions(0, Duration.ofMillis(200)) : retry;
+            return this;
+        }
+
         public PeanutClient build() {
             return new PeanutClient(this);
+        }
+    }
+
+    public record RetryOptions(int maxRetries, Duration baseDelay) {
+        public RetryOptions {
+            if (maxRetries < 0) {
+                throw new IllegalArgumentException("maxRetries must be non-negative");
+            }
+            if (baseDelay == null || baseDelay.isNegative()) {
+                throw new IllegalArgumentException("baseDelay must be non-negative");
+            }
         }
     }
 
@@ -338,6 +370,10 @@ public final class PeanutClient {
         });
         String query = joiner.toString();
         return query.equals("?") ? "" : query;
+    }
+
+    private static boolean isTransientStatus(int statusCode) {
+        return statusCode == 408 || statusCode == 429 || statusCode >= 500;
     }
 
     private static String object(String... pairs) {

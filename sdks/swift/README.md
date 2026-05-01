@@ -7,7 +7,8 @@ import PeanutSDK
 let peanut = PeanutClient(
     baseURL: URL(string: "http://localhost:8080")!,
     appId: "default",
-    apiKey: "pk_..."
+    apiKey: "pk_...",
+    retry: PeanutRetryOptions(maxRetries: 2)
 )
 
 let session = try await peanut.auth.login(email: "me@example.com", password: "password123")

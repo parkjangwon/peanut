@@ -52,6 +52,17 @@ public struct PeanutError: Error, Sendable {
     public let body: Data
 }
 
+public struct PeanutRetryOptions: Sendable {
+    public let maxRetries: Int
+    public let baseDelayMilliseconds: UInt64
+
+    public init(maxRetries: Int = 0, baseDelayMilliseconds: UInt64 = 200) {
+        precondition(maxRetries >= 0, "maxRetries must be non-negative")
+        self.maxRetries = maxRetries
+        self.baseDelayMilliseconds = baseDelayMilliseconds
+    }
+}
+
 public final class PeanutClient: @unchecked Sendable {
     public let auth: PeanutAuthClient
     public let data: PeanutDataClient
@@ -63,6 +74,7 @@ public final class PeanutClient: @unchecked Sendable {
     let appId: String
     let apiKey: String
     let session: URLSession
+    let retry: PeanutRetryOptions
     private let lock = NSLock()
     private var accessToken: String?
 
@@ -71,12 +83,14 @@ public final class PeanutClient: @unchecked Sendable {
         appId: String,
         apiKey: String,
         accessToken: String? = nil,
+        retry: PeanutRetryOptions = PeanutRetryOptions(),
         session: URLSession = .shared
     ) {
         self.baseURL = baseURL
         self.appId = appId
         self.apiKey = apiKey
         self.accessToken = accessToken
+        self.retry = retry
         self.session = session
         self.auth = PeanutAuthClient()
         self.data = PeanutDataClient()
@@ -109,7 +123,7 @@ public final class PeanutClient: @unchecked Sendable {
             request.setValue("application/json", forHTTPHeaderField: "Content-Type")
             request.httpBody = try JSONEncoder().encode(AnyEncodable(body))
         }
-        let (data, response) = try await session.data(for: request)
+        let (data, response) = try await dataWithRetry(for: request)
         try validate(data: data, response: response)
         if T.self == EmptyResponse.self {
             return EmptyResponse() as! T
@@ -130,7 +144,7 @@ public final class PeanutClient: @unchecked Sendable {
             request.httpBody = body
             request.setValue(contentType ?? "application/octet-stream", forHTTPHeaderField: "Content-Type")
         }
-        let (data, response) = try await session.data(for: request)
+        let (data, response) = try await dataWithRetry(for: request)
         try validate(data: data, response: response)
         return (data, response as! HTTPURLResponse)
     }
@@ -163,6 +177,38 @@ public final class PeanutClient: @unchecked Sendable {
                 ?? "Peanut request failed"
             throw PeanutError(statusCode: http.statusCode, message: message, body: data)
         }
+    }
+
+    private func dataWithRetry(for request: URLRequest) async throws -> (Data, URLResponse) {
+        var lastError: Error?
+        for attempt in 0...retry.maxRetries {
+            do {
+                let (data, response) = try await session.data(for: request)
+                if let http = response as? HTTPURLResponse,
+                   isTransientStatus(http.statusCode),
+                   attempt < retry.maxRetries {
+                    try await sleepBeforeRetry(attempt: attempt)
+                    continue
+                }
+                return (data, response)
+            } catch {
+                lastError = error
+                if attempt == retry.maxRetries {
+                    throw error
+                }
+                try await sleepBeforeRetry(attempt: attempt)
+            }
+        }
+        throw lastError ?? PeanutError(statusCode: -1, message: "Peanut request failed", body: Data())
+    }
+
+    private func sleepBeforeRetry(attempt: Int) async throws {
+        let milliseconds = retry.baseDelayMilliseconds * UInt64(attempt + 1)
+        try await Task.sleep(nanoseconds: milliseconds * 1_000_000)
+    }
+
+    private func isTransientStatus(_ statusCode: Int) -> Bool {
+        statusCode == 408 || statusCode == 429 || statusCode >= 500
     }
 
     static func segment(_ value: String) -> String {

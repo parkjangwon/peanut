@@ -19,12 +19,19 @@ export class PeanutClient {
     apiKey;
     accessToken;
     fetchImpl;
+    timeoutMs;
+    retry;
     constructor(options) {
         this.baseUrl = options.baseUrl.replace(/\/+$/, "");
         this.appId = options.appId;
         this.apiKey = options.apiKey;
         this.accessToken = options.accessToken;
         this.fetchImpl = options.fetch ?? globalThis.fetch;
+        this.timeoutMs = options.timeoutMs ?? 30_000;
+        this.retry = {
+            maxRetries: options.retry?.maxRetries ?? 0,
+            baseDelayMs: options.retry?.baseDelayMs ?? 200,
+        };
         if (!this.fetchImpl) {
             throw new Error("A fetch implementation is required");
         }
@@ -48,7 +55,7 @@ export class PeanutClient {
             headers.set("Content-Type", "application/json");
             body = JSON.stringify(options.body);
         }
-        const response = await this.fetchImpl(`${this.baseUrl}${path}`, {
+        const response = await this.fetchWithRetry(`${this.baseUrl}${path}`, {
             method,
             headers,
             body,
@@ -71,7 +78,7 @@ export class PeanutClient {
         if (this.accessToken) {
             headers.set("Authorization", `Bearer ${this.accessToken}`);
         }
-        const response = await this.fetchImpl(`${this.baseUrl}${path}`, { method, headers });
+        const response = await this.fetchWithRetry(`${this.baseUrl}${path}`, { method, headers });
         if (!response.ok) {
             const contentType = response.headers.get("content-type") ?? "";
             const value = contentType.includes("application/json")
@@ -87,7 +94,7 @@ export class PeanutClient {
         if (this.accessToken) {
             headers.set("Authorization", `Bearer ${this.accessToken}`);
         }
-        const response = await this.fetchImpl(`${this.baseUrl}${path}`, { method, headers, body });
+        const response = await this.fetchWithRetry(`${this.baseUrl}${path}`, { method, headers, body });
         if (!response.ok) {
             const contentType = response.headers.get("content-type") ?? "";
             const value = contentType.includes("application/json")
@@ -99,6 +106,31 @@ export class PeanutClient {
     }
     appPath(path) {
         return `/api/apps/${encodeURIComponent(this.appId)}${path}`;
+    }
+    async fetchWithRetry(input, init) {
+        let attempt = 0;
+        let lastError;
+        while (attempt <= this.retry.maxRetries) {
+            const controller = new AbortController();
+            const timeout = setTimeout(() => controller.abort(), this.timeoutMs);
+            try {
+                const response = await this.fetchImpl(input, { ...init, signal: controller.signal });
+                clearTimeout(timeout);
+                if (!isTransientStatus(response.status) || attempt === this.retry.maxRetries) {
+                    return response;
+                }
+            }
+            catch (error) {
+                clearTimeout(timeout);
+                lastError = error;
+                if (attempt === this.retry.maxRetries) {
+                    throw error;
+                }
+            }
+            await delay(this.retry.baseDelayMs * Math.max(1, attempt + 1));
+            attempt += 1;
+        }
+        throw lastError;
     }
 }
 export class PeanutAuthClient {
@@ -246,4 +278,10 @@ function errorMessage(value) {
         return String(value.error);
     }
     return typeof value === "string" && value ? value : "Peanut request failed";
+}
+function isTransientStatus(status) {
+    return status === 408 || status === 429 || status >= 500;
+}
+function delay(ms) {
+    return new Promise((resolve) => setTimeout(resolve, ms));
 }

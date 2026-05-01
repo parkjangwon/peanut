@@ -10,6 +10,7 @@ final peanut = PeanutClient(
   baseUrl: 'http://localhost:8080',
   appId: 'default',
   apiKey: 'pk_...',
+  retry: PeanutRetryOptions(maxRetries: 2),
 );
 
 final session = await peanut.auth.login('me@example.com', 'password123');
