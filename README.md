@@ -55,8 +55,14 @@ For Docker Compose, create a `.env` with `JWT_SECRET`, then run:
 docker compose up -d
 ```
 
-Detailed setup, verification, first-admin, workspace-invite, and deployment steps are
-in the guide documents below.
+Run the production gate before trusting a new deployment:
+
+```bash
+PEANUT_ADMIN_TOKEN="$ADMIN_TOKEN" scripts/verify-compose.sh
+```
+
+Detailed setup, verification, first-admin, workspace-invite, and deployment
+steps are in the guide documents below.
 
 ## Core Docs
 

@@ -11,6 +11,11 @@ command -v jq >/dev/null 2>&1 || {
 }
 
 npx --yes @redocly/cli@latest lint docs/openapi.yaml
+grep -q '/api/apps/{app_id}/function-endpoints/{endpoint_slug}:' docs/openapi.yaml
+if grep -Eq '^  /api/(auth|data|storage|push|functions)(/|:)' docs/openapi.yaml; then
+  echo "legacy global app API route found in OpenAPI contract" >&2
+  exit 1
+fi
 
 health_json=$(curl -s "$BASE_URL/api/health")
 echo "$health_json" | jq -e '.status == "ok" and (.message | type == "string")' >/dev/null

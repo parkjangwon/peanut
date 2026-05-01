@@ -178,3 +178,44 @@ jobs:
           docker logs peanut-ci-smoke
           docker stop peanut-ci-smoke || true
           exit 1
+
+  compose-gate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    needs: [check, test]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install runtime tools
+        run: sudo apt-get update && sudo apt-get install -y jq curl
+      - name: Run Docker Compose production gate
+        env:
+          COMPOSE_FILES: docker-compose.yml docker-compose.build.yml
+          BASE_URL: http://127.0.0.1:3000
+          JWT_SECRET: ci-compose-secret-that-is-long-enough
+          FUNCTIONS_SECRETS_MASTER_KEY: ci-compose-functions-secret-that-is-long-enough
+          PEANUT_BOOTSTRAP_EMAIL: compose-admin@example.com
+          PEANUT_BOOTSTRAP_PASSWORD: secret123
+          FUNCTIONS_ENABLED: "true"
+          FUNCTIONS_ALLOW_NETWORK: "false"
+          RUST_LOG: info
+        run: scripts/verify-compose.sh
+      - name: Dump compose logs
+        if: always()
+        env:
+          COMPOSE_FILES: docker-compose.yml docker-compose.build.yml
+          JWT_SECRET: ci-compose-secret-that-is-long-enough
+          FUNCTIONS_SECRETS_MASTER_KEY: ci-compose-functions-secret-that-is-long-enough
+        run: |
+          docker compose -f docker-compose.yml -f docker-compose.build.yml logs --tail=300 peanut > compose-gate.log 2>&1 || true
+          docker compose -f docker-compose.yml -f docker-compose.build.yml down -v || true
+      - name: Upload compose gate artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: compose-gate-artifacts
+          path: |
+            compose-gate.log
+            /tmp/peanut-*.json
+            /tmp/peanut-*.txt
+            /tmp/peanut-*.db
+          if-no-files-found: ignore

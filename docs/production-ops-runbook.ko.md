@@ -8,8 +8,39 @@
 - `GET /api/admin/ops/diagnostics`가 `ok: true`인지 확인합니다.
 - `POST /api/admin/backups`로 SQLite 백업을 만듭니다.
 - `GET /api/admin/backups/restore-pending`으로 대기 중인 복구가 없는지 확인합니다.
+- 새 이미지 승격 전 `scripts/verify-compose.sh` 전체 gate를 통과시킵니다.
 
 백업 다운로드와 복구 예약은 platform `owner` 역할만 수행해야 합니다.
+
+## Docker Compose 운영 Gate
+
+CI와 같은 로컬 빌드 이미지로 production gate를 실행합니다.
+
+```bash
+COMPOSE_FILES="docker-compose.yml docker-compose.build.yml" \
+JWT_SECRET=replace-with-a-long-random-secret \
+FUNCTIONS_SECRETS_MASTER_KEY=replace-with-a-different-long-random-secret \
+PEANUT_BOOTSTRAP_EMAIL=owner@example.com \
+PEANUT_BOOTSTRAP_PASSWORD=password123 \
+scripts/verify-compose.sh
+```
+
+이미 운영 중인 인스턴스에서는 admin token을 사용합니다.
+
+```bash
+PEANUT_ADMIN_TOKEN="$ADMIN_TOKEN" scripts/verify-compose.sh
+```
+
+`PEANUT_ADMIN_TOKEN`이나 bootstrap credential 없이 실행하면 compose startup, readiness, Deno만 확인합니다. production gate로 인정하려면 둘 중 하나를 반드시 제공해야 합니다.
+
+통과 기준:
+
+- app A/B가 독립된 auth user, key, data, storage, function, push 상태를 갖습니다.
+- 같은 이메일은 서로 다른 app에 존재할 수 있고, 같은 app 중복은 거절됩니다.
+- app A credential로 app B Data/Storage/Function endpoint 접근이 403으로 거절됩니다.
+- app disable 시 SDK 요청이 막히고 enable 후 정상화됩니다.
+- backup create/download와 restore-pending schedule/read/clear가 동작합니다.
+- restore-pending clear 후 `/api/ready`가 다시 clean ready입니다.
 
 ## Workspace 운영
 
@@ -40,3 +71,11 @@ curl -fsS -X POST "$BASE_URL/api/admin/backups/<backup>.backup/restore" \
 ```
 
 복구 예약 후 서비스를 재시작하고 `/api/ready`를 확인합니다.
+
+## 백업 주기와 복구 Drill
+
+- 배포 전마다 API backup을 만듭니다.
+- schema 변경 업그레이드 전에는 `./data` 전체를 archive합니다.
+- 최소 월 1회 운영 데이터 사본에서 restore drill을 수행합니다.
+- restore drill 후 `scripts/verify-compose.sh`를 통과해야 완료로 봅니다.
+- `JWT_SECRET`과 `FUNCTIONS_SECRETS_MASTER_KEY`는 호스트 외부에 보관합니다.

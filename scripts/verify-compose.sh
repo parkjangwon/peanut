@@ -1,17 +1,18 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-COMPOSE_FILE="${COMPOSE_FILE:-docker-compose.yml}"
+COMPOSE_FILES="${COMPOSE_FILES:-${COMPOSE_FILE:-docker-compose.yml}}"
 BASE_URL="${BASE_URL:-http://127.0.0.1:3000}"
 SERVICE="${SERVICE:-peanut}"
 ADMIN_TOKEN="${PEANUT_ADMIN_TOKEN:-}"
 APP_ID="${PEANUT_VERIFY_APP_ID:-default}"
 BOOTSTRAP_EMAIL="${PEANUT_BOOTSTRAP_EMAIL:-}"
 BOOTSTRAP_PASSWORD="${PEANUT_BOOTSTRAP_PASSWORD:-}"
-SMOKE_TABLE="verify_$(date +%s)"
-SMOKE_BUCKET="verify-$(date +%s)"
-SMOKE_FUNCTION="verify_$(date +%s)"
-SMOKE_FUNCTION_SLUG="verify-$(date +%s)"
+RUN_ID="$(python3 -c 'import time; print(time.time_ns())')"
+SMOKE_TABLE="verify_${RUN_ID}"
+SMOKE_BUCKET="verify-${RUN_ID}"
+SMOKE_FUNCTION="verify_${RUN_ID}"
+SMOKE_FUNCTION_SLUG="verify-${RUN_ID}"
 
 json_value() {
   python3 -c 'import json,sys; data=json.load(sys.stdin); cur=data
@@ -20,8 +21,26 @@ for part in sys.argv[1].split("."):
 print(cur)' "$1"
 }
 
-echo "==> Building and starting Peanut with ${COMPOSE_FILE}"
-docker compose -f "${COMPOSE_FILE}" up -d --build "${SERVICE}"
+curl_expect_status() {
+  local expected="$1"
+  local output="$2"
+  shift 2
+  local status
+  status="$(curl -sS -o "${output}" -w "%{http_code}" "$@")"
+  if [[ "${status}" != "${expected}" ]]; then
+    echo "expected HTTP ${expected}, got ${status}: $*" >&2
+    cat "${output}" >&2 || true
+    exit 1
+  fi
+}
+
+COMPOSE_ARGS=()
+for compose_file in ${COMPOSE_FILES}; do
+  COMPOSE_ARGS+=("-f" "${compose_file}")
+done
+
+echo "==> Building and starting Peanut with ${COMPOSE_FILES}"
+docker compose "${COMPOSE_ARGS[@]}" up -d --build "${SERVICE}"
 
 echo "==> Waiting for readiness at ${BASE_URL}/api/ready"
 for _ in $(seq 1 60); do
@@ -36,12 +55,12 @@ done
 
 if ! grep -q '"ready":true' /tmp/peanut-ready.json 2>/dev/null; then
   echo "readiness failed"
-  docker compose -f "${COMPOSE_FILE}" logs --tail=200 "${SERVICE}"
+  docker compose "${COMPOSE_ARGS[@]}" logs --tail=200 "${SERVICE}"
   exit 1
 fi
 
 echo "==> Verifying Docker image has Deno"
-docker compose -f "${COMPOSE_FILE}" exec -T "${SERVICE}" deno --version >/tmp/peanut-deno.txt
+docker compose "${COMPOSE_ARGS[@]}" exec -T "${SERVICE}" deno --version >/tmp/peanut-deno.txt
 cat /tmp/peanut-deno.txt
 
 if [[ -z "${ADMIN_TOKEN}" && -n "${BOOTSTRAP_EMAIL}" && -n "${BOOTSTRAP_PASSWORD}" ]]; then
@@ -55,7 +74,7 @@ fi
 
 if [[ -n "${ADMIN_TOKEN}" ]]; then
   echo "==> Verifying workspace invite setup"
-  WORKSPACE_SUFFIX="$(date +%s)"
+  WORKSPACE_SUFFIX="${RUN_ID}"
   WORKSPACE_EMAIL="workspace-verify-${WORKSPACE_SUFFIX}@example.com"
   curl -fsS -X POST "${BASE_URL}/api/admin/workspace-invites" \
     -H "Authorization: Bearer ${ADMIN_TOKEN}" \
@@ -76,6 +95,130 @@ if [[ -n "${ADMIN_TOKEN}" ]]; then
     -H "Authorization: Bearer ${ADMIN_TOKEN}" \
     >/tmp/peanut-workspace-usage.json
   grep -q '"limit_profile_id":"self_hosted_default"' /tmp/peanut-workspace-usage.json
+
+  echo "==> Verifying app A/B isolation"
+  APP_A_NAME="verify-a-${RUN_ID}"
+  APP_B_NAME="verify-b-${RUN_ID}"
+  curl -fsS -X POST "${BASE_URL}/api/apps" \
+    -H "Authorization: Bearer ${ADMIN_TOKEN}" \
+    -H "Content-Type: application/json" \
+    --data "{\"workspace_id\":\"default\",\"name\":\"${APP_A_NAME}\",\"display_name\":\"Verify A ${RUN_ID}\"}" \
+    >/tmp/peanut-app-a.json
+  curl -fsS -X POST "${BASE_URL}/api/apps" \
+    -H "Authorization: Bearer ${ADMIN_TOKEN}" \
+    -H "Content-Type: application/json" \
+    --data "{\"workspace_id\":\"default\",\"name\":\"${APP_B_NAME}\",\"display_name\":\"Verify B ${RUN_ID}\"}" \
+    >/tmp/peanut-app-b.json
+  APP_A_ID="$(json_value app.id </tmp/peanut-app-a.json)"
+  APP_B_ID="$(json_value app.id </tmp/peanut-app-b.json)"
+
+  curl -fsS -X POST "${BASE_URL}/api/apps/${APP_A_ID}/keys" \
+    -H "Authorization: Bearer ${ADMIN_TOKEN}" \
+    -H "Content-Type: application/json" \
+    --data '{"name":"compose verifier client key","key_type":"client"}' \
+    >/tmp/peanut-app-a-client-key.json
+  grep -q '"key_type":"client"' /tmp/peanut-app-a-client-key.json
+  grep -q '"key":"pk_' /tmp/peanut-app-a-client-key.json
+  curl -fsS -X POST "${BASE_URL}/api/apps/${APP_A_ID}/keys" \
+    -H "Authorization: Bearer ${ADMIN_TOKEN}" \
+    -H "Content-Type: application/json" \
+    --data '{"name":"compose verifier server key","key_type":"server"}' \
+    >/tmp/peanut-app-a-server-key.json
+  APP_A_SERVER_KEY="$(json_value key </tmp/peanut-app-a-server-key.json)"
+  curl -fsS -X POST "${BASE_URL}/api/apps/${APP_A_ID}/keys" \
+    -H "Authorization: Bearer ${ADMIN_TOKEN}" \
+    -H "Content-Type: application/json" \
+    --data '{"name":"compose verifier admin key","key_type":"admin"}' \
+    >/tmp/peanut-app-a-admin-key.json
+  grep -q '"key_type":"admin"' /tmp/peanut-app-a-admin-key.json
+  grep -q '"key":"adm_' /tmp/peanut-app-a-admin-key.json
+  curl -fsS -X POST "${BASE_URL}/api/apps/${APP_B_ID}/keys" \
+    -H "Authorization: Bearer ${ADMIN_TOKEN}" \
+    -H "Content-Type: application/json" \
+    --data '{"name":"compose verifier server key","key_type":"server"}' \
+    >/tmp/peanut-app-b-server-key.json
+  APP_B_SERVER_KEY="$(json_value key </tmp/peanut-app-b-server-key.json)"
+
+  SHARED_EMAIL="compose-shared-${RUN_ID}@example.com"
+  curl -fsS -X POST "${BASE_URL}/api/apps/${APP_A_ID}/auth/register" \
+    -H "X-Peanut-Api-Key: ${APP_A_SERVER_KEY}" \
+    -H "Content-Type: application/json" \
+    --data "{\"email\":\"${SHARED_EMAIL}\",\"password\":\"password123\"}" \
+    >/tmp/peanut-app-a-register.json
+  APP_A_USER_ID="$(json_value user.id </tmp/peanut-app-a-register.json)"
+  curl -fsS -X PUT "${BASE_URL}/api/admin/users/${APP_A_USER_ID}/activate" \
+    -H "Authorization: Bearer ${ADMIN_TOKEN}" >/tmp/peanut-app-a-activate.json
+  curl -fsS -X POST "${BASE_URL}/api/apps/${APP_A_ID}/auth/login" \
+    -H "X-Peanut-Api-Key: ${APP_A_SERVER_KEY}" \
+    -H "Content-Type: application/json" \
+    --data "{\"email\":\"${SHARED_EMAIL}\",\"password\":\"password123\"}" \
+    >/tmp/peanut-app-a-login.json
+  APP_A_USER_TOKEN="$(json_value access_token </tmp/peanut-app-a-login.json)"
+  curl -fsS -X POST "${BASE_URL}/api/apps/${APP_B_ID}/auth/register" \
+    -H "X-Peanut-Api-Key: ${APP_B_SERVER_KEY}" \
+    -H "Content-Type: application/json" \
+    --data "{\"email\":\"${SHARED_EMAIL}\",\"password\":\"password123\"}" \
+    >/tmp/peanut-app-b-register.json
+  APP_B_USER_ID="$(json_value user.id </tmp/peanut-app-b-register.json)"
+  curl -fsS -X PUT "${BASE_URL}/api/admin/users/${APP_B_USER_ID}/activate" \
+    -H "Authorization: Bearer ${ADMIN_TOKEN}" >/tmp/peanut-app-b-activate.json
+  curl -fsS -X POST "${BASE_URL}/api/apps/${APP_B_ID}/auth/login" \
+    -H "X-Peanut-Api-Key: ${APP_B_SERVER_KEY}" \
+    -H "Content-Type: application/json" \
+    --data "{\"email\":\"${SHARED_EMAIL}\",\"password\":\"password123\"}" \
+    >/tmp/peanut-app-b-login.json
+  curl_expect_status 409 /tmp/peanut-app-a-duplicate-register.json \
+    -X POST "${BASE_URL}/api/apps/${APP_A_ID}/auth/register" \
+    -H "X-Peanut-Api-Key: ${APP_A_SERVER_KEY}" \
+    -H "Content-Type: application/json" \
+    --data "{\"email\":\"${SHARED_EMAIL}\",\"password\":\"password123\"}"
+
+  curl -fsS -X POST "${BASE_URL}/api/apps/${APP_A_ID}/data/tables" \
+    -H "Authorization: Bearer ${ADMIN_TOKEN}" \
+    -H "Content-Type: application/json" \
+    --data "{\"name\":\"${SMOKE_TABLE}_a\",\"display_name\":\"Compose Verify A\",\"schema\":{\"fields\":{\"title\":{\"type\":\"string\",\"required\":true}}},\"access_policy\":{\"mode\":\"authenticated_shared_rw\"}}" \
+    >/tmp/peanut-app-a-data-table.json
+  curl -fsS -X POST "${BASE_URL}/api/apps/${APP_A_ID}/data/tables/${SMOKE_TABLE}_a/rows" \
+    -H "Authorization: Bearer ${APP_A_USER_TOKEN}" \
+    -H "X-Peanut-Api-Key: ${APP_A_SERVER_KEY}" \
+    -H "Content-Type: application/json" \
+    --data '{"data":{"title":"app a only"}}' \
+    >/tmp/peanut-app-a-data-row.json
+
+  echo "==> Verifying cross-app Data denial"
+  curl_expect_status 403 /tmp/peanut-cross-app-data-denied.json \
+    "${BASE_URL}/api/apps/${APP_B_ID}/data/tables" \
+    -H "X-Peanut-Api-Key: ${APP_A_SERVER_KEY}"
+
+  echo "==> Verifying cross-app Storage denial"
+  curl_expect_status 403 /tmp/peanut-cross-app-storage-denied.json \
+    -X PUT "${BASE_URL}/api/apps/${APP_B_ID}/storage/buckets/missing/objects/blocked.txt" \
+    -H "X-Peanut-Api-Key: ${APP_A_SERVER_KEY}" \
+    -H "Content-Type: text/plain" \
+    --data 'blocked'
+
+  echo "==> Verifying cross-app Function denial"
+  curl_expect_status 403 /tmp/peanut-cross-app-function-denied.json \
+    -X POST "${BASE_URL}/api/apps/${APP_B_ID}/function-endpoints/missing" \
+    -H "X-Peanut-Api-Key: ${APP_A_SERVER_KEY}" \
+    -H "Content-Type: application/json" \
+    --data '{"input":{"blocked":true}}'
+
+  echo "==> Verifying disabled app blocks and re-enables SDK access"
+  curl -fsS -X POST "${BASE_URL}/api/admin/apps/${APP_A_ID}/disable" \
+    -H "Authorization: Bearer ${ADMIN_TOKEN}" \
+    -H "Content-Type: application/json" \
+    --data '{"reason":"compose production gate"}' \
+    >/tmp/peanut-app-a-disable.json
+  curl_expect_status 403 /tmp/peanut-disabled-app-denied.json \
+    "${BASE_URL}/api/apps/${APP_A_ID}/data/tables" \
+    -H "X-Peanut-Api-Key: ${APP_A_SERVER_KEY}"
+  curl -fsS -X POST "${BASE_URL}/api/admin/apps/${APP_A_ID}/enable" \
+    -H "Authorization: Bearer ${ADMIN_TOKEN}" >/tmp/peanut-app-a-enable.json
+  curl -fsS "${BASE_URL}/api/apps/${APP_A_ID}/data/tables" \
+    -H "X-Peanut-Api-Key: ${APP_A_SERVER_KEY}" \
+    >/tmp/peanut-reenabled-app-tables.json
+  grep -q '"tables"' /tmp/peanut-reenabled-app-tables.json
 
   echo "==> Creating app-scoped server key for ${APP_ID}"
   curl -fsS -X POST "${BASE_URL}/api/apps/${APP_ID}/keys" \
@@ -178,6 +321,9 @@ if [[ -n "${ADMIN_TOKEN}" ]]; then
   curl -fsS -X DELETE "${BASE_URL}/api/admin/backups/restore-pending" \
     -H "Authorization: Bearer ${ADMIN_TOKEN}" \
     >/tmp/peanut-restore-cleared.json
+  echo "==> Verifying restore-pending clear keeps readiness clean"
+  curl -fsS "${BASE_URL}/api/ready" >/tmp/peanut-ready-after-restore-clear.json
+  grep -q '"ready":true' /tmp/peanut-ready-after-restore-clear.json
 
   echo "==> Verifying Function editor lint API"
   curl -fsS -X POST "${BASE_URL}/api/apps/${APP_ID}/functions/editor/lint" \
@@ -223,4 +369,4 @@ else
   echo "==> Skipping authenticated checks; set PEANUT_ADMIN_TOKEN or PEANUT_BOOTSTRAP_EMAIL/PEANUT_BOOTSTRAP_PASSWORD"
 fi
 
-echo "==> Compose verification complete"
+echo "==> All compose production gate checks passed"

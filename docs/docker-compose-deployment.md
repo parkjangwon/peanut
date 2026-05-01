@@ -109,9 +109,21 @@ Existing install with an admin token:
 PEANUT_ADMIN_TOKEN="$ADMIN_TOKEN" scripts/verify-compose.sh
 ```
 
-The verifier checks readiness, Deno availability, workspace invite setup, app auth,
-Data CRUD, Storage CRUD, Functions, Push diagnostics, backup download, and
-restore-pending safety.
+Local image build with the same gate used by CI:
+
+```bash
+COMPOSE_FILES="docker-compose.yml docker-compose.build.yml" \
+PEANUT_BOOTSTRAP_EMAIL=owner@example.com \
+PEANUT_BOOTSTRAP_PASSWORD=password123 \
+scripts/verify-compose.sh
+```
+
+The verifier is the release acceptance gate for self-hosted deployments. It
+checks readiness, Deno availability, workspace invite setup, app A/B isolation,
+same-email-per-app auth, cross-app denial for Data/Storage/Functions, disabled
+app block/re-enable behavior, Data CRUD, Storage CRUD, Function lint/create/invoke,
+Push diagnostics/test message, backup download, restore scheduling, restore
+marker clearing, and clean readiness after restore-pending is cleared.
 
 ## Reverse Proxy Notes
 
@@ -149,6 +161,7 @@ docker compose pull
 docker compose up -d
 docker compose logs --tail=200 peanut
 curl -fsS "$BASE_URL/api/ready"
+PEANUT_ADMIN_TOKEN="$ADMIN_TOKEN" scripts/verify-compose.sh
 ```
 
 When using local builds:

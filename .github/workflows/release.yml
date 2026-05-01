@@ -60,13 +60,15 @@ jobs:
           tags: |
             ${{ env.IMAGE_NAME }}:${{ env.VERSION }}
             ${{ env.IMAGE_NAME }}:latest
-      - name: Smoke released image
+      - name: Run released image production gate
         env:
           JWT_SECRET: release-smoke-secret-that-is-long-enough
+          FUNCTIONS_SECRETS_MASTER_KEY: release-functions-secret-that-is-long-enough
           DATABASE_URL: sqlite://release-ci/peanut.db
           STORAGE_DIR: release-ci/storage
           BIND_ADDR: 127.0.0.1:3000
           FUNCTIONS_ENABLED: "false"
+          NPM_CONFIG_CACHE: ${{ runner.temp }}/npm-cache
         run: |
           mkdir -p release-ci
           docker run --rm -d \
@@ -77,6 +79,7 @@ jobs:
             -e STORAGE_DIR \
             -e BIND_ADDR=0.0.0.0:3000 \
             -e FUNCTIONS_ENABLED \
+            -e FUNCTIONS_SECRETS_MASTER_KEY \
             $IMAGE_NAME:$VERSION
           for attempt in $(seq 1 30); do
             if curl -fsS http://127.0.0.1:3000/api/ready | jq -e '.status == "ready"' >/dev/null; then
@@ -84,9 +87,15 @@ jobs:
                 -H 'content-type: application/json' \
                 -d '{"email":"release-smoke@example.com","password":"secret123"}')
               admin_token=$(echo "$admin_json" | jq -r '.access_token')
-              curl -fsS http://127.0.0.1:3000/api/admin/ops/diagnostics \
+              ADMIN_JWT="${admin_token}" BASE_URL="http://127.0.0.1:3000" scripts/check-openapi.sh
+              echo "Backup contract check"
+              backup_json=$(curl -fsS -X POST http://127.0.0.1:3000/api/admin/backups \
+                -H "authorization: Bearer ${admin_token}")
+              echo "$backup_json" | jq -e '(.backup.name | endswith(".backup")) and (.backup.size_bytes | type == "number")' >/dev/null
+              curl -fsS "http://127.0.0.1:3000/api/admin/backups/$(echo "$backup_json" | jq -r '.backup.name')/download" \
                 -H "authorization: Bearer ${admin_token}" \
-                | jq -e '.ok == true and (.checks | type == "array")' >/dev/null
+                -o release-backup-download.db
+              test -s release-backup-download.db
               docker stop peanut-release-smoke
               exit 0
             fi

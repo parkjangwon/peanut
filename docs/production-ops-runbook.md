@@ -20,14 +20,31 @@ restore operations.
 
 ## Docker Compose Verification
 
-Run the compose verifier after changing Dockerfile, compose config, runtime settings, or deployment docs:
+Run the compose verifier after changing Dockerfile, compose config, runtime
+settings, deployment docs, or before promoting a new image:
 
 ```bash
-JWT_SECRET=replace-me docker compose -f docker-compose.yml -f docker-compose.build.yml up -d --build
-PEANUT_ADMIN_TOKEN=... scripts/verify-compose.sh
+COMPOSE_FILES="docker-compose.yml docker-compose.build.yml" \
+JWT_SECRET=replace-with-a-long-random-secret \
+FUNCTIONS_SECRETS_MASTER_KEY=replace-with-a-different-long-random-secret \
+PEANUT_BOOTSTRAP_EMAIL=owner@example.com \
+PEANUT_BOOTSTRAP_PASSWORD=password123 \
+scripts/verify-compose.sh
 ```
 
-Without `PEANUT_ADMIN_TOKEN`, the verifier still checks compose startup, readiness, and Deno availability. With a token, it also checks app auth, Data CRUD, Storage CRUD, Function create/invoke/invocation listing, Push diagnostics/test message, backup download, and restore-pending safety under app-scoped routes.
+Without `PEANUT_ADMIN_TOKEN` or bootstrap credentials, the verifier only checks
+compose startup, readiness, and Deno availability. A production gate run must
+include either `PEANUT_ADMIN_TOKEN` or `PEANUT_BOOTSTRAP_EMAIL` plus
+`PEANUT_BOOTSTRAP_PASSWORD`.
+
+A passing production gate proves:
+
+- app A/B can coexist with isolated auth users, keys, data, storage, functions, and push state
+- the same email can exist in two apps, while duplicate email in one app is rejected
+- app A credentials cannot read or write app B Data, Storage, or Function endpoints
+- disabling an app blocks SDK traffic and enabling it restores SDK traffic
+- backup create/download and restore-pending schedule/read/clear work
+- `/api/ready` is clean after restore-pending is cleared
 
 ## App Isolation Minimum
 
@@ -81,6 +98,14 @@ Do not pull or deploy a newer image while `/api/admin/backups/restore-pending` r
 Restore scheduling requires the confirmation field to exactly match the backup
 file name. This is intentional friction so an operator cannot schedule a
 restore by accidentally clicking or replaying a stale request.
+
+## Backup Cadence and Restore Drill
+
+- Create an API backup before every deploy.
+- Archive the whole `./data` directory before schema-changing upgrades.
+- Run a restore drill at least monthly on a non-production copy of the data.
+- After every restore drill, run `scripts/verify-compose.sh` before declaring the drill complete.
+- Store `JWT_SECRET` and `FUNCTIONS_SECRETS_MASTER_KEY` outside the host so a host rebuild can recover sessions and encrypted function secrets when intended.
 
 ## Incident Checklist
 

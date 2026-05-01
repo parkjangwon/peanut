@@ -105,7 +105,16 @@ scripts/verify-compose.sh
 PEANUT_ADMIN_TOKEN="$ADMIN_TOKEN" scripts/verify-compose.sh
 ```
 
-검증 스크립트는 readiness, Deno, workspace invite setup, app auth, Data CRUD, Storage CRUD, Functions, Push diagnostics, backup download, restore-pending safety를 확인합니다.
+CI와 같은 로컬 빌드 이미지로 검증:
+
+```bash
+COMPOSE_FILES="docker-compose.yml docker-compose.build.yml" \
+PEANUT_BOOTSTRAP_EMAIL=owner@example.com \
+PEANUT_BOOTSTRAP_PASSWORD=password123 \
+scripts/verify-compose.sh
+```
+
+검증 스크립트는 self-hosted 배포의 release acceptance gate입니다. readiness, Deno, workspace invite setup, app A/B 격리, 앱별 같은 이메일 auth, Data/Storage/Functions cross-app 거절, disabled app 차단/재활성화, Data CRUD, Storage CRUD, Function lint/create/invoke, Push diagnostics/test message, backup download, restore 예약, restore marker clear, clear 이후 readiness를 확인합니다.
 
 ## Reverse Proxy 주의사항
 
@@ -141,6 +150,7 @@ docker compose pull
 docker compose up -d
 docker compose logs --tail=200 peanut
 curl -fsS "$BASE_URL/api/ready"
+PEANUT_ADMIN_TOKEN="$ADMIN_TOKEN" scripts/verify-compose.sh
 ```
 
 로컬 빌드 이미지를 사용할 때:
