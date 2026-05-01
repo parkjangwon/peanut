@@ -309,12 +309,12 @@ fn paginate_multipart_uploads<'a>(
     (page, is_truncated, next_key_marker, next_upload_id_marker)
 }
 
-fn paginate_multipart_parts<'a>(
-    parts: &'a [crate::storage::local::MultipartUploadPart],
+fn paginate_multipart_parts(
+    parts: &[crate::storage::local::MultipartUploadPart],
     max_parts: usize,
     part_number_marker: u32,
 ) -> (
-    Vec<&'a crate::storage::local::MultipartUploadPart>,
+    Vec<&crate::storage::local::MultipartUploadPart>,
     bool,
     Option<u32>,
 ) {

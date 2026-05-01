@@ -1,7 +1,7 @@
 use std::{
     env,
     path::{Path, PathBuf},
-    time::Instant,
+    time::{Duration, Instant},
 };
 
 use serde::Deserialize;
@@ -15,21 +15,16 @@ use uuid::Uuid;
 
 use super::host::handle_host_call;
 
-const MAX_OUTPUT_BYTES: usize = 64 * 1024;
 const RUNNER_SOURCE: &str = r#"
-import readline from 'node:readline'
-import { pathToFileURL } from 'node:url'
+const decoder = new TextDecoder()
+const encoder = new TextEncoder()
+const [handlerPath, allowNetworkArg] = Deno.args
 
-if (process.env.PEANUT_FUNCTIONS_ALLOW_NETWORK !== 'true') {
+if (allowNetworkArg !== 'true') {
   globalThis.fetch = undefined
   globalThis.WebSocket = undefined
   globalThis.XMLHttpRequest = undefined
 }
-
-const rl = readline.createInterface({
-  input: process.stdin,
-  crlfDelay: Infinity,
-})
 
 const pending = new Map()
 let resolveInvoke
@@ -41,11 +36,11 @@ const invokePromise = new Promise((resolve, reject) => {
 let callSeq = 0
 
 const writeMessage = (message) => {
-  process.stdout.write(JSON.stringify(message) + '\n')
+  Deno.stdout.writeSync(encoder.encode(JSON.stringify(message) + '\n'))
 }
 
 const writeStderr = (...args) => {
-  process.stderr.write(args.map((value) => String(value)).join(' ') + '\n')
+  Deno.stderr.writeSync(encoder.encode(args.map((value) => String(value)).join(' ') + '\n'))
 }
 
 console.log = (...args) => writeStderr(...args)
@@ -53,9 +48,28 @@ console.info = (...args) => writeStderr(...args)
 console.warn = (...args) => writeStderr(...args)
 console.error = (...args) => writeStderr(...args)
 
-rl.on('line', (line) => {
-  if (!line.trim()) return
+async function readProtocolLoop() {
+  let buffer = ''
+  const reader = Deno.stdin.readable.getReader()
+  while (true) {
+    const { value, done } = await reader.read()
+    if (done) break
+    buffer += decoder.decode(value, { stream: true })
+    while (true) {
+      const newlineIndex = buffer.indexOf('\n')
+      if (newlineIndex === -1) break
+      const line = buffer.slice(0, newlineIndex)
+      buffer = buffer.slice(newlineIndex + 1)
+      await handleProtocolLine(line)
+    }
+  }
+  if (buffer.trim()) {
+    await handleProtocolLine(buffer)
+  }
+}
 
+async function handleProtocolLine(line) {
+  if (!line.trim()) return
   let message
   try {
     message = JSON.parse(line)
@@ -79,7 +93,7 @@ rl.on('line', (line) => {
       pendingCall.reject(new Error(message.error || 'host call failed'))
     }
   }
-})
+}
 
 function hostCall(action) {
   return async (args = {}) => {
@@ -113,9 +127,9 @@ function createPeanutHost() {
 }
 
 try {
-  const [, , handlerPath] = process.argv
+  readProtocolLoop()
   const payload = await invokePromise
-  const mod = await import(pathToFileURL(handlerPath).href)
+  const mod = await import(new URL(handlerPath, 'file://').href)
   const handler = typeof mod.default === 'function' ? mod.default : mod.handler
   if (typeof handler !== 'function') {
     throw new Error('function module must export default or named handler')
@@ -127,13 +141,12 @@ try {
   }
   const result = await handler(ctx)
   writeMessage({ type: 'result', ok: true, result: result ?? null })
+  Deno.exit(0)
 } catch (error) {
   const message = error instanceof Error ? error.message : String(error)
   writeMessage({ type: 'result', ok: false, error: message })
-  process.stderr.write(message)
-  process.exit(1)
-} finally {
-  rl.close()
+  Deno.stderr.writeSync(encoder.encode(message))
+  Deno.exit(1)
 }
 "#;
 
@@ -180,11 +193,11 @@ pub async fn execute_in_sandbox(
     state: &crate::AppState,
     claims: Option<crate::auth::jwt::Claims>,
 ) -> Result<SandboxExecutionResult, String> {
-    validate_source_code(request.source_code)?;
+    validate_source_code(request.source_code, state.functions.max_source_bytes)?;
 
     let runtime_ext = match request.runtime {
         "javascript" => "mjs",
-        "typescript" => "mts",
+        "typescript" => "ts",
         _ => return Err("runtime must be javascript or typescript".to_string()),
     };
 
@@ -218,23 +231,34 @@ pub async fn execute_in_sandbox(
         .map_err(|_| "failed to encode function payload".to_string())?;
 
     let start = Instant::now();
-    let node_path = env::var("PATH").unwrap_or_default();
-    let mut child = Command::new("node")
-        .arg("--disable-proto=throw")
-        .arg("--disallow-code-generation-from-strings")
+    let executable_path = env::var("PATH").unwrap_or_default();
+    let timeout = Duration::from_millis(request.timeout_ms.max(1) as u64);
+    let mut child = Command::new("deno")
+        .arg("run")
+        .arg("--quiet")
+        .arg("--no-prompt")
+        .arg(format!(
+            "--v8-flags=--max-old-space-size={}",
+            state.functions.memory_mb
+        ))
+        .arg(format!("--allow-read={}", run_dir.to_string_lossy()))
+        .args(if state.functions.allow_network {
+            &["--allow-net"][..]
+        } else {
+            &[][..]
+        })
         .arg(&runner_path)
         .arg(&handler_path)
+        .arg(if state.functions.allow_network {
+            "true"
+        } else {
+            "false"
+        })
         .current_dir(&run_dir)
         .env_clear()
-        .env("PATH", node_path)
-        .env(
-            "PEANUT_FUNCTIONS_ALLOW_NETWORK",
-            if state.functions.allow_network {
-                "true"
-            } else {
-                "false"
-            },
-        )
+        .env("PATH", executable_path)
+        .env("DENO_DIR", run_dir.join("deno-cache"))
+        .env("NO_COLOR", "1")
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
@@ -260,98 +284,95 @@ pub async fn execute_in_sandbox(
         stderr.read_to_end(&mut buf).await.map(|_| buf)
     });
 
-    let protocol_result =
-        tokio::time::timeout(
-            std::time::Duration::from_millis(request.timeout_ms as u64),
-            async {
-                stdin
-                    .write_all(&invoke_bytes)
-                    .await
-                    .map_err(|error| format!("failed to send function payload: {error}"))?;
-                stdin
-                    .write_all(b"\n")
-                    .await
-                    .map_err(|error| format!("failed to finalize function payload: {error}"))?;
+    let protocol_result = tokio::time::timeout(timeout, async {
+        stdin
+            .write_all(&invoke_bytes)
+            .await
+            .map_err(|error| format!("failed to send function payload: {error}"))?;
+        stdin
+            .write_all(b"\n")
+            .await
+            .map_err(|error| format!("failed to finalize function payload: {error}"))?;
 
-                let mut final_result: Option<Value> = None;
-                let mut final_error: Option<String> = None;
+        let mut final_result: Option<Value> = None;
+        let mut final_error: Option<String> = None;
 
-                while let Some(line) = stdout_lines
-                    .next_line()
+        while let Some(line) = stdout_lines
+            .next_line()
+            .await
+            .map_err(|error| format!("failed to read sandbox stdout: {error}"))?
+        {
+            let message: HostStdoutMessage = serde_json::from_str(&line)
+                .map_err(|_| "sandbox emitted invalid protocol message".to_string())?;
+            match message.kind.as_str() {
+                "host_call" => {
+                    let id = message
+                        .id
+                        .ok_or_else(|| "sandbox host call missing id".to_string())?;
+                    let action = message
+                        .action
+                        .ok_or_else(|| "sandbox host call missing action".to_string())?;
+                    let response = match handle_host_call(
+                        state,
+                        claims.clone(),
+                        action.as_str(),
+                        message.args,
+                    )
                     .await
-                    .map_err(|error| format!("failed to read sandbox stdout: {error}"))?
-                {
-                    let message: HostStdoutMessage = serde_json::from_str(&line)
-                        .map_err(|_| "sandbox emitted invalid protocol message".to_string())?;
-                    match message.kind.as_str() {
-                        "host_call" => {
-                            let id = message
-                                .id
-                                .ok_or_else(|| "sandbox host call missing id".to_string())?;
-                            let action = message
-                                .action
-                                .ok_or_else(|| "sandbox host call missing action".to_string())?;
-                            let response = match handle_host_call(
-                                state,
-                                claims.clone(),
-                                action.as_str(),
-                                message.args,
-                            )
-                            .await
-                            {
-                                Ok(result) => json!({
-                                    "type": "host_response",
-                                    "id": id,
-                                    "ok": true,
-                                    "result": result,
-                                }),
-                                Err(error) => json!({
-                                    "type": "host_response",
-                                    "id": id,
-                                    "ok": false,
-                                    "error": error,
-                                }),
-                            };
-                            let response_bytes = serde_json::to_vec(&response)
-                                .map_err(|_| "failed to encode host response".to_string())?;
-                            stdin.write_all(&response_bytes).await.map_err(|error| {
-                                format!("failed to send host response: {error}")
-                            })?;
-                            stdin.write_all(b"\n").await.map_err(|error| {
-                                format!("failed to finalize host response: {error}")
-                            })?;
-                        }
-                        "result" => {
-                            if message.ok.unwrap_or(false) {
-                                final_result = Some(message.result.unwrap_or(Value::Null));
-                            } else {
-                                final_error =
-                                    Some(message.error.unwrap_or_else(|| {
-                                        "function execution failed".to_string()
-                                    }));
-                            }
-                            break;
-                        }
-                        _ => return Err("sandbox emitted unknown protocol message".to_string()),
-                    }
+                    {
+                        Ok(result) => json!({
+                            "type": "host_response",
+                            "id": id,
+                            "ok": true,
+                            "result": result,
+                        }),
+                        Err(error) => json!({
+                            "type": "host_response",
+                            "id": id,
+                            "ok": false,
+                            "error": error,
+                        }),
+                    };
+                    let response_bytes = serde_json::to_vec(&response)
+                        .map_err(|_| "failed to encode host response".to_string())?;
+                    stdin
+                        .write_all(&response_bytes)
+                        .await
+                        .map_err(|error| format!("failed to send host response: {error}"))?;
+                    stdin
+                        .write_all(b"\n")
+                        .await
+                        .map_err(|error| format!("failed to finalize host response: {error}"))?;
                 }
-
-                let status = child
-                    .wait()
-                    .await
-                    .map_err(|error| format!("sandbox runtime failed: {error}"))?;
-
-                match (status.success(), final_result, final_error) {
-                    (true, Some(result), _) => Ok(result),
-                    (_, _, Some(error)) => Err(error),
-                    (false, _, None) => Err("function execution failed".to_string()),
-                    (true, None, None) => {
-                        Err("function response payload missing result field".to_string())
+                "result" => {
+                    if message.ok.unwrap_or(false) {
+                        final_result = Some(message.result.unwrap_or(Value::Null));
+                    } else {
+                        final_error = Some(
+                            message
+                                .error
+                                .unwrap_or_else(|| "function execution failed".to_string()),
+                        );
                     }
+                    break;
                 }
-            },
-        )
-        .await;
+                _ => return Err("sandbox emitted unknown protocol message".to_string()),
+            }
+        }
+
+        let status = child
+            .wait()
+            .await
+            .map_err(|error| format!("sandbox runtime failed: {error}"))?;
+
+        match (status.success(), final_result, final_error) {
+            (true, Some(result), _) => Ok(result),
+            (_, _, Some(error)) => Err(error),
+            (false, _, None) => Err("function execution failed".to_string()),
+            (true, None, None) => Err("function response payload missing result field".to_string()),
+        }
+    })
+    .await;
 
     let duration_ms = start.elapsed().as_millis() as i64;
 
@@ -363,7 +384,10 @@ pub async fn execute_in_sandbox(
                 .and_then(|result| {
                     result.map_err(|error| format!("failed to read sandbox stderr: {error}"))
                 })?;
-            let stderr = truncate_output(String::from_utf8_lossy(&stderr_bytes).to_string());
+            let stderr = truncate_output(
+                String::from_utf8_lossy(&stderr_bytes).to_string(),
+                state.functions.max_output_bytes,
+            );
             cleanup_dir(&run_dir).await;
 
             Ok(SandboxExecutionResult {
@@ -380,7 +404,10 @@ pub async fn execute_in_sandbox(
                 .and_then(|result| {
                     result.map_err(|error| format!("failed to read sandbox stderr: {error}"))
                 })?;
-            let stderr = truncate_output(String::from_utf8_lossy(&stderr_bytes).to_string());
+            let stderr = truncate_output(
+                String::from_utf8_lossy(&stderr_bytes).to_string(),
+                state.functions.max_output_bytes,
+            );
             cleanup_dir(&run_dir).await;
             Err(if error.trim().is_empty() {
                 stderr.clone()
@@ -398,9 +425,9 @@ pub async fn execute_in_sandbox(
     }
 }
 
-fn truncate_output(mut value: String) -> String {
-    if value.len() > MAX_OUTPUT_BYTES {
-        value.truncate(MAX_OUTPUT_BYTES);
+fn truncate_output(mut value: String, max_output_bytes: usize) -> String {
+    if value.len() > max_output_bytes {
+        value.truncate(max_output_bytes);
     }
     value
 }
@@ -409,7 +436,16 @@ async fn cleanup_dir(path: &PathBuf) {
     let _ = fs::remove_dir_all(path).await;
 }
 
-pub(crate) fn validate_source_code(source_code: &str) -> Result<(), String> {
+pub(crate) fn validate_source_code(
+    source_code: &str,
+    max_source_bytes: usize,
+) -> Result<(), String> {
+    if source_code.len() > max_source_bytes {
+        return Err(format!(
+            "source code exceeds configured limit of {max_source_bytes} bytes"
+        ));
+    }
+
     let banned_fragments = [
         "require(",
         "node:",

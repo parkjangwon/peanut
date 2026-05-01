@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 use std::sync::Arc;
 
 use axum::{
@@ -26,6 +28,9 @@ pub async fn make_test_state() -> (crate::AppState, tempfile::TempDir) {
             allow_network: false,
             work_dir: dir.path().join("functions"),
             max_concurrent: 4,
+            memory_mb: crate::config::DEFAULT_FUNCTIONS_MEMORY_MB,
+            max_source_bytes: crate::config::DEFAULT_FUNCTIONS_MAX_SOURCE_BYTES,
+            max_output_bytes: crate::config::DEFAULT_FUNCTIONS_MAX_OUTPUT_BYTES,
             semaphore: Arc::new(tokio::sync::Semaphore::new(4)),
             event_sender: tokio::sync::broadcast::channel(256).0,
         },
@@ -63,6 +68,10 @@ pub async fn make_test_app() -> (Router, tempfile::TempDir) {
         functions_allow_network: false,
         functions_work_dir: dir.path().join("functions"),
         functions_max_concurrent: 4,
+        functions_memory_mb: crate::config::DEFAULT_FUNCTIONS_MEMORY_MB,
+        functions_max_source_bytes: crate::config::DEFAULT_FUNCTIONS_MAX_SOURCE_BYTES,
+        functions_max_output_bytes: crate::config::DEFAULT_FUNCTIONS_MAX_OUTPUT_BYTES,
+        functions_secrets_master_key: "test-function-secrets-key".to_string(),
     };
     let app = crate::app::build_app(state, &config);
     (app, dir)

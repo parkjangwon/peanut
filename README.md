@@ -275,7 +275,7 @@ Current capabilities:
 - admin APIs expose version history through `GET /api/functions/:name/versions`
 - admins can roll back the active runtime through `POST /api/functions/:name/versions/:version_number/rollback`
 - admin APIs can subscribe to invocation lifecycle events through `GET /api/functions/:name/events` (SSE)
-- separate Node subprocess execution with a temp working directory and bounded runtime timeout
+- separate Deno subprocess execution with a temp working directory and bounded runtime timeout
 - invocation logs stored in SQLite, with queued/running/succeeded/failed lifecycle, `invoke_mode`, `function_version_id`, `retry_count`, `parent_invocation_id`, detail lookup, attempt-chain lookup, and retry from the console/API
 - bounded in-process Peanut host bindings for authenticated functions:
   - `ctx.peanut.storage.list/get/put/delete`
@@ -291,7 +291,7 @@ Current constraints:
 - source containing blocked runtime escape patterns is rejected
 - Peanut Functions use process-only hardening and are not a hostile-tenant sandbox
 - Peanut does not provide OS-level or container-level sandboxing for Functions; use `FUNCTIONS_ENABLED=false` on installs that do not need runtime extensions
-- `FUNCTIONS_ALLOW_NETWORK=false` keeps common browser-style network APIs unavailable inside the Node runner
+- `FUNCTIONS_ALLOW_NETWORK=false` keeps common browser-style network APIs unavailable inside the Deno runner
 - `FUNCTIONS_WORK_DIR` must not point at the filesystem root, user home directory, or database directory
 - `FUNCTIONS_MAX_CONCURRENT` limits simultaneous Function invocations in this Peanut process
 - this is a narrow sandboxed extension layer, not a full Lambda clone
@@ -606,6 +606,9 @@ Optional:
 - `FUNCTIONS_ENABLED` (default: `true`; set `false` to disable all Functions APIs and invocation endpoints)
 - `FUNCTIONS_ALLOW_NETWORK` (default: `false`; keeps `fetch`, `WebSocket`, and `XMLHttpRequest` unavailable inside Functions)
 - `FUNCTIONS_MAX_CONCURRENT` (default: `4`; caps simultaneous Function invocations)
+- `FUNCTIONS_MEMORY_MB` (default: `128`; caps the Deno/V8 heap for each Function invocation)
+- `FUNCTIONS_MAX_SOURCE_BYTES` (default: `262144`; rejects oversized Function source before execution)
+- `FUNCTIONS_MAX_OUTPUT_BYTES` (default: `65536`; caps captured Function stderr/log output)
 - `FUNCTIONS_WORK_DIR` (default: OS temp dir plus `peanut-functions`; must be writable and must not be root, home, or the DB directory)
 - `FUNCTIONS_SECRETS_MASTER_KEY` (default: falls back to `JWT_SECRET`; set this explicitly in production if you want Function secret encryption to rotate independently from JWT signing)
 - `BACKUP_ON_STARTUP` (default: `false`; set `true` to run one SQLite backup before the server starts accepting requests)

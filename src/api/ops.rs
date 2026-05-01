@@ -25,6 +25,9 @@ pub struct OpsMetricsResponse {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DatabaseMetrics {
     pub size_bytes: u64,
+    pub page_count: i64,
+    pub page_size: i64,
+    pub freelist_count: i64,
     pub backup_count: usize,
     pub last_backup_at: Option<String>,
     pub restore_pending: bool,
@@ -59,7 +62,11 @@ pub struct FunctionInvocationMetrics {
 pub struct FunctionsMetrics {
     pub enabled: bool,
     pub network_allowed: bool,
+    pub work_dir: String,
     pub running_limit: usize,
+    pub memory_limit_mb: usize,
+    pub source_limit_bytes: usize,
+    pub output_limit_bytes: usize,
     pub invocations_24h: i64,
     pub failures_24h: i64,
     pub timeouts_24h: i64,
@@ -113,6 +120,9 @@ async fn build_ops_metrics(state: &crate::AppState) -> Result<OpsMetricsResponse
         .ok()
         .flatten()
         .is_some();
+    let page_count = query_sqlite_pragma_i64(&state.pool, "PRAGMA page_count").await?;
+    let page_size = query_sqlite_pragma_i64(&state.pool, "PRAGMA page_size").await?;
+    let freelist_count = query_sqlite_pragma_i64(&state.pool, "PRAGMA freelist_count").await?;
 
     let storage_root = state.storage.root().to_path_buf();
     let stale_before = SystemTime::now()
@@ -167,6 +177,9 @@ async fn build_ops_metrics(state: &crate::AppState) -> Result<OpsMetricsResponse
     Ok(OpsMetricsResponse {
         database: DatabaseMetrics {
             size_bytes,
+            page_count,
+            page_size,
+            freelist_count,
             backup_count: backups.len(),
             last_backup_at,
             restore_pending,
@@ -176,7 +189,11 @@ async fn build_ops_metrics(state: &crate::AppState) -> Result<OpsMetricsResponse
         functions: FunctionsMetrics {
             enabled: state.functions.enabled,
             network_allowed: state.functions.allow_network,
+            work_dir: state.functions.work_dir.to_string_lossy().to_string(),
             running_limit: state.functions.max_concurrent,
+            memory_limit_mb: state.functions.memory_mb,
+            source_limit_bytes: state.functions.max_source_bytes,
+            output_limit_bytes: state.functions.max_output_bytes,
             invocations_24h: function_counts.invocations_24h,
             failures_24h: function_counts.failures_24h,
             timeouts_24h: function_counts.timeouts_24h,
@@ -186,6 +203,13 @@ async fn build_ops_metrics(state: &crate::AppState) -> Result<OpsMetricsResponse
             uptime_seconds: state.started_at.elapsed().as_secs(),
         },
     })
+}
+
+async fn query_sqlite_pragma_i64(pool: &sqlx::SqlitePool, sql: &str) -> Result<i64, sqlx::Error> {
+    sqlx::query_as::<_, (i64,)>(sql)
+        .fetch_one(pool)
+        .await
+        .map(|row| row.0)
 }
 
 async fn collect_storage_metrics(
@@ -312,6 +336,11 @@ mod tests {
         assert_eq!(body.push.queued, 0);
         assert!(body.functions.enabled);
         assert_eq!(body.functions.running_limit, 4);
+        assert_eq!(
+            body.functions.memory_limit_mb,
+            crate::config::DEFAULT_FUNCTIONS_MEMORY_MB
+        );
+        assert!(body.database.page_size > 0);
         assert_eq!(body.system.version, env!("CARGO_PKG_VERSION"));
     }
 }

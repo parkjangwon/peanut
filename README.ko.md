@@ -275,7 +275,7 @@ Peanut은 이제 작은 백엔드 확장용 함수 런타임을 함께 제공한
 - admin API로 `GET /api/functions/:name/versions`에서 함수 버전 이력을 조회 가능
 - admin API로 `POST /api/functions/:name/versions/:version_number/rollback`에서 active 버전을 롤백 가능
 - admin API로 `GET /api/functions/:name/events`에서 invocation lifecycle 실시간 이벤트를 SSE로 구독 가능
-- temp working directory + timeout 제한을 둔 별도 Node subprocess 실행
+- temp working directory + timeout 제한을 둔 별도 Deno subprocess 실행
 - invocation 로그를 SQLite에 저장하고, queued/running/succeeded/failed lifecycle, `invoke_mode`, `function_version_id`, `retry_count`, `parent_invocation_id`, 상세 조회, attempt chain 조회, 재실행까지 콘솔/API에서 가능
 - authenticated function 안에서 사용할 수 있는 bounded Peanut host binding 제공:
   - `ctx.peanut.storage.list/get/put/delete`
@@ -582,6 +582,9 @@ admin snapshot import:
 - `FUNCTIONS_ENABLED` (기본값: `true`; `false`로 두면 Functions API와 invoke endpoint를 모두 비활성화함)
 - `FUNCTIONS_ALLOW_NETWORK` (기본값: `false`; Functions 내부에서 `fetch`, `WebSocket`, `XMLHttpRequest`를 막음)
 - `FUNCTIONS_MAX_CONCURRENT` (기본값: `4`; 동시 Function invocation 상한)
+- `FUNCTIONS_MEMORY_MB` (기본값: `128`; Function invocation별 Deno/V8 heap 상한)
+- `FUNCTIONS_MAX_SOURCE_BYTES` (기본값: `262144`; 실행 전 Function source 크기 상한)
+- `FUNCTIONS_MAX_OUTPUT_BYTES` (기본값: `65536`; 캡처되는 Function stderr/log 출력 상한)
 - `FUNCTIONS_WORK_DIR` (기본값: OS temp dir + `peanut-functions`; 쓰기 가능해야 하며 root/home/DB 디렉터리를 가리키면 안 됨)
 - `FUNCTIONS_SECRETS_MASTER_KEY` (기본값: `JWT_SECRET` fallback; 운영에서는 Function secret 암호화 키를 JWT 서명 키와 분리하고 싶다면 명시적으로 설정 권장)
 - `AUTH_ALLOWED_ORIGINS` (쉼표 구분 origin 목록; 설정하면 auth route에서 일치하는 `Origin` 헤더가 필요함)

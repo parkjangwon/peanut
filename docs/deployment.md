@@ -24,7 +24,17 @@ ghcr.io/parkjangwon/peanut:<version>
 - `FUNCTIONS_ENABLED`: set `false` when runtime extensions are not needed
 - `FUNCTIONS_ALLOW_NETWORK`: keep `false` unless trusted admin functions need outbound network access
 - `FUNCTIONS_MAX_CONCURRENT`: default `4`
+- `FUNCTIONS_MEMORY_MB`: Deno/V8 heap cap per Function invocation, default `128`
+- `FUNCTIONS_MAX_SOURCE_BYTES`: Function source-size cap, default `262144`
+- `FUNCTIONS_MAX_OUTPUT_BYTES`: captured Function stderr/log cap, default `65536`
+- `FUNCTIONS_SECRETS_MASTER_KEY`: optional dedicated encryption key for Function secrets; use a separate long secret in production
 - `FUNCTIONS_WORK_DIR`: writable temp directory outside root, home, and DB directory
+
+## Readiness and Metrics
+
+- `GET /api/ready` checks SQLite, storage writability, pending restore markers, and the Functions runtime when enabled.
+- `GET /api/admin/ops/metrics` returns admin-only operational counters for database size/page stats, storage object totals, stale multipart uploads, push backlog, Function failures/timeouts, and process uptime.
+- In Docker or reverse-proxy deployments, monitor `/api/ready` from outside the container and alert when `status` is `not_ready`.
 
 ## Upgrade
 

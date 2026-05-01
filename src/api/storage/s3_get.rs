@@ -123,7 +123,13 @@ pub async fn get_bucket_object(
             if let Some((start, end)) = range {
                 super::build_ranged_object_response(&key, object.data, &object.metadata, start, end)
             } else {
-                super::build_object_response(StatusCode::OK, &key, object.data, &object.metadata, true)
+                super::build_object_response(
+                    StatusCode::OK,
+                    &key,
+                    object.data,
+                    &object.metadata,
+                    true,
+                )
             }
         }
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => s3_error_response(

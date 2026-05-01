@@ -44,11 +44,17 @@ pub async fn put_bucket_object(
     };
 
     let headers_result = parse_put_headers(&headers, &body, &bucket, &key);
-    let (content_type, content_type_header, custom_metadata, checksum_sha256, checksum_sha1, tagging) =
-        match headers_result {
-            Ok(values) => values,
-            Err(response) => return response,
-        };
+    let (
+        content_type,
+        content_type_header,
+        custom_metadata,
+        checksum_sha256,
+        checksum_sha1,
+        tagging,
+    ) = match headers_result {
+        Ok(values) => values,
+        Err(response) => return response,
+    };
 
     if let Some(copy_source) = headers
         .get("x-amz-copy-source")
@@ -146,16 +152,16 @@ fn parse_put_headers(
         )
     })?;
 
-    let (checksum_sha256, checksum_sha1) =
-        super::validate_checksum_header(body, checksum_header).map_err(|message| {
-            s3_error_response(
-                StatusCode::BAD_REQUEST,
-                "InvalidRequest",
-                &message,
-                &format!("/{bucket}/{key}"),
-                Some(key),
-            )
-        })?;
+    let (checksum_sha256, checksum_sha1) = super::validate_checksum_header(body, checksum_header)
+        .map_err(|message| {
+        s3_error_response(
+            StatusCode::BAD_REQUEST,
+            "InvalidRequest",
+            &message,
+            &format!("/{bucket}/{key}"),
+            Some(key),
+        )
+    })?;
 
     let tagging = extract_object_tagging(headers).map_err(|message| {
         s3_error_response(
@@ -293,7 +299,10 @@ async fn handle_copy_object(
     };
 
     let source_scoped_bucket = super::scoped_bucket(&claims.sub, &source_bucket);
-    if source_bucket == bucket && source_key == *key && metadata_directive == MetadataDirective::Copy {
+    if source_bucket == bucket
+        && source_key == *key
+        && metadata_directive == MetadataDirective::Copy
+    {
         return s3_error_response(
             StatusCode::BAD_REQUEST,
             "InvalidRequest",

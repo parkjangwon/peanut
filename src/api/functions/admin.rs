@@ -163,16 +163,21 @@ pub async fn update_function(
         }
     };
 
-    let existing_secret_values =
-        match load_function_secrets(&state.pool, &state.function_secrets_key, &existing.active_version_id).await {
-            Ok(secrets) => secrets,
-            Err(_) => {
-                return json_error(
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    "failed to load function secrets",
-                )
-            }
-        };
+    let existing_secret_values = match load_function_secrets(
+        &state.pool,
+        &state.function_secrets_key,
+        &existing.active_version_id,
+    )
+    .await
+    {
+        Ok(secrets) => secrets,
+        Err(_) => {
+            return json_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "failed to load function secrets",
+            )
+        }
+    };
 
     let validated = match validate_update_payload(existing.clone(), existing_secret_values, payload)
     {

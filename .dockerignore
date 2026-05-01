@@ -1,0 +1,16 @@
+.git
+.github
+.omc
+.openchrome
+target
+data
+ci-data
+release-ci
+peanut-console
+.DS_Store
+*.log
+*.pid
+*.tgz
+.env
+.env.*
+!.env.example

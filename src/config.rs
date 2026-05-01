@@ -12,6 +12,9 @@ pub const DEFAULT_MAX_UPLOAD_BYTES: usize = 5 * 1024 * 1024;
 pub const DEFAULT_MULTIPART_STALE_HOURS: u64 = 24;
 pub const DEFAULT_MULTIPART_CLEANUP_INTERVAL_SECONDS: u64 = 3600;
 pub const DEFAULT_FUNCTIONS_MAX_CONCURRENT: usize = 4;
+pub const DEFAULT_FUNCTIONS_MEMORY_MB: usize = 128;
+pub const DEFAULT_FUNCTIONS_MAX_SOURCE_BYTES: usize = 256 * 1024;
+pub const DEFAULT_FUNCTIONS_MAX_OUTPUT_BYTES: usize = 64 * 1024;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PasswordResetDelivery {
@@ -39,6 +42,9 @@ pub struct AppConfig {
     pub functions_allow_network: bool,
     pub functions_work_dir: PathBuf,
     pub functions_max_concurrent: usize,
+    pub functions_memory_mb: usize,
+    pub functions_max_source_bytes: usize,
+    pub functions_max_output_bytes: usize,
     pub functions_secrets_master_key: String,
 }
 
@@ -136,6 +142,18 @@ fn load_config_from_map(values: &HashMap<String, String>) -> Result<AppConfig, S
         "FUNCTIONS_MAX_CONCURRENT",
         DEFAULT_FUNCTIONS_MAX_CONCURRENT,
     )?;
+    let functions_memory_mb =
+        parse_positive_usize_setting(values, "FUNCTIONS_MEMORY_MB", DEFAULT_FUNCTIONS_MEMORY_MB)?;
+    let functions_max_source_bytes = parse_positive_usize_setting(
+        values,
+        "FUNCTIONS_MAX_SOURCE_BYTES",
+        DEFAULT_FUNCTIONS_MAX_SOURCE_BYTES,
+    )?;
+    let functions_max_output_bytes = parse_positive_usize_setting(
+        values,
+        "FUNCTIONS_MAX_OUTPUT_BYTES",
+        DEFAULT_FUNCTIONS_MAX_OUTPUT_BYTES,
+    )?;
     let functions_secrets_master_key = values
         .get("FUNCTIONS_SECRETS_MASTER_KEY")
         .map(|value| value.trim().to_string())
@@ -161,6 +179,9 @@ fn load_config_from_map(values: &HashMap<String, String>) -> Result<AppConfig, S
         functions_allow_network,
         functions_work_dir,
         functions_max_concurrent,
+        functions_memory_mb,
+        functions_max_source_bytes,
+        functions_max_output_bytes,
         functions_secrets_master_key,
     })
 }
@@ -338,6 +359,15 @@ mod tests {
         assert_eq!(
             config.functions_max_concurrent,
             DEFAULT_FUNCTIONS_MAX_CONCURRENT
+        );
+        assert_eq!(config.functions_memory_mb, DEFAULT_FUNCTIONS_MEMORY_MB);
+        assert_eq!(
+            config.functions_max_source_bytes,
+            DEFAULT_FUNCTIONS_MAX_SOURCE_BYTES
+        );
+        assert_eq!(
+            config.functions_max_output_bytes,
+            DEFAULT_FUNCTIONS_MAX_OUTPUT_BYTES
         );
         assert_eq!(config.functions_secrets_master_key, "test-secret");
     }
@@ -530,6 +560,9 @@ mod tests {
             ("FUNCTIONS_ALLOW_NETWORK", "true"),
             ("FUNCTIONS_WORK_DIR", "/tmp/peanut-test-functions"),
             ("FUNCTIONS_MAX_CONCURRENT", "8"),
+            ("FUNCTIONS_MEMORY_MB", "256"),
+            ("FUNCTIONS_MAX_SOURCE_BYTES", "1024"),
+            ("FUNCTIONS_MAX_OUTPUT_BYTES", "2048"),
             ("FUNCTIONS_SECRETS_MASTER_KEY", "dedicated-functions-key"),
         ]);
 
@@ -540,6 +573,9 @@ mod tests {
             PathBuf::from("/tmp/peanut-test-functions")
         );
         assert_eq!(config.functions_max_concurrent, 8);
+        assert_eq!(config.functions_memory_mb, 256);
+        assert_eq!(config.functions_max_source_bytes, 1024);
+        assert_eq!(config.functions_max_output_bytes, 2048);
         assert_eq!(
             config.functions_secrets_master_key,
             "dedicated-functions-key"
@@ -555,6 +591,19 @@ mod tests {
 
         let error = load_config_from_map(&values).unwrap_err();
         assert!(error.contains("FUNCTIONS_MAX_CONCURRENT"));
+    }
+
+    #[test]
+    fn test_load_config_from_env_rejects_invalid_function_limits() {
+        for key in [
+            "FUNCTIONS_MEMORY_MB",
+            "FUNCTIONS_MAX_SOURCE_BYTES",
+            "FUNCTIONS_MAX_OUTPUT_BYTES",
+        ] {
+            let values = config(&[("JWT_SECRET", "test-secret"), (key, "0")]);
+            let error = load_config_from_map(&values).unwrap_err();
+            assert!(error.contains(key));
+        }
     }
 
     #[test]

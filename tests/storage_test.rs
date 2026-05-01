@@ -18,7 +18,9 @@ async fn put_and_get_object_via_http() {
         .uri("/api/storage/notes/hello.txt")
         .header("authorization", format!("Bearer {token}"))
         .header("content-type", "text/plain")
-        .extension(ConnectInfo::<SocketAddr>("127.0.0.1:12345".parse().unwrap()))
+        .extension(ConnectInfo::<SocketAddr>(
+            "127.0.0.1:12345".parse().unwrap(),
+        ))
         .body(axum::body::Body::from("hello world"))
         .unwrap();
     let put_response = app.clone().oneshot(put_request).await.unwrap();
@@ -27,7 +29,9 @@ async fn put_and_get_object_via_http() {
     let get_response = common::get_authed(&app, "/api/storage/notes/hello.txt", &token).await;
     assert_eq!(get_response.status(), StatusCode::OK);
 
-    let body = to_bytes(get_response.into_body(), usize::MAX).await.unwrap();
+    let body = to_bytes(get_response.into_body(), usize::MAX)
+        .await
+        .unwrap();
     assert_eq!(body.as_ref(), b"hello world");
 }
 

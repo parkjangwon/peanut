@@ -99,8 +99,8 @@ pub async fn readiness_check(State(state): State<crate::AppState>) -> Json<Value
         "path": storage_path.to_string_lossy(),
     }));
 
-    let node_available = if state.functions.enabled {
-        tokio::process::Command::new("node")
+    let deno_available = if state.functions.enabled {
+        tokio::process::Command::new("deno")
             .arg("--version")
             .output()
             .await
@@ -116,13 +116,16 @@ pub async fn readiness_check(State(state): State<crate::AppState>) -> Json<Value
     } else {
         true
     };
-    let functions_ready = node_available && work_dir_writable;
+    let functions_ready = deno_available && work_dir_writable;
     checks.push(json!({
         "name": "functions",
         "ok": functions_ready,
         "enabled": state.functions.enabled,
-        "node_available": node_available,
+        "deno_available": deno_available,
         "network_allowed": state.functions.allow_network,
+        "memory_limit_mb": state.functions.memory_mb,
+        "source_limit_bytes": state.functions.max_source_bytes,
+        "output_limit_bytes": state.functions.max_output_bytes,
         "work_dir_writable": work_dir_writable,
         "work_dir": state.functions.work_dir.to_string_lossy(),
         "message": if state.functions.enabled {
@@ -179,7 +182,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_readiness_check_reports_ready_when_db_and_storage_are_available() {
-        let (state, _dir) = crate::test_support::make_test_state().await;
+        let (mut state, _dir) = crate::test_support::make_test_state().await;
+        state.functions.enabled = false;
 
         let response = readiness_check(State(state)).await;
         assert_eq!(response.0["status"], "ready");

@@ -28,6 +28,14 @@ mod tests {
             || error.contains("net access")
     }
 
+    fn deno_available() -> bool {
+        std::process::Command::new("deno")
+            .arg("--version")
+            .output()
+            .map(|output| output.status.success())
+            .unwrap_or(false)
+    }
+
     #[test]
     fn test_source_validation_blocks_runtime_escape_patterns() {
         for source in [
@@ -39,12 +47,31 @@ mod tests {
             "export default function handler() { Deno.readFileSync('/etc/passwd') }",
             "export default function handler() { return globalThis['Deno'] }",
         ] {
-            assert!(runtime::validate_source_code(source).is_err(), "{source}");
+            assert!(
+                runtime::validate_source_code(
+                    source,
+                    crate::config::DEFAULT_FUNCTIONS_MAX_SOURCE_BYTES
+                )
+                .is_err(),
+                "{source}"
+            );
         }
+    }
+
+    #[test]
+    fn test_source_validation_enforces_size_limit() {
+        let source = "x".repeat(16);
+        let error = runtime::validate_source_code(&source, 8).unwrap_err();
+        assert!(error.contains("exceeds configured limit"));
     }
 
     #[tokio::test]
     async fn test_network_disabled_makes_fetch_unavailable_at_runtime() {
+        if !deno_available() {
+            eprintln!("skipping Deno runtime test because deno is not installed");
+            return;
+        }
+
         let (mut state, dir) = crate::test_support::make_test_state().await;
         state.functions.allow_network = false;
         state.functions.work_dir = dir.path().join("functions");
@@ -69,6 +96,11 @@ mod tests {
 
     #[tokio::test]
     async fn test_timeout_kills_non_cooperative_function_and_cleans_work_dir() {
+        if !deno_available() {
+            eprintln!("skipping Deno runtime test because deno is not installed");
+            return;
+        }
+
         let (mut state, dir) = crate::test_support::make_test_state().await;
         state.functions.work_dir = dir.path().join("functions");
 

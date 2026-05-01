@@ -204,8 +204,8 @@ async fn execute_and_finalize_invocation(
         &state.function_secrets_key,
         &invocation.function_version.id,
     )
-        .await
-        .map_err(|_| "failed to load function secrets".to_string())?;
+    .await
+    .map_err(|_| "failed to load function secrets".to_string())?;
     for (key, value) in &secret_values {
         runtime_env.insert(key.clone(), value.clone());
     }

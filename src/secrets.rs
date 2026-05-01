@@ -1,5 +1,8 @@
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
-use openssl::{sha::sha256, symm::{Cipher, Crypter, Mode}};
+use openssl::{
+    sha::sha256,
+    symm::{Cipher, Crypter, Mode},
+};
 use rand::RngCore;
 
 const SECRET_CIPHERTEXT_PREFIX: &str = "v1";
@@ -17,8 +20,8 @@ pub fn encrypt_secret(master_key: &str, plaintext: &str) -> Result<String, Strin
     rand::thread_rng().fill_bytes(&mut nonce);
 
     let cipher = Cipher::aes_256_gcm();
-    let mut crypter =
-        Crypter::new(cipher, Mode::Encrypt, &key, Some(&nonce)).map_err(|_| "failed to initialize secret encryption".to_string())?;
+    let mut crypter = Crypter::new(cipher, Mode::Encrypt, &key, Some(&nonce))
+        .map_err(|_| "failed to initialize secret encryption".to_string())?;
     crypter.pad(false);
 
     let mut ciphertext = vec![0u8; plaintext.len() + cipher.block_size()];
@@ -46,7 +49,9 @@ pub fn encrypt_secret(master_key: &str, plaintext: &str) -> Result<String, Strin
 
 pub fn decrypt_secret(master_key: &str, ciphertext: &str) -> Result<String, String> {
     let mut parts = ciphertext.split(':');
-    let version = parts.next().ok_or_else(|| "encrypted secret is missing version".to_string())?;
+    let version = parts
+        .next()
+        .ok_or_else(|| "encrypted secret is missing version".to_string())?;
     if version != SECRET_CIPHERTEXT_PREFIX {
         return Err("encrypted secret uses an unsupported version".to_string());
     }
@@ -60,8 +65,8 @@ pub fn decrypt_secret(master_key: &str, ciphertext: &str) -> Result<String, Stri
 
     let key = derive_key(master_key);
     let cipher = Cipher::aes_256_gcm();
-    let mut crypter =
-        Crypter::new(cipher, Mode::Decrypt, &key, Some(&nonce)).map_err(|_| "failed to initialize secret decryption".to_string())?;
+    let mut crypter = Crypter::new(cipher, Mode::Decrypt, &key, Some(&nonce))
+        .map_err(|_| "failed to initialize secret decryption".to_string())?;
     crypter.pad(false);
     crypter
         .set_tag(&tag)
@@ -98,7 +103,10 @@ mod tests {
     fn test_secret_encryption_round_trip() {
         let ciphertext = encrypt_secret("master-key", "super-secret").unwrap();
         assert_ne!(ciphertext, "super-secret");
-        assert_eq!(decrypt_secret("master-key", &ciphertext).unwrap(), "super-secret");
+        assert_eq!(
+            decrypt_secret("master-key", &ciphertext).unwrap(),
+            "super-secret"
+        );
     }
 
     #[test]

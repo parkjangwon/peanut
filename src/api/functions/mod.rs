@@ -38,8 +38,6 @@ pub use invoke::invoke_function;
 pub use types::*;
 pub use versions::{list_function_versions, rollback_function_version};
 
-#[allow(dead_code)]
-
 fn require_admin(claims: &Claims) -> Option<Response> {
     if claims.is_admin {
         None
@@ -98,9 +96,10 @@ async fn insert_function_version(
     .await?;
 
     for (secret_key, secret_value) in &validated.secret_values {
-        let secret_ciphertext = encrypt_secret(functions_secrets_key, secret_value).map_err(|error| {
-            sqlx::Error::Protocol(format!("failed to encrypt function secret: {error}").into())
-        })?;
+        let secret_ciphertext =
+            encrypt_secret(functions_secrets_key, secret_value).map_err(|error| {
+                sqlx::Error::Protocol(format!("failed to encrypt function secret: {error}"))
+            })?;
         sqlx::query(
             "INSERT INTO function_version_secrets (version_id, secret_key, secret_value, secret_ciphertext, encryption_version) VALUES (?, ?, ?, ?, ?)",
         )
@@ -541,7 +540,9 @@ async fn load_function_secrets(
     functions_secrets_key: &str,
     version_id: &str,
 ) -> Result<BTreeMap<String, String>, sqlx::Error> {
-    let rows: Vec<(String, Option<String>, Option<String>, Option<i64>)> = sqlx::query_as(
+    type FunctionSecretRow = (String, Option<String>, Option<String>, Option<i64>);
+
+    let rows: Vec<FunctionSecretRow> = sqlx::query_as(
         "SELECT secret_key, secret_value, secret_ciphertext, encryption_version FROM function_version_secrets WHERE version_id = ? ORDER BY secret_key ASC",
     )
     .bind(version_id)
@@ -551,14 +552,18 @@ async fn load_function_secrets(
     let mut secrets = BTreeMap::new();
     for (secret_key, secret_value, secret_ciphertext, _encryption_version) in rows {
         let resolved = match (secret_ciphertext, secret_value) {
-            (Some(ciphertext), _) => decrypt_secret(functions_secrets_key, &ciphertext).map_err(|error| {
-                sqlx::Error::Protocol(format!("failed to decrypt function secret '{secret_key}': {error}").into())
-            })?,
+            (Some(ciphertext), _) => {
+                decrypt_secret(functions_secrets_key, &ciphertext).map_err(|error| {
+                    sqlx::Error::Protocol(format!(
+                        "failed to decrypt function secret '{secret_key}': {error}"
+                    ))
+                })?
+            }
             (None, Some(plaintext)) => plaintext,
             (None, None) => {
-                return Err(sqlx::Error::Protocol(
-                    format!("function secret '{secret_key}' is missing both plaintext and ciphertext").into(),
-                ))
+                return Err(sqlx::Error::Protocol(format!(
+                    "function secret '{secret_key}' is missing both plaintext and ciphertext"
+                )))
             }
         };
         secrets.insert(secret_key, resolved);
@@ -597,8 +602,29 @@ mod tests {
         test_support::response_json(admin).await
     }
 
+    fn deno_available() -> bool {
+        std::process::Command::new("deno")
+            .arg("--version")
+            .output()
+            .map(|output| output.status.success())
+            .unwrap_or(false)
+    }
+
+    fn skip_without_deno() -> bool {
+        if deno_available() {
+            false
+        } else {
+            eprintln!("skipping Deno runtime test because deno is not installed");
+            true
+        }
+    }
+
     #[tokio::test]
     async fn test_admin_can_create_and_invoke_function() {
+        if skip_without_deno() {
+            return;
+        }
+
         let (state, _dir) = test_support::make_test_state().await;
         let admin = register_admin(state.clone()).await;
 
@@ -660,6 +686,10 @@ mod tests {
 
     #[tokio::test]
     async fn test_function_env_is_available_and_public_policy_allows_unauthenticated_invoke() {
+        if skip_without_deno() {
+            return;
+        }
+
         let (state, _dir) = test_support::make_test_state().await;
         let admin = register_admin(state.clone()).await;
         let mut env = std::collections::BTreeMap::new();
@@ -710,6 +740,10 @@ mod tests {
 
     #[tokio::test]
     async fn test_function_secrets_are_redacted_in_api_and_runtime_output() {
+        if skip_without_deno() {
+            return;
+        }
+
         let (state, _dir) = test_support::make_test_state().await;
         let admin = register_admin(state.clone()).await;
         let mut secrets = std::collections::BTreeMap::new();
@@ -739,7 +773,10 @@ mod tests {
         if create_status != StatusCode::CREATED {
             let error_body: crate::api::common::ApiError =
                 test_support::response_json(create_response).await;
-            panic!("unexpected create status {}: {}", create_status, error_body.error);
+            panic!(
+                "unexpected create status {}: {}",
+                create_status, error_body.error
+            );
         }
         let create_body: FunctionResponse = test_support::response_json(create_response).await;
         assert_eq!(create_body.function.secret_key_count, 1);
@@ -832,6 +869,10 @@ mod tests {
 
     #[tokio::test]
     async fn test_authenticated_function_can_use_storage_and_push_bindings() {
+        if skip_without_deno() {
+            return;
+        }
+
         let (state, _dir) = test_support::make_test_state().await;
         let admin = register_admin(state.clone()).await;
 
@@ -901,6 +942,10 @@ export default async function handler(ctx) {
 
     #[tokio::test]
     async fn test_authenticated_function_can_use_data_row_bindings() {
+        if skip_without_deno() {
+            return;
+        }
+
         let (state, _dir) = test_support::make_test_state().await;
         let admin = register_admin(state.clone()).await;
         let member = auth::register(
@@ -1078,6 +1123,10 @@ export default async function handler(ctx) {
 
     #[tokio::test]
     async fn test_api_key_policy_requires_valid_key() {
+        if skip_without_deno() {
+            return;
+        }
+
         let (state, _dir) = test_support::make_test_state().await;
         let admin = register_admin(state.clone()).await;
 
@@ -1135,6 +1184,10 @@ export default async function handler(ctx) {
 
     #[tokio::test]
     async fn test_allowed_origin_and_rate_limit_are_enforced() {
+        if skip_without_deno() {
+            return;
+        }
+
         let (state, _dir) = test_support::make_test_state().await;
         let admin = register_admin(state.clone()).await;
 
@@ -1210,6 +1263,10 @@ export default async function handler(ctx) {
 
     #[tokio::test]
     async fn test_admin_can_read_invocation_detail_retry_and_attempt_chain() {
+        if skip_without_deno() {
+            return;
+        }
+
         let (state, _dir) = test_support::make_test_state().await;
         let admin = register_admin(state.clone()).await;
         let create_response = create_function(
@@ -1301,6 +1358,10 @@ export default async function handler(ctx) {
 
     #[tokio::test]
     async fn test_function_supports_async_invocation_lifecycle() {
+        if skip_without_deno() {
+            return;
+        }
+
         let (state, _dir) = test_support::make_test_state().await;
         let admin = register_admin(state.clone()).await;
 
@@ -1372,6 +1433,10 @@ export default async function handler(ctx) {
 
     #[tokio::test]
     async fn test_function_realtime_events_follow_async_invocation_lifecycle() {
+        if skip_without_deno() {
+            return;
+        }
+
         let (state, _dir) = test_support::make_test_state().await;
         let admin = register_admin(state.clone()).await;
         let mut events = state.functions.event_sender.subscribe();
@@ -1525,6 +1590,10 @@ export default async function handler(ctx) {
 
     #[tokio::test]
     async fn test_function_version_history_and_rollback() {
+        if skip_without_deno() {
+            return;
+        }
+
         let (state, _dir) = test_support::make_test_state().await;
         let admin = register_admin(state.clone()).await;
 

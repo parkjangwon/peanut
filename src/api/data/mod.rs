@@ -572,10 +572,6 @@ impl From<LoadedTable> for DataTableDetail {
 }
 
 impl DataRowResponse {
-    fn from_record(record: DataRowRecord) -> Self {
-        Self::try_from_record(record).unwrap()
-    }
-
     fn try_from_record(record: DataRowRecord) -> Result<Self, String> {
         Ok(Self {
             id: record.id,
