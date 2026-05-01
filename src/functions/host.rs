@@ -1,5 +1,5 @@
 use axum::{
-    body::{to_bytes, Bytes},
+    body::to_bytes,
     extract::{Path as AxumPath, Query, State},
     http::StatusCode,
     response::Response,
@@ -14,7 +14,7 @@ pub(crate) async fn handle_host_call(
     args: Value,
 ) -> Result<Value, String> {
     match action {
-        "storage.list" => handle_storage_list(state, claims).await,
+        "storage.list" => handle_storage_list(state, claims, args).await,
         "storage.get" => handle_storage_get(state, claims, args).await,
         "storage.put" => handle_storage_put(state, claims, args).await,
         "storage.delete" => handle_storage_delete(state, claims, args).await,
@@ -31,14 +31,28 @@ pub(crate) async fn handle_host_call(
 async fn handle_storage_list(
     state: &crate::AppState,
     claims: Option<crate::auth::jwt::Claims>,
+    args: Value,
 ) -> Result<Value, String> {
     let claims = require_claims(claims)?;
-    let response = crate::api::storage::list_objects(State(state.clone()), Extension(claims)).await;
-    let value = response_json_value(response).await?;
-    Ok(value
-        .get("keys")
-        .cloned()
-        .unwrap_or(Value::Array(Vec::new())))
+    let bucket = required_string(&args, "bucket")?;
+    ensure_storage_bucket(&state.pool, &claims.app_id, bucket).await?;
+    let page = state
+        .storage
+        .list_objects_v2(
+            &app_storage_bucket(&claims.app_id, bucket),
+            None,
+            None,
+            None,
+            None,
+        )
+        .await
+        .map_err(|error| format!("storage.list failed: {error}"))?;
+    Ok(Value::Array(
+        page.objects
+            .into_iter()
+            .map(|object| Value::String(object.key))
+            .collect(),
+    ))
 }
 
 async fn handle_storage_get(
@@ -47,14 +61,17 @@ async fn handle_storage_get(
     args: Value,
 ) -> Result<Value, String> {
     let claims = require_claims(claims)?;
+    let bucket = required_string(&args, "bucket")?;
     let key = required_string(&args, "key")?;
-    let response = crate::api::storage::get_object(
-        State(state.clone()),
-        Extension(claims),
-        AxumPath(key.to_string()),
-    )
-    .await;
-    response_text_value(response).await
+    ensure_storage_bucket(&state.pool, &claims.app_id, bucket).await?;
+    let object = state
+        .storage
+        .get_object(&app_storage_bucket(&claims.app_id, bucket), key)
+        .await
+        .map_err(|error| format!("storage.get failed: {error}"))?;
+    String::from_utf8(object.data)
+        .map(Value::String)
+        .map_err(|_| "storage.get returned non-utf8 content".to_string())
 }
 
 async fn handle_storage_put(
@@ -63,16 +80,25 @@ async fn handle_storage_put(
     args: Value,
 ) -> Result<Value, String> {
     let claims = require_claims(claims)?;
+    let bucket = required_string(&args, "bucket")?;
     let key = required_string(&args, "key")?;
     let body = required_string(&args, "body")?;
-    let response = crate::api::storage::put_object(
-        State(state.clone()),
-        Extension(claims),
-        AxumPath(key.to_string()),
-        Bytes::from(body.to_string()),
-    )
-    .await;
-    response_json_value(response).await
+    ensure_storage_bucket(&state.pool, &claims.app_id, bucket).await?;
+    let metadata = state
+        .storage
+        .put_object(
+            &app_storage_bucket(&claims.app_id, bucket),
+            key,
+            body.as_bytes(),
+            Some("text/plain; charset=utf-8"),
+        )
+        .await
+        .map_err(|error| format!("storage.put failed: {error}"))?;
+    Ok(serde_json::json!({
+        "key": key,
+        "etag": metadata.etag,
+        "size": metadata.content_length,
+    }))
 }
 
 async fn handle_storage_delete(
@@ -81,14 +107,15 @@ async fn handle_storage_delete(
     args: Value,
 ) -> Result<Value, String> {
     let claims = require_claims(claims)?;
+    let bucket = required_string(&args, "bucket")?;
     let key = required_string(&args, "key")?;
-    let response = crate::api::storage::delete_object(
-        State(state.clone()),
-        Extension(claims),
-        AxumPath(key.to_string()),
-    )
-    .await;
-    response_json_value(response).await
+    ensure_storage_bucket(&state.pool, &claims.app_id, bucket).await?;
+    state
+        .storage
+        .delete_object(&app_storage_bucket(&claims.app_id, bucket), key)
+        .await
+        .map_err(|error| format!("storage.delete failed: {error}"))?;
+    Ok(serde_json::json!({ "message": "object deleted" }))
 }
 
 async fn handle_push_enqueue(
@@ -217,6 +244,29 @@ fn require_claims(
     })
 }
 
+fn app_storage_bucket(app_id: &str, bucket: &str) -> String {
+    format!("{}/{}", app_id, bucket.trim().trim_matches('/'))
+}
+
+async fn ensure_storage_bucket(
+    pool: &sqlx::SqlitePool,
+    app_id: &str,
+    bucket: &str,
+) -> Result<(), String> {
+    let exists: Option<(i64,)> = sqlx::query_as(
+        "SELECT 1 FROM storage_buckets WHERE app_id = ? AND name = ? AND deleted_at IS NULL",
+    )
+    .bind(app_id)
+    .bind(bucket.trim())
+    .fetch_optional(pool)
+    .await
+    .map_err(|_| "failed to load storage bucket".to_string())?;
+
+    exists
+        .map(|_| ())
+        .ok_or_else(|| "storage bucket not found".to_string())
+}
+
 fn required_string<'a>(args: &'a Value, field: &str) -> Result<&'a str, String> {
     args.get(field)
         .and_then(Value::as_str)
@@ -242,22 +292,6 @@ async fn response_json_value(response: Response) -> Result<Value, String> {
     if status.is_success() {
         Ok(value)
     } else {
-        Err(extract_error_message(status, &value))
-    }
-}
-
-async fn response_text_value(response: Response) -> Result<Value, String> {
-    let status = response.status();
-    let body = to_bytes(response.into_body(), usize::MAX)
-        .await
-        .map_err(|_| "failed to read host response body".to_string())?;
-    if status.is_success() {
-        let text = String::from_utf8(body.to_vec())
-            .map_err(|_| "storage.get returned non-utf8 content".to_string())?;
-        Ok(Value::String(text))
-    } else {
-        let value: Value = serde_json::from_slice(&body)
-            .map_err(|_| "host action returned invalid error payload".to_string())?;
         Err(extract_error_message(status, &value))
     }
 }

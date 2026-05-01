@@ -50,18 +50,21 @@ pub async fn change_password(
     json_message(StatusCode::OK, "password updated")
 }
 
+#[cfg(test)]
 pub async fn forgot_password(
     State(state): State<crate::AppState>,
     Json(payload): Json<ForgotPasswordRequest>,
 ) -> Response {
+    forgot_password_for_app(&state, crate::app_context::DEFAULT_APP_ID, payload).await
+}
+
+pub async fn forgot_password_for_app(
+    state: &crate::AppState,
+    app_id: &str,
+    payload: ForgotPasswordRequest,
+) -> Response {
     let message = "if the user exists, a reset token was created";
-    let user = match load_user_summary_by_email(
-        &state.pool,
-        crate::app_context::DEFAULT_APP_ID,
-        payload.email.trim(),
-    )
-    .await
-    {
+    let user = match load_user_summary_by_email(&state.pool, app_id, payload.email.trim()).await {
         Ok(user) => user,
         Err(_) => return json_error(StatusCode::INTERNAL_SERVER_ERROR, "failed to query user"),
     };
@@ -79,9 +82,7 @@ pub async fn forgot_password(
             .into_response();
     };
 
-    match issue_password_reset_token(&state.pool, crate::app_context::DEFAULT_APP_ID, &user.id)
-        .await
-    {
+    match issue_password_reset_token(&state.pool, app_id, &user.id).await {
         Ok(reset_token) => {
             let response_token = deliver_password_reset_token(
                 &state.auth.password_reset_delivery,
@@ -90,7 +91,7 @@ pub async fn forgot_password(
             );
             let _ = record_auth_event(
                 &state.pool,
-                crate::app_context::DEFAULT_APP_ID,
+                app_id,
                 &user.id,
                 Some(&user.id),
                 "password_reset_requested",
@@ -114,21 +115,28 @@ pub async fn forgot_password(
     }
 }
 
+#[cfg(test)]
 pub async fn reset_password(
     State(state): State<crate::AppState>,
     Json(payload): Json<ResetPasswordRequest>,
+) -> Response {
+    reset_password_for_app(&state, crate::app_context::DEFAULT_APP_ID, payload).await
+}
+
+pub async fn reset_password_for_app(
+    state: &crate::AppState,
+    app_id: &str,
+    payload: ResetPasswordRequest,
 ) -> Response {
     if let Err(message) = validate_password(&payload.new_password) {
         return json_error(StatusCode::BAD_REQUEST, message);
     }
 
-    let Some(reset_record) = load_active_password_reset_token(
-        &state.pool,
-        crate::app_context::DEFAULT_APP_ID,
-        &payload.reset_token,
-    )
-    .await
-    .unwrap_or(None) else {
+    let Some(reset_record) =
+        load_active_password_reset_token(&state.pool, app_id, &payload.reset_token)
+            .await
+            .unwrap_or(None)
+    else {
         return json_error(StatusCode::UNAUTHORIZED, "valid reset token is required");
     };
 

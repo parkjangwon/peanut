@@ -243,51 +243,6 @@ mod tests {
         assert_eq!(queue_body.items[0].failed_destinations[0].error, "gone");
     }
 
-    #[tokio::test]
-    async fn test_queue_item_falls_back_to_legacy_partial_delivery_error_parsing() {
-        let (state, _dir) = test_support::make_test_state().await;
-        let admin = auth::register(
-            State(state.clone()),
-            Json(auth::RegisterRequest {
-                email: "admin@example.com".to_string(),
-                password: "secret123".to_string(),
-            }),
-        )
-        .await;
-        let admin: auth::RegisterResponse = test_support::response_json(admin).await;
-
-        sqlx::query(
-            "INSERT INTO push_queue (user_id, title, body, status, retry_count, last_error, partial_failure_count, failed_destinations_json) VALUES (?, ?, ?, 'sent', 0, ?, 2, NULL)",
-        )
-        .bind(&admin.user.id)
-        .bind("hello")
-        .bind("world")
-        .bind("partial delivery failures: https://example.invalid/push-a: gone | https://example.invalid/push-b: timeout")
-        .execute(&state.pool)
-        .await
-        .unwrap();
-
-        let queue_response =
-            list_queue(State(state), Extension(claims(&admin.user.id, true))).await;
-        let queue_body: PushQueueResponse = test_support::response_json(queue_response).await;
-        assert_eq!(queue_body.items[0].partial_failure_count, 2);
-        assert_eq!(queue_body.items[0].failed_destinations.len(), 2);
-        assert_eq!(
-            queue_body.items[0].failed_destinations[0],
-            PushDeliveryFailure {
-                endpoint: "https://example.invalid/push-a".to_string(),
-                error: "gone".to_string(),
-            }
-        );
-        assert_eq!(
-            queue_body.items[0].failed_destinations[1],
-            PushDeliveryFailure {
-                endpoint: "https://example.invalid/push-b".to_string(),
-                error: "timeout".to_string(),
-            }
-        );
-    }
-
     #[test]
     fn test_decode_failed_destinations_warns_and_falls_back_when_json_is_invalid() {
         use std::io::{self, Write};
@@ -326,7 +281,7 @@ mod tests {
             )
         });
 
-        assert_eq!(decoded.len(), 2);
+        assert_eq!(decoded.len(), 0);
         let logs = String::from_utf8(buffer.lock().unwrap().clone()).unwrap();
         assert!(logs.contains("failed to decode failed_destinations_json"));
     }

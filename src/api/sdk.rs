@@ -99,6 +99,87 @@ pub async fn me(
     crate::api::auth::me(State(state), Extension(claims)).await
 }
 
+pub async fn change_password(
+    State(state): State<crate::AppState>,
+    Extension(auth): Extension<SdkAuthContext>,
+    Json(payload): Json<crate::api::auth::ChangePasswordRequest>,
+) -> Response {
+    let claims = match scoped_user_claims(&auth, "auth:public") {
+        Ok(claims) => claims,
+        Err(response) => return response,
+    };
+    crate::api::auth::change_password(State(state), Extension(claims), Json(payload)).await
+}
+
+pub async fn forgot_password(
+    State(state): State<crate::AppState>,
+    Extension(auth): Extension<SdkAuthContext>,
+    Path(app_id): Path<String>,
+    Json(payload): Json<crate::api::auth::ForgotPasswordRequest>,
+) -> Response {
+    if let Err(response) = scoped_actor_claims(&auth, "auth:public") {
+        return response;
+    }
+    crate::api::auth::forgot_password_for_app(&state, &app_id, payload).await
+}
+
+pub async fn reset_password(
+    State(state): State<crate::AppState>,
+    Extension(auth): Extension<SdkAuthContext>,
+    Path(app_id): Path<String>,
+    Json(payload): Json<crate::api::auth::ResetPasswordRequest>,
+) -> Response {
+    if let Err(response) = scoped_actor_claims(&auth, "auth:public") {
+        return response;
+    }
+    crate::api::auth::reset_password_for_app(&state, &app_id, payload).await
+}
+
+pub async fn list_auth_sessions(
+    State(state): State<crate::AppState>,
+    Extension(auth): Extension<SdkAuthContext>,
+) -> Response {
+    let claims = match scoped_user_claims(&auth, "auth:public") {
+        Ok(claims) => claims,
+        Err(response) => return response,
+    };
+    crate::api::auth::list_sessions(State(state), Extension(claims)).await
+}
+
+pub async fn revoke_auth_session(
+    State(state): State<crate::AppState>,
+    Extension(auth): Extension<SdkAuthContext>,
+    Path((_app_id, session_id)): Path<(String, String)>,
+) -> Response {
+    let claims = match scoped_user_claims(&auth, "auth:public") {
+        Ok(claims) => claims,
+        Err(response) => return response,
+    };
+    crate::api::auth::revoke_session(State(state), Extension(claims), Path(session_id)).await
+}
+
+pub async fn revoke_all_auth_sessions(
+    State(state): State<crate::AppState>,
+    Extension(auth): Extension<SdkAuthContext>,
+) -> Response {
+    let claims = match scoped_user_claims(&auth, "auth:public") {
+        Ok(claims) => claims,
+        Err(response) => return response,
+    };
+    crate::api::auth::revoke_all_sessions(State(state), Extension(claims)).await
+}
+
+pub async fn list_auth_events(
+    State(state): State<crate::AppState>,
+    Extension(auth): Extension<SdkAuthContext>,
+) -> Response {
+    let claims = match scoped_user_claims(&auth, "auth:public") {
+        Ok(claims) => claims,
+        Err(response) => return response,
+    };
+    crate::api::auth::list_auth_events(State(state), Extension(claims)).await
+}
+
 pub async fn list_data_tables(
     State(state): State<crate::AppState>,
     Extension(auth): Extension<SdkAuthContext>,

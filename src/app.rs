@@ -194,6 +194,34 @@ fn build_sdk_routes(state: crate::AppState, max_upload_bytes: usize) -> Router<c
         .route("/apps/:app_id/auth/logout", post(crate::api::sdk::logout))
         .route("/apps/:app_id/auth/me", get(crate::api::sdk::me))
         .route(
+            "/apps/:app_id/auth/change-password",
+            post(crate::api::sdk::change_password),
+        )
+        .route(
+            "/apps/:app_id/auth/forgot-password",
+            post(crate::api::sdk::forgot_password),
+        )
+        .route(
+            "/apps/:app_id/auth/reset-password",
+            post(crate::api::sdk::reset_password),
+        )
+        .route(
+            "/apps/:app_id/auth/sessions",
+            get(crate::api::sdk::list_auth_sessions),
+        )
+        .route(
+            "/apps/:app_id/auth/sessions/revoke-all",
+            post(crate::api::sdk::revoke_all_auth_sessions),
+        )
+        .route(
+            "/apps/:app_id/auth/sessions/:session_id",
+            delete(crate::api::sdk::revoke_auth_session),
+        )
+        .route(
+            "/apps/:app_id/auth/events",
+            get(crate::api::sdk::list_auth_events),
+        )
+        .route(
             "/apps/:app_id/data/tables",
             get(crate::api::sdk::list_data_tables),
         )

@@ -1,5 +1,6 @@
 use super::*;
 
+#[cfg(test)]
 pub async fn register(
     State(state): State<crate::AppState>,
     Json(payload): Json<RegisterRequest>,
@@ -73,6 +74,7 @@ pub async fn register_for_app(
     }
 }
 
+#[cfg(test)]
 pub async fn login(
     State(state): State<crate::AppState>,
     Json(payload): Json<LoginRequest>,
@@ -121,6 +123,7 @@ pub async fn login_for_app(
     }
 }
 
+#[cfg(test)]
 pub async fn refresh_session(
     State(state): State<crate::AppState>,
     Json(payload): Json<RefreshTokenRequest>,
@@ -186,6 +189,7 @@ pub async fn refresh_session_for_app(
     }
 }
 
+#[cfg(test)]
 pub async fn logout(
     State(state): State<crate::AppState>,
     Json(payload): Json<RefreshTokenRequest>,

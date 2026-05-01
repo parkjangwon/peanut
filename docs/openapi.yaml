@@ -9,8 +9,7 @@ info:
     Peanut's stable backend-platform contract. Public product APIs are app-scoped
     under /api/apps/{app_id}/... and require an X-Peanut-Api-Key. Admin and
     operator APIs require an admin bearer token. Legacy global auth, data,
-    storage, push, function, and S3 compatibility paths are not part of the
-    runtime API surface.
+    storage, push, and function paths are not part of the runtime API surface.
 servers:
   - url: http://127.0.0.1:3000
 security:
@@ -188,6 +187,93 @@ paths:
       responses:
         "200":
           description: Current user.
+  /api/apps/{app_id}/auth/change-password:
+    post:
+      operationId: changeAppPassword
+      summary: Change the current app user's password
+      security:
+        - appKeyAuth: []
+          bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/AppId"
+      responses:
+        "200":
+          description: Password updated.
+  /api/apps/{app_id}/auth/forgot-password:
+    post:
+      operationId: forgotAppPassword
+      summary: Request an app-scoped password reset token
+      security:
+        - appKeyAuth: []
+      parameters:
+        - $ref: "#/components/parameters/AppId"
+      responses:
+        "200":
+          description: Reset request accepted.
+  /api/apps/{app_id}/auth/reset-password:
+    post:
+      operationId: resetAppPassword
+      summary: Reset an app user's password
+      security:
+        - appKeyAuth: []
+      parameters:
+        - $ref: "#/components/parameters/AppId"
+      responses:
+        "200":
+          description: Password reset complete.
+  /api/apps/{app_id}/auth/sessions:
+    get:
+      operationId: listAppAuthSessions
+      summary: List current app user sessions
+      security:
+        - appKeyAuth: []
+          bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/AppId"
+      responses:
+        "200":
+          description: Session list.
+  /api/apps/{app_id}/auth/sessions/revoke-all:
+    post:
+      operationId: revokeAllAppAuthSessions
+      summary: Revoke all current app user sessions
+      security:
+        - appKeyAuth: []
+          bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/AppId"
+      responses:
+        "200":
+          description: Sessions revoked.
+  /api/apps/{app_id}/auth/sessions/{session_id}:
+    delete:
+      operationId: revokeAppAuthSession
+      summary: Revoke one current app user session
+      security:
+        - appKeyAuth: []
+          bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/AppId"
+        - name: session_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Session revoked.
+  /api/apps/{app_id}/auth/events:
+    get:
+      operationId: listAppAuthEvents
+      summary: List current app user auth events
+      security:
+        - appKeyAuth: []
+          bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/AppId"
+      responses:
+        "200":
+          description: Auth event list.
   /api/apps/{app_id}/data/tables:
     get:
       operationId: listAppDataTables

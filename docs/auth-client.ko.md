@@ -29,6 +29,13 @@ content-type: application/json
 - `POST /api/apps/:app_id/auth/refresh`
 - `POST /api/apps/:app_id/auth/logout`
 - `GET /api/apps/:app_id/auth/me`
+- `POST /api/apps/:app_id/auth/change-password`
+- `POST /api/apps/:app_id/auth/forgot-password`
+- `POST /api/apps/:app_id/auth/reset-password`
+- `GET /api/apps/:app_id/auth/sessions`
+- `DELETE /api/apps/:app_id/auth/sessions/:session_id`
+- `POST /api/apps/:app_id/auth/sessions/revoke-all`
+- `GET /api/apps/:app_id/auth/events`
 - `GET /api/apps/:app_id/auth/public-config`
 - `GET /api/apps/:app_id/auth/oauth/:provider/start`
 - `GET /api/apps/:app_id/auth/oauth/:provider/callback`

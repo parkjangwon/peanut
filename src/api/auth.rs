@@ -22,15 +22,16 @@ mod public;
 mod sessions;
 
 pub use events::list_auth_events;
-pub use password::{change_password, forgot_password, reset_password};
+pub use password::{change_password, forgot_password_for_app, reset_password_for_app};
+#[cfg(test)]
+pub use password::{forgot_password, reset_password};
 pub use providers::{
     diagnose_auth_provider_config, get_auth_public_config, list_auth_provider_configs,
     oauth_callback, oauth_start, upsert_auth_provider_config,
 };
-pub use public::{
-    login, login_for_app, logout, logout_for_app, refresh_session, refresh_session_for_app,
-    register, register_for_app,
-};
+#[cfg(test)]
+pub use public::{login, logout, refresh_session, register};
+pub use public::{login_for_app, logout_for_app, refresh_session_for_app, register_for_app};
 pub use sessions::{list_sessions, me, revoke_all_sessions, revoke_session};
 
 const ACCESS_TOKEN_TTL_MINUTES: i64 = 15;

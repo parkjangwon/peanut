@@ -108,6 +108,48 @@ async fn me_returns_current_user() {
 }
 
 #[tokio::test]
+async fn app_scoped_auth_session_password_and_events_routes_work() {
+    let (app, _dir) = common::make_app().await;
+    let token = common::register_and_login(&app, "dana@example.com", "password123").await;
+
+    let sessions = common::get_authed_with_app_key(
+        &app,
+        &format!("/api/apps/{}/auth/sessions", common::TEST_APP_ID),
+        &token,
+    )
+    .await;
+    assert_eq!(sessions.status(), StatusCode::OK);
+    let body: Value = common::response_json(sessions).await;
+    assert!(body["sessions"]
+        .as_array()
+        .is_some_and(|items| !items.is_empty()));
+
+    let change = common::post_json_authed_with_app_key(
+        &app,
+        &format!("/api/apps/{}/auth/change-password", common::TEST_APP_ID),
+        &token,
+        serde_json::json!({
+            "current_password": "password123",
+            "new_password": "password456"
+        }),
+    )
+    .await;
+    assert_eq!(change.status(), StatusCode::OK);
+
+    let events = common::get_authed_with_app_key(
+        &app,
+        &format!("/api/apps/{}/auth/events", common::TEST_APP_ID),
+        &token,
+    )
+    .await;
+    assert_eq!(events.status(), StatusCode::OK);
+    let body: Value = common::response_json(events).await;
+    assert!(body["events"]
+        .as_array()
+        .is_some_and(|items| !items.is_empty()));
+}
+
+#[tokio::test]
 async fn me_requires_auth() {
     let (app, _dir) = common::make_app().await;
     let response =

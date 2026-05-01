@@ -32,6 +32,11 @@ The bearer token is required for user-scoped operations such as `/auth/me`, clie
 - `POST /api/apps/:app_id/auth/refresh`
 - `POST /api/apps/:app_id/auth/logout`
 - `GET /api/apps/:app_id/auth/me`
+- `POST /api/apps/:app_id/auth/change-password`
+- `POST /api/apps/:app_id/auth/forgot-password`
+- `POST /api/apps/:app_id/auth/reset-password`
+- `GET /api/apps/:app_id/auth/sessions`
+- `GET /api/apps/:app_id/auth/events`
 - `GET /api/apps/:app_id/data/tables`
 - `GET|POST /api/apps/:app_id/data/tables/:table/rows`
 - `GET|PUT|DELETE /api/apps/:app_id/storage/buckets/:bucket/objects/*key`

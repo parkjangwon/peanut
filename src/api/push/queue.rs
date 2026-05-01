@@ -3,46 +3,22 @@ use super::*;
 
 pub(super) fn decode_failed_destinations(
     raw: Option<&str>,
-    last_error: Option<&str>,
-    partial_failure_count: i64,
+    _last_error: Option<&str>,
+    _partial_failure_count: i64,
 ) -> Vec<PushDeliveryFailure> {
     if let Some(value) = raw {
         match serde_json::from_str::<Vec<PushDeliveryFailure>>(value) {
             Ok(decoded) => return decoded,
             Err(error) => {
                 tracing::warn!(
-                    "failed to decode failed_destinations_json for push queue item; falling back to legacy last_error parsing when possible: {}",
+                    "failed to decode failed_destinations_json for push queue item: {}",
                     error
                 );
             }
         }
     }
 
-    if partial_failure_count > 0 {
-        return parse_failed_destinations_from_last_error(last_error);
-    }
-
     Vec::new()
-}
-
-fn parse_failed_destinations_from_last_error(last_error: Option<&str>) -> Vec<PushDeliveryFailure> {
-    let Some(raw) = last_error else {
-        return Vec::new();
-    };
-    let Some(payload) = raw.strip_prefix("partial delivery failures: ") else {
-        return Vec::new();
-    };
-
-    payload
-        .split(" | ")
-        .filter_map(|entry| {
-            let (endpoint, error) = entry.split_once(": ")?;
-            Some(PushDeliveryFailure {
-                endpoint: endpoint.to_string(),
-                error: error.to_string(),
-            })
-        })
-        .collect()
 }
 
 fn map_queue_entry(row: PushQueueEntryRow) -> PushQueueEntry {

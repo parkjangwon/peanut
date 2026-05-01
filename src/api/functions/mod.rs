@@ -560,21 +560,24 @@ async fn load_function_secrets(
 
     let mut secrets = BTreeMap::new();
     for (secret_key, secret_value, secret_ciphertext, _encryption_version) in rows {
-        let resolved = match (secret_ciphertext, secret_value) {
-            (Some(ciphertext), _) => {
-                decrypt_secret(functions_secrets_key, &ciphertext).map_err(|error| {
-                    sqlx::Error::Protocol(format!(
-                        "failed to decrypt function secret '{secret_key}': {error}"
-                    ))
-                })?
-            }
-            (None, Some(plaintext)) => plaintext,
-            (None, None) => {
-                return Err(sqlx::Error::Protocol(format!(
-                    "function secret '{secret_key}' is missing both plaintext and ciphertext"
-                )))
-            }
+        let Some(ciphertext) = secret_ciphertext else {
+            return Err(sqlx::Error::Protocol(format!(
+                "function secret '{secret_key}' is missing ciphertext"
+            )));
         };
+        if secret_value
+            .as_deref()
+            .is_some_and(|value| value != ciphertext)
+        {
+            return Err(sqlx::Error::Protocol(format!(
+                "function secret '{secret_key}' uses unsupported plaintext storage"
+            )));
+        }
+        let resolved = decrypt_secret(functions_secrets_key, &ciphertext).map_err(|error| {
+            sqlx::Error::Protocol(format!(
+                "failed to decrypt function secret '{secret_key}': {error}"
+            ))
+        })?;
         secrets.insert(secret_key, resolved);
     }
     Ok(secrets)
@@ -637,7 +640,6 @@ mod tests {
 
         let (state, _dir) = test_support::make_test_state().await;
         let admin = register_admin(state.clone()).await;
-
         let create_response = create_function(
             State(state.clone()),
             Extension(claims(&admin.user.id, true)),
@@ -672,7 +674,15 @@ mod tests {
             }),
         )
         .await;
-        assert_eq!(invoke_response.status(), StatusCode::OK);
+        let invoke_status = invoke_response.status();
+        if invoke_status != StatusCode::OK {
+            let error_body: crate::api::common::ApiError =
+                test_support::response_json(invoke_response).await;
+            panic!(
+                "unexpected invoke status {}: {}",
+                invoke_status, error_body.error
+            );
+        }
         let invoke_body: InvokeFunctionResponse =
             test_support::response_json(invoke_response).await;
         assert_eq!(invoke_body.status, "succeeded");
@@ -739,7 +749,15 @@ mod tests {
             }),
         )
         .await;
-        assert_eq!(invoke_response.status(), StatusCode::OK);
+        let invoke_status = invoke_response.status();
+        if invoke_status != StatusCode::OK {
+            let error_body: crate::api::common::ApiError =
+                test_support::response_json(invoke_response).await;
+            panic!(
+                "unexpected invoke status {}: {}",
+                invoke_status, error_body.error
+            );
+        }
         let invoke_body: InvokeFunctionResponse =
             test_support::response_json(invoke_response).await;
         assert_eq!(
@@ -827,57 +845,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_load_function_secrets_supports_legacy_plaintext_rows() {
-        let (state, _dir) = test_support::make_test_state().await;
-        let admin = register_admin(state.clone()).await;
-        let mut secrets = std::collections::BTreeMap::new();
-        secrets.insert("LEGACY_TOKEN".to_string(), "fresh-secret".to_string());
-
-        let create_response = create_function(
-            State(state.clone()),
-            Extension(claims(&admin.user.id, true)),
-            Json(UpsertFunctionRequest {
-                name: "legacy_secret_fn".to_string(),
-                display_name: "Legacy Secret Function".to_string(),
-                endpoint_slug: "legacy-secret-fn".to_string(),
-                runtime: "javascript".to_string(),
-                source_code: "export default async function handler() { return { ok: true } }"
-                    .to_string(),
-                timeout_ms: Some(5000),
-                enabled: Some(true),
-                invoke_policy: Some("authenticated".to_string()),
-                env: None,
-                secrets: Some(secrets),
-                api_key: None,
-                allowed_origins: None,
-                rate_limit_per_minute: Some(60),
-            }),
-        )
-        .await;
-        assert_eq!(create_response.status(), StatusCode::CREATED);
-        let create_body: FunctionResponse = test_support::response_json(create_response).await;
-        let version_id = create_body.function.active_version_id;
-
-        sqlx::query(
-            "UPDATE function_version_secrets SET secret_value = ?, secret_ciphertext = NULL, encryption_version = NULL WHERE version_id = ? AND secret_key = ?",
-        )
-        .bind("legacy-secret")
-        .bind(&version_id)
-        .bind("LEGACY_TOKEN")
-        .execute(&state.pool)
-        .await
-        .unwrap();
-
-        let secrets = load_function_secrets(&state.pool, &state.function_secrets_key, &version_id)
-            .await
-            .unwrap();
-        assert_eq!(
-            secrets.get("LEGACY_TOKEN").map(String::as_str),
-            Some("legacy-secret")
-        );
-    }
-
-    #[tokio::test]
     async fn test_authenticated_function_can_use_storage_and_push_bindings() {
         if skip_without_deno() {
             return;
@@ -885,6 +852,14 @@ mod tests {
 
         let (state, _dir) = test_support::make_test_state().await;
         let admin = register_admin(state.clone()).await;
+        sqlx::query(
+            "INSERT INTO storage_buckets (app_id, name, public_read, allow_client_uploads, allowed_mime_types_json) VALUES (?, ?, FALSE, FALSE, '[]')",
+        )
+        .bind(crate::app_context::DEFAULT_APP_ID)
+        .bind("notes")
+        .execute(&state.pool)
+        .await
+        .unwrap();
 
         let create_response = create_function(
             State(state.clone()),
@@ -896,9 +871,9 @@ mod tests {
                 runtime: "javascript".to_string(),
                 source_code: r#"
 export default async function handler(ctx) {
-  await ctx.peanut.storage.put({ key: 'notes/hello.txt', body: 'hello from binding' })
-  const loaded = await ctx.peanut.storage.get({ key: 'notes/hello.txt' })
-  const keys = await ctx.peanut.storage.list()
+  await ctx.peanut.storage.put({ bucket: 'notes', key: 'hello.txt', body: 'hello from binding' })
+  const loaded = await ctx.peanut.storage.get({ bucket: 'notes', key: 'hello.txt' })
+  const keys = await ctx.peanut.storage.list({ bucket: 'notes' })
   await ctx.peanut.push.enqueue({ title: 'Bound push', body: 'from function binding' })
   return { loaded, keys }
 }
@@ -929,14 +904,22 @@ export default async function handler(ctx) {
             }),
         )
         .await;
-        assert_eq!(invoke_response.status(), StatusCode::OK);
+        let invoke_status = invoke_response.status();
+        if invoke_status != StatusCode::OK {
+            let error_body: crate::api::common::ApiError =
+                test_support::response_json(invoke_response).await;
+            panic!(
+                "unexpected invoke status {}: {}",
+                invoke_status, error_body.error
+            );
+        }
         let invoke_body: InvokeFunctionResponse =
             test_support::response_json(invoke_response).await;
         assert_eq!(
             invoke_body.response,
             serde_json::json!({
                 "loaded": "hello from binding",
-                "keys": ["notes/hello.txt"]
+                "keys": ["hello.txt"]
             })
         );
 

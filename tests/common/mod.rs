@@ -167,6 +167,24 @@ pub async fn post_json_with_app_key(app: &Router, uri: &str, body: Value) -> Res
     app.clone().oneshot(request).await.unwrap()
 }
 
+pub async fn post_json_authed_with_app_key(
+    app: &Router,
+    uri: &str,
+    token: &str,
+    body: Value,
+) -> Response {
+    let request = Request::builder()
+        .method(Method::POST)
+        .uri(uri)
+        .header("content-type", "application/json")
+        .header("authorization", format!("Bearer {token}"))
+        .header("x-peanut-api-key", TEST_APP_KEY)
+        .extension(test_connect_info())
+        .body(axum::body::Body::from(serde_json::to_vec(&body).unwrap()))
+        .unwrap();
+    app.clone().oneshot(request).await.unwrap()
+}
+
 pub async fn get_authed(app: &Router, uri: &str, token: &str) -> Response {
     let request = Request::builder()
         .method(Method::GET)

@@ -9,6 +9,7 @@ APP_ID="${PEANUT_VERIFY_APP_ID:-default}"
 BOOTSTRAP_EMAIL="${PEANUT_BOOTSTRAP_EMAIL:-}"
 BOOTSTRAP_PASSWORD="${PEANUT_BOOTSTRAP_PASSWORD:-}"
 SMOKE_TABLE="verify_$(date +%s)"
+SMOKE_BUCKET="verify-$(date +%s)"
 
 json_value() {
   python3 -c 'import json,sys; data=json.load(sys.stdin); cur=data
@@ -75,6 +76,16 @@ if [[ -n "${ADMIN_TOKEN}" ]]; then
     --data "{\"email\":\"${VERIFY_EMAIL}\",\"password\":\"password123\"}" \
     >/tmp/peanut-auth-login.json
   USER_TOKEN="$(json_value access_token </tmp/peanut-auth-login.json)"
+  curl -fsS "${BASE_URL}/api/apps/${APP_ID}/auth/sessions" \
+    -H "Authorization: Bearer ${USER_TOKEN}" \
+    -H "X-Peanut-Api-Key: ${SERVER_KEY}" \
+    >/tmp/peanut-auth-sessions.json
+  grep -q '"sessions"' /tmp/peanut-auth-sessions.json
+  curl -fsS "${BASE_URL}/api/apps/${APP_ID}/auth/events" \
+    -H "Authorization: Bearer ${USER_TOKEN}" \
+    -H "X-Peanut-Api-Key: ${SERVER_KEY}" \
+    >/tmp/peanut-auth-events.json
+  grep -q '"events"' /tmp/peanut-auth-events.json
 
   echo "==> Verifying app-scoped Data CRUD"
   curl -fsS -X POST "${BASE_URL}/api/apps/${APP_ID}/data/tables" \
@@ -89,6 +100,24 @@ if [[ -n "${ADMIN_TOKEN}" ]]; then
     --data '{"data":{"title":"ok"}}' \
     >/tmp/peanut-data-row.json
   grep -q '"row"' /tmp/peanut-data-row.json
+
+  echo "==> Verifying app-scoped Storage CRUD"
+  curl -fsS -X POST "${BASE_URL}/api/apps/${APP_ID}/storage/buckets" \
+    -H "Authorization: Bearer ${ADMIN_TOKEN}" \
+    -H "Content-Type: application/json" \
+    --data "{\"name\":\"${SMOKE_BUCKET}\",\"public_read\":false,\"allow_client_uploads\":true,\"allowed_mime_types\":[]}" \
+    >/tmp/peanut-storage-bucket.json
+  curl -fsS -X PUT "${BASE_URL}/api/apps/${APP_ID}/storage/buckets/${SMOKE_BUCKET}/objects/hello.txt" \
+    -H "Authorization: Bearer ${USER_TOKEN}" \
+    -H "X-Peanut-Api-Key: ${SERVER_KEY}" \
+    -H "Content-Type: text/plain" \
+    --data 'hello from compose' \
+    >/tmp/peanut-storage-put.txt
+  curl -fsS "${BASE_URL}/api/apps/${APP_ID}/storage/buckets/${SMOKE_BUCKET}/objects/hello.txt" \
+    -H "Authorization: Bearer ${USER_TOKEN}" \
+    -H "X-Peanut-Api-Key: ${SERVER_KEY}" \
+    >/tmp/peanut-storage-get.txt
+  grep -q 'hello from compose' /tmp/peanut-storage-get.txt
 
   echo "==> Verifying admin backup API"
   curl -fsS -X POST "${BASE_URL}/api/admin/backups" \
