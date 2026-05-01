@@ -9,7 +9,7 @@ pub async fn list_functions(
     }
 
     match sqlx::query_as::<_, FunctionSummary>(
-        "SELECT id, name, display_name, endpoint_slug, runtime, invoke_policy, rate_limit_per_minute, CASE WHEN api_key_hash IS NULL OR api_key_hash = '' THEN 0 ELSE 1 END AS api_key_present, timeout_ms, enabled, active_version_number, secret_key_count, updated_at FROM functions WHERE app_id = ? ORDER BY updated_at DESC, name ASC",
+        "SELECT id, app_id, name, display_name, endpoint_slug, runtime, invoke_policy, rate_limit_per_minute, CASE WHEN api_key_hash IS NULL OR api_key_hash = '' THEN 0 ELSE 1 END AS api_key_present, timeout_ms, enabled, active_version_number, secret_key_count, updated_at FROM functions WHERE app_id = ? ORDER BY updated_at DESC, name ASC",
     )
     .bind(&claims.app_id)
     .fetch_all(&state.pool)

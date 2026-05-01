@@ -12,6 +12,7 @@ Peanut is intentionally operationally small:
 - app-scoped API keys with explicit scopes
 - app-scoped Data, Storage, Push, and Functions APIs
 - embedded Next.js admin console served by the Rust binary
+- console workbenches for Auth, Data, Storage, Functions, Push, activity, and operations
 - single-node production runbooks and diagnostics
 
 ## API Shape
@@ -99,6 +100,7 @@ Admin console checks:
 
 ```bash
 cd console
+npm run lint
 npm run build
 ```
 
@@ -116,3 +118,7 @@ scripts/verify-compose.sh
 
 For an existing install, provide `PEANUT_ADMIN_TOKEN` instead of bootstrap
 credentials.
+
+With admin credentials, the compose verifier exercises the public-beta path:
+app auth, Data CRUD, Storage CRUD, Function create/invoke/invocation listing,
+Push diagnostics/test message, backup download, and restore-pending safety.

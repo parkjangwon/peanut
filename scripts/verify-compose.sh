@@ -10,6 +10,8 @@ BOOTSTRAP_EMAIL="${PEANUT_BOOTSTRAP_EMAIL:-}"
 BOOTSTRAP_PASSWORD="${PEANUT_BOOTSTRAP_PASSWORD:-}"
 SMOKE_TABLE="verify_$(date +%s)"
 SMOKE_BUCKET="verify-$(date +%s)"
+SMOKE_FUNCTION="verify_$(date +%s)"
+SMOKE_FUNCTION_SLUG="verify-$(date +%s)"
 
 json_value() {
   python3 -c 'import json,sys; data=json.load(sys.stdin); cur=data
@@ -135,6 +137,22 @@ if [[ -n "${ADMIN_TOKEN}" ]]; then
   curl -fsS -X POST "${BASE_URL}/api/admin/backups" \
     -H "Authorization: Bearer ${ADMIN_TOKEN}" >/tmp/peanut-backup.json
   grep -q '"backup"' /tmp/peanut-backup.json
+  BACKUP_NAME="$(json_value backup.name </tmp/peanut-backup.json)"
+  curl -fsS "${BASE_URL}/api/admin/backups/${BACKUP_NAME}/download" \
+    -H "Authorization: Bearer ${ADMIN_TOKEN}" \
+    >/tmp/peanut-backup-download.db
+  test -s /tmp/peanut-backup-download.db
+  curl -fsS -X POST "${BASE_URL}/api/admin/backups/${BACKUP_NAME}/restore" \
+    -H "Authorization: Bearer ${ADMIN_TOKEN}" \
+    >/tmp/peanut-restore-scheduled.json
+  grep -q '"restart_required":true' /tmp/peanut-restore-scheduled.json
+  curl -fsS "${BASE_URL}/api/admin/backups/restore-pending" \
+    -H "Authorization: Bearer ${ADMIN_TOKEN}" \
+    >/tmp/peanut-restore-pending.json
+  grep -q "${BACKUP_NAME}" /tmp/peanut-restore-pending.json
+  curl -fsS -X DELETE "${BASE_URL}/api/admin/backups/restore-pending" \
+    -H "Authorization: Bearer ${ADMIN_TOKEN}" \
+    >/tmp/peanut-restore-cleared.json
 
   echo "==> Verifying Function editor lint API"
   curl -fsS -X POST "${BASE_URL}/api/apps/${APP_ID}/functions/editor/lint" \
@@ -143,6 +161,23 @@ if [[ -n "${ADMIN_TOKEN}" ]]; then
     --data '{"runtime":"typescript","source_code":"export default function handler(){ return { ok: true } }"}' \
     >/tmp/peanut-function-lint.json
   grep -q '"status":"passed"' /tmp/peanut-function-lint.json
+  echo "==> Verifying app-scoped Function create and invoke"
+  curl -fsS -X POST "${BASE_URL}/api/apps/${APP_ID}/functions" \
+    -H "Authorization: Bearer ${ADMIN_TOKEN}" \
+    -H "Content-Type: application/json" \
+    --data "{\"name\":\"${SMOKE_FUNCTION}\",\"display_name\":\"Compose Verify\",\"endpoint_slug\":\"${SMOKE_FUNCTION_SLUG}\",\"runtime\":\"javascript\",\"source_code\":\"export default function handler(ctx) { return { ok: true, input: ctx.request.input } }\",\"invoke_policy\":\"authenticated\",\"timeout_ms\":3000,\"enabled\":true}" \
+    >/tmp/peanut-function-create.json
+  grep -q "\"app_id\":\"${APP_ID}\"" /tmp/peanut-function-create.json
+  curl -fsS -X POST "${BASE_URL}/api/apps/${APP_ID}/functions/endpoints/${SMOKE_FUNCTION_SLUG}" \
+    -H "Authorization: Bearer ${ADMIN_TOKEN}" \
+    -H "Content-Type: application/json" \
+    --data '{"input":{"from":"compose"}}' \
+    >/tmp/peanut-function-invoke.json
+  grep -q '"status":"succeeded"' /tmp/peanut-function-invoke.json
+  curl -fsS "${BASE_URL}/api/apps/${APP_ID}/functions/${SMOKE_FUNCTION}/invocations" \
+    -H "Authorization: Bearer ${ADMIN_TOKEN}" \
+    >/tmp/peanut-function-invocations.json
+  grep -q "\"app_id\":\"${APP_ID}\"" /tmp/peanut-function-invocations.json
 
   echo "==> Verifying app-scoped platform diagnostics"
   curl -fsS "${BASE_URL}/api/admin/ops/diagnostics" \

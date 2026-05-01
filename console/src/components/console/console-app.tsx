@@ -10,12 +10,19 @@ import {
   Cloud,
   Code2,
   Database,
+  Download,
+  FlaskConical,
+  History,
   KeyRound,
   LayoutDashboard,
   LogOut,
   Menu,
+  Play,
   Plus,
+  RotateCcw,
+  Save,
   ShieldCheck,
+  Trash2,
   Users,
   Wrench,
 } from "lucide-react";
@@ -29,12 +36,18 @@ import {
   ActivityEvent,
   apiFetch,
   AppSummary,
+  BackupsResponse,
   bootstrapAdmin,
   clearSession,
   DataTable,
+  downloadBackup,
+  FunctionDetail,
+  FunctionInvocation,
   FunctionSummary,
+  FunctionVersionSummary,
   loginAdmin,
   logoutAdmin,
+  OpsMetrics,
   PeanutUser,
   refreshAdminSession,
   SdkStorageObjectSummary,
@@ -830,30 +843,351 @@ function StorageView({ app }: { app: AppSummary }) {
 }
 
 function FunctionsView({ app }: { app: AppSummary }) {
+  const queryClient = useQueryClient();
+  const [selectedName, setSelectedName] = useState("");
+  const [name, setName] = useState("hello_console");
+  const [displayName, setDisplayName] = useState("Hello Console");
+  const [endpointSlug, setEndpointSlug] = useState("hello-console");
+  const [runtime, setRuntime] = useState("javascript");
+  const [invokePolicy, setInvokePolicy] = useState("authenticated");
+  const [enabled, setEnabled] = useState("true");
+  const [timeoutMs, setTimeoutMs] = useState("3000");
+  const [sourceCode, setSourceCode] = useState(
+    "export default function handler(ctx) {\n  return { ok: true, input: ctx.request.input }\n}\n",
+  );
+  const [inputJson, setInputJson] = useState('{\n  "message": "Hello Peanut"\n}');
+  const [output, setOutput] = useState<Record<string, unknown> | null>(null);
   const functions = useQuery({
     queryKey: ["functions", app.id],
     queryFn: async () => (await apiFetch<{ functions: FunctionSummary[] }>(`/api/apps/${app.id}/functions`)).functions,
   });
+  const activeName = selectedName || functions.data?.[0]?.name || "";
+  const detail = useQuery({
+    queryKey: ["functions", "detail", app.id, activeName],
+    queryFn: async () =>
+      (await apiFetch<{ function: FunctionDetail }>(`/api/apps/${app.id}/functions/${activeName}`)).function,
+    enabled: Boolean(activeName),
+  });
+  const versions = useQuery({
+    queryKey: ["functions", "versions", app.id, activeName],
+    queryFn: async () =>
+      (await apiFetch<{ versions: FunctionVersionSummary[] }>(
+        `/api/apps/${app.id}/functions/${activeName}/versions`,
+      )).versions,
+    enabled: Boolean(activeName),
+  });
+  const invocations = useQuery({
+    queryKey: ["functions", "invocations", app.id, activeName],
+    queryFn: async () =>
+      (await apiFetch<{ invocations: FunctionInvocation[] }>(
+        `/api/apps/${app.id}/functions/${activeName}/invocations`,
+      )).invocations,
+    enabled: Boolean(activeName),
+  });
+
+  const applyFunctionDraft = (fn: FunctionDetail) => {
+    setName(fn.name);
+    setDisplayName(fn.display_name);
+    setEndpointSlug(fn.endpoint_slug);
+    setRuntime(fn.runtime);
+    setInvokePolicy(fn.invoke_policy);
+    setEnabled(String(fn.enabled));
+    setTimeoutMs(String(fn.timeout_ms));
+    setSourceCode(fn.source_code);
+  };
+
+  const loadFunctionDraft = async (functionName: string) => {
+    const response = await apiFetch<{ function: FunctionDetail }>(
+      `/api/apps/${app.id}/functions/${functionName}`,
+    );
+    applyFunctionDraft(response.function);
+  };
+
+  const functionPayload = () => ({
+    name,
+    display_name: displayName,
+    endpoint_slug: endpointSlug,
+    runtime,
+    source_code: sourceCode,
+    invoke_policy: invokePolicy,
+    timeout_ms: Number(timeoutMs),
+    enabled: enabled === "true",
+  });
+
+  const createFunction = useMutation({
+    mutationFn: () =>
+      apiFetch<{ function: FunctionDetail }>(`/api/apps/${app.id}/functions`, {
+        method: "POST",
+        body: JSON.stringify(functionPayload()),
+      }),
+    onSuccess: (response) => {
+      toast.success("Function created");
+      setSelectedName(response.function.name);
+      applyFunctionDraft(response.function);
+      queryClient.invalidateQueries({ queryKey: ["functions", app.id] });
+    },
+    onError: (error: Error) => toast.error(error.message),
+  });
+  const updateFunction = useMutation({
+    mutationFn: () =>
+      apiFetch<{ function: FunctionDetail }>(`/api/apps/${app.id}/functions/${activeName}`, {
+        method: "PATCH",
+        body: JSON.stringify({
+          display_name: displayName,
+          endpoint_slug: endpointSlug,
+          runtime,
+          source_code: sourceCode,
+          invoke_policy: invokePolicy,
+          timeout_ms: Number(timeoutMs),
+          enabled: enabled === "true",
+        }),
+      }),
+    onSuccess: (response) => {
+      toast.success("Function saved");
+      setSelectedName(response.function.name);
+      applyFunctionDraft(response.function);
+      queryClient.invalidateQueries({ queryKey: ["functions", app.id] });
+      queryClient.invalidateQueries({ queryKey: ["functions", "detail", app.id, activeName] });
+      queryClient.invalidateQueries({ queryKey: ["functions", "versions", app.id, activeName] });
+    },
+    onError: (error: Error) => toast.error(error.message),
+  });
+  const deleteFunction = useMutation({
+    mutationFn: () =>
+      apiFetch(`/api/apps/${app.id}/functions/${activeName}`, {
+        method: "DELETE",
+      }),
+    onSuccess: () => {
+      toast.success("Function deleted");
+      setSelectedName("");
+      queryClient.invalidateQueries({ queryKey: ["functions", app.id] });
+    },
+    onError: (error: Error) => toast.error(error.message),
+  });
+  const lintFunction = useMutation({
+    mutationFn: () =>
+      apiFetch<Record<string, unknown>>(`/api/apps/${app.id}/functions/editor/lint`, {
+        method: "POST",
+        body: JSON.stringify({
+          runtime,
+          source_code: sourceCode,
+          function_name: name || activeName || "editor",
+          timeout_ms: Number(timeoutMs),
+        }),
+      }),
+    onSuccess: (response) => {
+      setOutput(response);
+      toast.success("Lint finished");
+    },
+    onError: (error: Error) => toast.error(error.message),
+  });
+  const dryRunFunction = useMutation({
+    mutationFn: () =>
+      apiFetch<Record<string, unknown>>(`/api/apps/${app.id}/functions/editor/dry-run`, {
+        method: "POST",
+        body: JSON.stringify({
+          runtime,
+          source_code: sourceCode,
+          function_name: name || activeName || "editor",
+          input: parseJsonInput(inputJson),
+          timeout_ms: Number(timeoutMs),
+        }),
+      }),
+    onSuccess: (response) => {
+      setOutput(response);
+      toast.success("Dry-run finished");
+    },
+    onError: (error: Error) => toast.error(error.message),
+  });
+  const invokeFunction = useMutation({
+    mutationFn: () =>
+      apiFetch<Record<string, unknown>>(`/api/apps/${app.id}/functions/endpoints/${endpointSlug}`, {
+        method: "POST",
+        body: JSON.stringify({ input: parseJsonInput(inputJson) }),
+      }),
+    onSuccess: (response) => {
+      setOutput(response);
+      queryClient.invalidateQueries({ queryKey: ["functions", "invocations", app.id, activeName] });
+      toast.success("Invocation recorded");
+    },
+    onError: (error: Error) => toast.error(error.message),
+  });
+  const rollbackVersion = useMutation({
+    mutationFn: (versionNumber: number) =>
+      apiFetch(`/api/apps/${app.id}/functions/${activeName}/versions/${versionNumber}/rollback`, {
+        method: "POST",
+      }),
+    onSuccess: () => {
+      toast.success("Version restored");
+      queryClient.invalidateQueries({ queryKey: ["functions", app.id] });
+      queryClient.invalidateQueries({ queryKey: ["functions", "detail", app.id, activeName] });
+      queryClient.invalidateQueries({ queryKey: ["functions", "versions", app.id, activeName] });
+    },
+    onError: (error: Error) => toast.error(error.message),
+  });
+  const retryInvocation = useMutation({
+    mutationFn: (invocationId: string) =>
+      apiFetch<Record<string, unknown>>(
+        `/api/apps/${app.id}/functions/${activeName}/invocations/${invocationId}/retry`,
+        { method: "POST" },
+      ),
+    onSuccess: (response) => {
+      setOutput(response);
+      queryClient.invalidateQueries({ queryKey: ["functions", "invocations", app.id, activeName] });
+      toast.success("Invocation retried");
+    },
+    onError: (error: Error) => toast.error(error.message),
+  });
+
   return (
-    <Section title="Functions" description="Edge-style TypeScript functions, versions, dry-runs, and invocation trails.">
-      <Alert>
-        <Code2 className="h-4 w-4" />
-        <AlertTitle>Function workbench</AlertTitle>
-        <AlertDescription>
-          The console surfaces lint, dry-run, invoke, versions, and invocations through the app-scoped Functions API.
-        </AlertDescription>
-      </Alert>
-      <DataTableView
-        loading={functions.isLoading}
-        columns={["Name", "Endpoint", "Runtime", "Enabled", "Updated"]}
-        rows={(functions.data ?? []).map((fn) => [
-          fn.name,
-          fn.endpoint_slug,
-          String((fn as unknown as { runtime?: string }).runtime ?? "deno"),
-          String((fn as unknown as { enabled?: boolean }).enabled ?? true),
-          fn.updated_at,
-        ])}
-      />
+    <Section title="Functions" description="Create, test, invoke, version, and retry app-scoped functions.">
+      <div className="grid gap-4 xl:grid-cols-[320px_1fr]">
+        <Panel title="Functions">
+          <div className="space-y-3">
+            <Select
+              value={activeName}
+              onValueChange={(value) => {
+                setSelectedName(value);
+                loadFunctionDraft(value).catch((error: Error) => toast.error(error.message));
+              }}
+            >
+              <SelectTrigger><SelectValue placeholder="Select function" /></SelectTrigger>
+              <SelectContent>
+                {(functions.data ?? []).map((fn) => (
+                  <SelectItem key={fn.name} value={fn.name}>{fn.name}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <Button
+              variant="outline"
+              onClick={() => {
+                if (activeName && detail.data) applyFunctionDraft(detail.data);
+              }}
+              disabled={!detail.data}
+            >
+              <Code2 className="h-4 w-4" /> Load
+            </Button>
+            <DataTableView
+              loading={functions.isLoading}
+              columns={["Name", "Endpoint", "Version"]}
+              rows={(functions.data ?? []).map((fn) => [
+                fn.name,
+                fn.endpoint_slug,
+                fn.active_version_number,
+              ])}
+            />
+          </div>
+        </Panel>
+
+        <Panel title="Editor">
+          <div className="grid gap-3 lg:grid-cols-3">
+            <Input value={name} onChange={(event) => setName(event.target.value)} placeholder="name" />
+            <Input value={displayName} onChange={(event) => setDisplayName(event.target.value)} placeholder="display name" />
+            <Input value={endpointSlug} onChange={(event) => setEndpointSlug(event.target.value)} placeholder="endpoint slug" />
+            <Select value={runtime} onValueChange={setRuntime}>
+              <SelectTrigger><SelectValue /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="javascript">JavaScript</SelectItem>
+                <SelectItem value="typescript">TypeScript</SelectItem>
+              </SelectContent>
+            </Select>
+            <Select value={invokePolicy} onValueChange={setInvokePolicy}>
+              <SelectTrigger><SelectValue /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="authenticated">Authenticated</SelectItem>
+                <SelectItem value="public">Public</SelectItem>
+                <SelectItem value="api_key">API key</SelectItem>
+              </SelectContent>
+            </Select>
+            <div className="grid grid-cols-[1fr_110px] gap-3">
+              <Input value={timeoutMs} onChange={(event) => setTimeoutMs(event.target.value)} />
+              <Select value={enabled} onValueChange={setEnabled}>
+                <SelectTrigger><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="true">Enabled</SelectItem>
+                  <SelectItem value="false">Disabled</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+          </div>
+          <Textarea
+            value={sourceCode}
+            onChange={(event) => setSourceCode(event.target.value)}
+            className="mt-3 min-h-[360px] resize-y font-mono text-xs"
+          />
+          <div className="mt-3 flex flex-wrap gap-2">
+            <Button onClick={() => createFunction.mutate()} disabled={createFunction.isPending}>
+              <Plus className="h-4 w-4" /> Create
+            </Button>
+            <Button variant="outline" onClick={() => updateFunction.mutate()} disabled={!activeName || updateFunction.isPending}>
+              <Save className="h-4 w-4" /> Save
+            </Button>
+            <Button variant="outline" onClick={() => lintFunction.mutate()} disabled={lintFunction.isPending}>
+              <Code2 className="h-4 w-4" /> Lint
+            </Button>
+            <Button variant="outline" onClick={() => dryRunFunction.mutate()} disabled={dryRunFunction.isPending}>
+              <FlaskConical className="h-4 w-4" /> Dry-run
+            </Button>
+            <Button variant="outline" onClick={() => invokeFunction.mutate()} disabled={!activeName || invokeFunction.isPending}>
+              <Play className="h-4 w-4" /> Invoke
+            </Button>
+            <Button variant="destructive" onClick={() => deleteFunction.mutate()} disabled={!activeName || deleteFunction.isPending}>
+              <Trash2 className="h-4 w-4" /> Delete
+            </Button>
+          </div>
+        </Panel>
+      </div>
+
+      <div className="grid gap-4 xl:grid-cols-2">
+        <Panel title="Input / output">
+          <div className="grid gap-3 lg:grid-cols-2">
+            <Textarea value={inputJson} onChange={(event) => setInputJson(event.target.value)} className="min-h-72 font-mono text-xs" />
+            <JsonBlock value={output ?? { status: "idle" }} />
+          </div>
+        </Panel>
+        <Panel title="Versions">
+          <DataTableView
+            loading={versions.isLoading}
+            columns={["Version", "Runtime", "Active", "Rollback"]}
+            rows={(versions.data ?? []).map((version) => [
+              version.version_number,
+              version.runtime,
+              String(version.is_active),
+              version.is_active ? "" : (
+                <Button
+                  key={version.id}
+                  variant="outline"
+                  size="sm"
+                  onClick={() => rollbackVersion.mutate(version.version_number)}
+                >
+                  <RotateCcw className="h-4 w-4" /> Restore
+                </Button>
+              ),
+            ])}
+          />
+        </Panel>
+      </div>
+
+      <Panel title="Invocations">
+        <DataTableView
+          loading={invocations.isLoading}
+          columns={["ID", "Status", "Mode", "Duration", "Retry"]}
+          rows={(invocations.data ?? []).map((invocation) => [
+            invocation.id,
+            invocation.status,
+            invocation.invoke_mode,
+            invocation.duration_ms ?? "",
+            <Button
+              key={invocation.id}
+              variant="outline"
+              size="sm"
+              onClick={() => retryInvocation.mutate(invocation.id)}
+            >
+              <History className="h-4 w-4" /> Retry
+            </Button>,
+          ])}
+        />
+      </Panel>
     </Section>
   );
 }
@@ -965,6 +1299,7 @@ function ActivityView({ app }: { app: AppSummary }) {
 }
 
 function OpsView() {
+  const queryClient = useQueryClient();
   const ready = useQuery({
     queryKey: ["ready"],
     queryFn: () => apiFetch<Record<string, unknown>>("/api/ready", { auth: false }),
@@ -973,16 +1308,133 @@ function OpsView() {
     queryKey: ["ops", "diagnostics"],
     queryFn: () => apiFetch<Record<string, unknown>>("/api/admin/ops/diagnostics"),
   });
+  const metrics = useQuery({
+    queryKey: ["ops", "metrics"],
+    queryFn: () => apiFetch<OpsMetrics>("/api/admin/ops/metrics"),
+  });
   const backups = useQuery({
     queryKey: ["ops", "backups"],
-    queryFn: () => apiFetch<Record<string, unknown>>("/api/admin/backups"),
+    queryFn: () => apiFetch<BackupsResponse>("/api/admin/backups"),
   });
+  const createBackup = useMutation({
+    mutationFn: () => apiFetch("/api/admin/backups", { method: "POST", body: JSON.stringify({}) }),
+    onSuccess: () => {
+      toast.success("Backup created");
+      queryClient.invalidateQueries({ queryKey: ["ops", "backups"] });
+      queryClient.invalidateQueries({ queryKey: ["ops", "metrics"] });
+    },
+    onError: (error: Error) => toast.error(error.message),
+  });
+  const scheduleRestore = useMutation({
+    mutationFn: (name: string) => apiFetch(`/api/admin/backups/${name}/restore`, { method: "POST" }),
+    onSuccess: () => {
+      toast.success("Restore scheduled");
+      queryClient.invalidateQueries({ queryKey: ["ops", "backups"] });
+      queryClient.invalidateQueries({ queryKey: ["ops", "metrics"] });
+    },
+    onError: (error: Error) => toast.error(error.message),
+  });
+  const clearRestore = useMutation({
+    mutationFn: () => apiFetch("/api/admin/backups/restore-pending", { method: "DELETE" }),
+    onSuccess: () => {
+      toast.success("Restore cleared");
+      queryClient.invalidateQueries({ queryKey: ["ops", "backups"] });
+      queryClient.invalidateQueries({ queryKey: ["ops", "metrics"] });
+    },
+    onError: (error: Error) => toast.error(error.message),
+  });
+  const download = useMutation({
+    mutationFn: downloadBackup,
+    onSuccess: (blob, name) => {
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = name;
+      link.click();
+      URL.revokeObjectURL(url);
+      toast.success(`${name} downloaded`);
+    },
+    onError: (error: Error) => toast.error(error.message),
+  });
+  const platform = diagnostics.data as { checks?: Array<{ name: string; ok: boolean; message?: string }> } | undefined;
   return (
     <Section title="Operations" description="Single-node production checks, backup posture, schema invariants, and service health.">
-      <div className="grid gap-4 lg:grid-cols-3">
-        <Panel title="Ready"><JsonBlock value={ready.data ?? { status: "loading" }} /></Panel>
-        <Panel title="Diagnostics"><JsonBlock value={diagnostics.data ?? { status: "loading" }} /></Panel>
-        <Panel title="Backups"><JsonBlock value={backups.data ?? { status: "loading" }} /></Panel>
+      <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+        <Metric label="Ready" value={String(ready.data?.status ?? "checking")} icon={CheckCircle2} />
+        <Metric label="DB size" value={formatBytes(metrics.data?.database.size_bytes ?? 0)} icon={Database} />
+        <Metric label="Objects" value={metrics.data?.storage.object_count ?? 0} icon={Archive} />
+        <Metric label="Function failures" value={metrics.data?.functions.failures_24h ?? 0} icon={Code2} />
+      </div>
+      <div className="grid gap-4 xl:grid-cols-[1fr_1.2fr]">
+        <Panel title="Platform checks">
+          <div className="space-y-2">
+            {(platform?.checks ?? []).map((check) => (
+              <div key={check.name} className="flex items-center justify-between gap-3 rounded-md border px-3 py-2">
+                <div className="min-w-0">
+                  <div className="font-medium">{check.name}</div>
+                  <div className="truncate text-xs text-muted-foreground">{check.message ?? ""}</div>
+                </div>
+                <Badge variant={check.ok ? "default" : "destructive"}>{check.ok ? "OK" : "Fail"}</Badge>
+              </div>
+            ))}
+            {!platform?.checks?.length && <Skeleton className="h-40 w-full" />}
+          </div>
+        </Panel>
+        <Panel title="Runtime">
+          <DataTableView
+            loading={metrics.isLoading}
+            columns={["Area", "Value", "State"]}
+            rows={[
+              ["Storage", metrics.data?.storage.root ?? "", metrics.data?.storage.ok ? "writable" : metrics.data?.storage.error ?? ""],
+              ["Backups", metrics.data?.database.backup_count ?? 0, metrics.data?.database.restore_pending ? "restore pending" : "clear"],
+              ["Functions", metrics.data?.functions.work_dir ?? "", metrics.data?.functions.enabled ? "enabled" : "disabled"],
+              ["Push queue", metrics.data?.push.queued ?? 0, `${metrics.data?.push.failed_recent ?? 0} failed / 24h`],
+              ["Version", metrics.data?.system.version ?? "", `${metrics.data?.system.uptime_seconds ?? 0}s uptime`],
+            ]}
+          />
+        </Panel>
+      </div>
+      <Panel title="Backups">
+        <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
+          {backups.data?.restore_pending ? (
+            <Alert className="max-w-2xl">
+              <CircleAlert className="h-4 w-4" />
+              <AlertTitle>Restore pending</AlertTitle>
+              <AlertDescription>{backups.data.restore_pending.backup_name}</AlertDescription>
+            </Alert>
+          ) : (
+            <StatusBadge ok />
+          )}
+          <div className="flex gap-2">
+            <Button variant="outline" onClick={() => clearRestore.mutate()} disabled={!backups.data?.restore_pending || clearRestore.isPending}>
+              <RotateCcw className="h-4 w-4" /> Clear
+            </Button>
+            <Button onClick={() => createBackup.mutate()} disabled={createBackup.isPending}>
+              <Plus className="h-4 w-4" /> Create
+            </Button>
+          </div>
+        </div>
+        <DataTableView
+          loading={backups.isLoading}
+          columns={["Name", "Size", "Modified", "Actions"]}
+          rows={(backups.data?.backups ?? []).map((backup) => [
+            backup.name,
+            formatBytes(backup.size_bytes),
+            backup.modified_at,
+            <div key={backup.name} className="flex gap-2">
+              <Button variant="outline" size="sm" onClick={() => download.mutate(backup.name)}>
+                <Download className="h-4 w-4" /> Download
+              </Button>
+              <Button variant="outline" size="sm" onClick={() => scheduleRestore.mutate(backup.name)}>
+                <RotateCcw className="h-4 w-4" /> Restore
+              </Button>
+            </div>,
+          ])}
+        />
+      </Panel>
+      <div className="grid gap-4 xl:grid-cols-2">
+        <Panel title="Ready payload"><JsonBlock value={ready.data ?? { status: "loading" }} /></Panel>
+        <Panel title="Diagnostics payload"><JsonBlock value={diagnostics.data ?? { status: "loading" }} /></Panel>
       </div>
     </Section>
   );
@@ -1135,6 +1587,26 @@ function JsonBlock({ value }: { value: unknown }) {
       className="min-h-72 resize-none font-mono text-xs"
     />
   );
+}
+
+function parseJsonInput(value: string) {
+  try {
+    return JSON.parse(value);
+  } catch {
+    throw new Error("Input must be valid JSON");
+  }
+}
+
+function formatBytes(value: number) {
+  if (value < 1024) return `${value} B`;
+  const units = ["KB", "MB", "GB", "TB"];
+  let size = value / 1024;
+  let unit = 0;
+  while (size >= 1024 && unit < units.length - 1) {
+    size /= 1024;
+    unit += 1;
+  }
+  return `${size.toFixed(size >= 10 ? 0 : 1)} ${units[unit]}`;
 }
 
 function Signal({

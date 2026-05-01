@@ -537,6 +537,102 @@ paths:
       responses:
         "201":
           description: Function created.
+  /api/apps/{app_id}/functions/{name}:
+    get:
+      operationId: getAppFunction
+      summary: Get a function
+      parameters:
+        - $ref: "#/components/parameters/AppId"
+        - $ref: "#/components/parameters/FunctionName"
+      responses:
+        "200":
+          description: Function detail.
+    patch:
+      operationId: updateAppFunction
+      summary: Update a function and create a new active version
+      parameters:
+        - $ref: "#/components/parameters/AppId"
+        - $ref: "#/components/parameters/FunctionName"
+      responses:
+        "200":
+          description: Function updated.
+    delete:
+      operationId: deleteAppFunction
+      summary: Delete a function
+      parameters:
+        - $ref: "#/components/parameters/AppId"
+        - $ref: "#/components/parameters/FunctionName"
+      responses:
+        "200":
+          description: Function deleted.
+  /api/apps/{app_id}/functions/{name}/versions:
+    get:
+      operationId: listAppFunctionVersions
+      summary: List function versions
+      parameters:
+        - $ref: "#/components/parameters/AppId"
+        - $ref: "#/components/parameters/FunctionName"
+      responses:
+        "200":
+          description: Function versions.
+  /api/apps/{app_id}/functions/{name}/versions/{version_number}/rollback:
+    post:
+      operationId: rollbackAppFunctionVersion
+      summary: Roll back the active function version
+      parameters:
+        - $ref: "#/components/parameters/AppId"
+        - $ref: "#/components/parameters/FunctionName"
+        - name: version_number
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Function rolled back.
+  /api/apps/{app_id}/functions/{name}/invocations:
+    get:
+      operationId: listAppFunctionInvocations
+      summary: List function invocations
+      parameters:
+        - $ref: "#/components/parameters/AppId"
+        - $ref: "#/components/parameters/FunctionName"
+      responses:
+        "200":
+          description: Function invocations.
+  /api/apps/{app_id}/functions/{name}/invocations/{invocation_id}/retry:
+    post:
+      operationId: retryAppFunctionInvocation
+      summary: Retry a function invocation
+      parameters:
+        - $ref: "#/components/parameters/AppId"
+        - $ref: "#/components/parameters/FunctionName"
+        - name: invocation_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Function retry result.
+  /api/apps/{app_id}/functions/editor/lint:
+    post:
+      operationId: lintFunctionSource
+      summary: Lint function source
+      parameters:
+        - $ref: "#/components/parameters/AppId"
+      responses:
+        "200":
+          description: Lint result.
+  /api/apps/{app_id}/functions/editor/dry-run:
+    post:
+      operationId: dryRunFunctionSource
+      summary: Dry-run function source without saving it
+      parameters:
+        - $ref: "#/components/parameters/AppId"
+      responses:
+        "200":
+          description: Dry-run result.
   /api/apps/{app_id}/functions/endpoints/{endpoint_slug}:
     post:
       operationId: invokeAppFunction
@@ -645,6 +741,52 @@ paths:
       responses:
         "201":
           description: Backup created.
+  /api/admin/backups/restore-pending:
+    get:
+      operationId: getRestorePending
+      summary: Inspect pending backup restore state
+      responses:
+        "200":
+          description: Pending restore state.
+    delete:
+      operationId: clearRestorePending
+      summary: Clear pending backup restore state
+      responses:
+        "200":
+          description: Pending restore cleared.
+  /api/admin/backups/{backup_name}/download:
+    get:
+      operationId: downloadBackup
+      summary: Download a SQLite backup
+      parameters:
+        - name: backup_name
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Backup file.
+  /api/admin/backups/{backup_name}/restore:
+    post:
+      operationId: restoreBackup
+      summary: Schedule a backup restore for the next restart
+      parameters:
+        - name: backup_name
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Restore scheduled.
+  /api/admin/ops/metrics:
+    get:
+      operationId: getOpsMetrics
+      summary: Return production operation metrics
+      responses:
+        "200":
+          description: Ops metrics.
   /api/admin/ops/diagnostics:
     get:
       operationId: getPlatformDiagnostics
@@ -688,6 +830,12 @@ components:
         type: string
     UserId:
       name: user_id
+      in: path
+      required: true
+      schema:
+        type: string
+    FunctionName:
+      name: name
       in: path
       required: true
       schema:

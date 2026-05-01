@@ -26,9 +26,30 @@ pub async fn make_app_without_seeded_key() -> (Router, tempfile::TempDir) {
     make_app_with_seeded_key(false).await
 }
 
+pub async fn make_app_with_functions_without_seeded_key() -> (Router, tempfile::TempDir) {
+    make_app_with_options(false, true, false).await
+}
+
+pub async fn make_file_db_app_without_seeded_key() -> (Router, tempfile::TempDir) {
+    make_app_with_options(false, false, true).await
+}
+
 async fn make_app_with_seeded_key(seed_app_key: bool) -> (Router, tempfile::TempDir) {
-    let pool = peanut::db::init_db("sqlite::memory:").await.unwrap();
+    make_app_with_options(seed_app_key, false, false).await
+}
+
+async fn make_app_with_options(
+    seed_app_key: bool,
+    functions_enabled: bool,
+    file_backed_db: bool,
+) -> (Router, tempfile::TempDir) {
     let dir = tempfile::tempdir().unwrap();
+    let database_url = if file_backed_db {
+        format!("sqlite://{}", dir.path().join("peanut.db").display())
+    } else {
+        "sqlite::memory:".to_string()
+    };
+    let pool = peanut::db::init_db(&database_url).await.unwrap();
     if seed_app_key {
         seed_test_app_key(&pool).await;
     }
@@ -42,7 +63,7 @@ async fn make_app_with_seeded_key(seed_app_key: bool) -> (Router, tempfile::Temp
             allowed_client_ids: Arc::new(Vec::new()),
         },
         functions: peanut::FunctionsState {
-            enabled: false,
+            enabled: functions_enabled,
             allow_network: false,
             work_dir: dir.path().join("functions"),
             max_concurrent: 4,
@@ -58,13 +79,13 @@ async fn make_app_with_seeded_key(seed_app_key: bool) -> (Router, tempfile::Temp
         rate_limit_state: Arc::new(dashmap::DashMap::new()),
         auth_rate_limit_state: Arc::new(dashmap::DashMap::new()),
         app_key_rate_limit_state: Arc::new(dashmap::DashMap::new()),
-        database_url: Arc::new("sqlite::memory:".to_string()),
+        database_url: Arc::new(database_url.clone()),
         trust_proxy_headers: false,
         multipart_stale_hours: 24,
         started_at: std::time::Instant::now(),
     };
     let config = peanut::config::AppConfig {
-        database_url: "sqlite::memory:".to_string(),
+        database_url,
         storage_dir: dir.path().to_path_buf(),
         bind_addr: "127.0.0.1:0".parse().unwrap(),
         jwt_secret: "test_secret".to_string(),
@@ -74,7 +95,7 @@ async fn make_app_with_seeded_key(seed_app_key: bool) -> (Router, tempfile::Temp
         auth_allowed_client_ids: Vec::new(),
         push_ntfy_enabled: false,
         push_web_push_enabled: false,
-        functions_enabled: false,
+        functions_enabled,
         backup_on_startup: false,
         trust_proxy_headers: false,
         multipart_stale_hours: 24,

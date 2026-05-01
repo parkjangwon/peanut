@@ -446,7 +446,7 @@ pub(super) async fn load_invocation(
     invocation_id: &str,
 ) -> Result<FunctionInvocation, LoadInvocationError> {
     sqlx::query_as::<_, FunctionInvocation>(
-        "SELECT id, function_id, status, request_json, response_json, error, duration_ms, invoke_mode, function_version_id, retry_count, parent_invocation_id, created_at, finished_at FROM function_invocations WHERE function_id = ? AND id = ?"
+        "SELECT id, app_id, function_id, status, request_json, response_json, error, duration_ms, invoke_mode, function_version_id, retry_count, parent_invocation_id, created_at, finished_at FROM function_invocations WHERE function_id = ? AND id = ?"
     )
     .bind(function_id)
     .bind(invocation_id)
@@ -473,7 +473,7 @@ pub(super) async fn load_function_by_name(
     name: &str,
 ) -> Result<FunctionDetail, LoadFunctionError> {
     sqlx::query_as::<_, FunctionDetail>(
-        "SELECT id, name, display_name, endpoint_slug, runtime, source_code, invoke_policy, env_json, api_key_hash, allowed_origins_json, rate_limit_per_minute, CASE WHEN api_key_hash IS NULL OR api_key_hash = '' THEN 0 ELSE 1 END AS api_key_present, timeout_ms, enabled, active_version_number, active_version_id, secret_key_count, created_by, updated_by, created_at, updated_at FROM functions WHERE name = ?",
+        "SELECT id, app_id, name, display_name, endpoint_slug, runtime, source_code, invoke_policy, env_json, api_key_hash, allowed_origins_json, rate_limit_per_minute, CASE WHEN api_key_hash IS NULL OR api_key_hash = '' THEN 0 ELSE 1 END AS api_key_present, timeout_ms, enabled, active_version_number, active_version_id, secret_key_count, created_by, updated_by, created_at, updated_at FROM functions WHERE name = ?",
     )
     .bind(name)
     .fetch_optional(pool)
@@ -487,7 +487,7 @@ pub(super) async fn load_function_by_endpoint(
     endpoint_slug: &str,
 ) -> Result<FunctionDetail, LoadFunctionError> {
     sqlx::query_as::<_, FunctionDetail>(
-        "SELECT id, name, display_name, endpoint_slug, runtime, source_code, invoke_policy, env_json, api_key_hash, allowed_origins_json, rate_limit_per_minute, CASE WHEN api_key_hash IS NULL OR api_key_hash = '' THEN 0 ELSE 1 END AS api_key_present, timeout_ms, enabled, active_version_number, active_version_id, secret_key_count, created_by, updated_by, created_at, updated_at FROM functions WHERE endpoint_slug = ?",
+        "SELECT id, app_id, name, display_name, endpoint_slug, runtime, source_code, invoke_policy, env_json, api_key_hash, allowed_origins_json, rate_limit_per_minute, CASE WHEN api_key_hash IS NULL OR api_key_hash = '' THEN 0 ELSE 1 END AS api_key_present, timeout_ms, enabled, active_version_number, active_version_id, secret_key_count, created_by, updated_by, created_at, updated_at FROM functions WHERE endpoint_slug = ?",
     )
     .bind(endpoint_slug)
     .fetch_optional(pool)

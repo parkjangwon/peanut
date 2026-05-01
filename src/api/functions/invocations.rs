@@ -21,7 +21,7 @@ pub async fn list_function_invocations(
     };
 
     match sqlx::query_as::<_, FunctionInvocation>(
-        "SELECT id, function_id, status, request_json, response_json, error, duration_ms, invoke_mode, function_version_id, retry_count, parent_invocation_id, created_at, finished_at FROM function_invocations WHERE function_id = ? ORDER BY created_at DESC LIMIT 20",
+        "SELECT id, app_id, function_id, status, request_json, response_json, error, duration_ms, invoke_mode, function_version_id, retry_count, parent_invocation_id, created_at, finished_at FROM function_invocations WHERE function_id = ? ORDER BY created_at DESC LIMIT 20",
     )
     .bind(&function.id)
     .fetch_all(&state.pool)
@@ -103,16 +103,16 @@ pub async fn list_function_invocation_attempts(
     match sqlx::query_as::<_, FunctionInvocation>(
         r#"
         WITH RECURSIVE attempt_chain AS (
-            SELECT id, function_id, status, request_json, response_json, error, duration_ms, invoke_mode, function_version_id, retry_count, parent_invocation_id, created_at, finished_at
+            SELECT id, app_id, function_id, status, request_json, response_json, error, duration_ms, invoke_mode, function_version_id, retry_count, parent_invocation_id, created_at, finished_at
             FROM function_invocations
             WHERE function_id = ? AND id = ?
             UNION ALL
-            SELECT fi.id, fi.function_id, fi.status, fi.request_json, fi.response_json, fi.error, fi.duration_ms, fi.invoke_mode, fi.function_version_id, fi.retry_count, fi.parent_invocation_id, fi.created_at, fi.finished_at
+            SELECT fi.id, fi.app_id, fi.function_id, fi.status, fi.request_json, fi.response_json, fi.error, fi.duration_ms, fi.invoke_mode, fi.function_version_id, fi.retry_count, fi.parent_invocation_id, fi.created_at, fi.finished_at
             FROM function_invocations fi
             JOIN attempt_chain ac ON fi.parent_invocation_id = ac.id
             WHERE fi.function_id = ?
         )
-        SELECT id, function_id, status, request_json, response_json, error, duration_ms, invoke_mode, function_version_id, retry_count, parent_invocation_id, created_at, finished_at
+        SELECT id, app_id, function_id, status, request_json, response_json, error, duration_ms, invoke_mode, function_version_id, retry_count, parent_invocation_id, created_at, finished_at
         FROM attempt_chain
         ORDER BY retry_count ASC, created_at ASC
         "#,

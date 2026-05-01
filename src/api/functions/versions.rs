@@ -23,6 +23,7 @@ pub async fn list_function_versions(
         r#"
         SELECT
             fv.id,
+            fv.app_id,
             fv.function_id,
             fv.version_number,
             fv.runtime,

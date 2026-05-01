@@ -69,10 +69,118 @@ export type FunctionSummary = {
   id: string;
   app_id: string;
   name: string;
+  display_name: string;
   endpoint_slug: string;
-  status: string;
-  created_at: string;
+  runtime: string;
+  invoke_policy: string;
+  rate_limit_per_minute: number;
+  api_key_present: boolean;
+  timeout_ms: number;
+  enabled: boolean;
+  active_version_number: number;
+  secret_key_count: number;
   updated_at: string;
+};
+
+export type FunctionDetail = FunctionSummary & {
+  source_code: string;
+  env_json: string;
+  allowed_origins_json: string;
+  active_version_id: string;
+  created_by: string;
+  updated_by: string;
+  created_at: string;
+};
+
+export type FunctionVersionSummary = {
+  id: string;
+  app_id: string;
+  function_id: string;
+  version_number: number;
+  runtime: string;
+  invoke_policy: string;
+  timeout_ms: number;
+  created_by: string;
+  created_at: string;
+  secret_key_count: number;
+  is_active: boolean;
+};
+
+export type FunctionInvocation = {
+  id: string;
+  app_id: string;
+  function_id: string;
+  status: string;
+  request_json?: string | null;
+  response_json?: string | null;
+  error?: string | null;
+  duration_ms?: number | null;
+  invoke_mode: string;
+  function_version_id?: string | null;
+  retry_count: number;
+  parent_invocation_id?: string | null;
+  created_at: string;
+  finished_at?: string | null;
+};
+
+export type BackupSummary = {
+  name: string;
+  size_bytes: number;
+  modified_at: string;
+};
+
+export type RestorePendingSummary = {
+  backup_name: string;
+  exists: boolean;
+  size_bytes?: number | null;
+  modified_at?: string | null;
+};
+
+export type BackupsResponse = {
+  backups: BackupSummary[];
+  restore_pending?: RestorePendingSummary | null;
+};
+
+export type OpsMetrics = {
+  database: {
+    size_bytes: number;
+    page_count: number;
+    page_size: number;
+    freelist_count: number;
+    backup_count: number;
+    last_backup_at?: string | null;
+    restore_pending: boolean;
+  };
+  storage: {
+    ok: boolean;
+    error?: string | null;
+    root: string;
+    object_count: number;
+    total_bytes: number;
+    multipart_stale_count: number;
+  };
+  push: {
+    queued: number;
+    retry_scheduled: number;
+    retry_overdue: number;
+    failed_recent: number;
+  };
+  functions: {
+    enabled: boolean;
+    network_allowed: boolean;
+    work_dir: string;
+    running_limit: number;
+    memory_limit_mb: number;
+    source_limit_bytes: number;
+    output_limit_bytes: number;
+    invocations_24h: number;
+    failures_24h: number;
+    timeouts_24h: number;
+  };
+  system: {
+    version: string;
+    uptime_seconds: number;
+  };
 };
 
 export type ActivityEvent = {
@@ -193,4 +301,18 @@ export async function logoutAdmin() {
     auth: false,
     body: JSON.stringify({ refresh_token }),
   });
+}
+
+export async function downloadBackup(name: string) {
+  const token = readAccessToken();
+  const response = await fetch(
+    `${API_BASE}/api/admin/backups/${encodeURIComponent(name)}/download`,
+    {
+      headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+    },
+  );
+  if (!response.ok) {
+    throw new Error(`Backup download failed with ${response.status}`);
+  }
+  return response.blob();
 }

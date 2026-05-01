@@ -3,6 +3,7 @@ use super::*;
 #[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
 pub struct FunctionSummary {
     pub id: String,
+    pub app_id: String,
     pub name: String,
     pub display_name: String,
     pub endpoint_slug: String,
@@ -20,6 +21,7 @@ pub struct FunctionSummary {
 #[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
 pub struct FunctionDetail {
     pub id: String,
+    pub app_id: String,
     pub name: String,
     pub display_name: String,
     pub endpoint_slug: String,
@@ -45,6 +47,7 @@ pub struct FunctionDetail {
 #[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
 pub struct FunctionInvocation {
     pub id: String,
+    pub app_id: String,
     pub function_id: String,
     pub status: String,
     pub request_json: Option<String>,
@@ -90,6 +93,7 @@ pub struct InvokeFunctionResponse {
 #[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
 pub struct FunctionVersionSummary {
     pub id: String,
+    pub app_id: String,
     pub function_id: String,
     pub version_number: i64,
     pub runtime: String,

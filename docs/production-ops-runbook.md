@@ -23,7 +23,7 @@ JWT_SECRET=replace-me docker compose -f docker-compose.yml -f docker-compose.bui
 PEANUT_ADMIN_TOKEN=... scripts/verify-compose.sh
 ```
 
-Without `PEANUT_ADMIN_TOKEN`, the verifier still checks compose startup, readiness, and Deno availability. With a token, it also checks app-scoped diagnostics and Function editor routes under `/api/apps/:app_id/...`.
+Without `PEANUT_ADMIN_TOKEN`, the verifier still checks compose startup, readiness, and Deno availability. With a token, it also checks app auth, Data CRUD, Storage CRUD, Function create/invoke/invocation listing, Push diagnostics/test message, backup download, and restore-pending safety under app-scoped routes.
 
 ## App Isolation Minimum
 
@@ -36,6 +36,8 @@ Peanut is pre-public and does not expose legacy global API routes. Production tr
 - Functions: `/api/apps/:app_id/functions/...`
 
 Before opening traffic after a deploy, confirm `/api/ready` reports `"ready": true` and `/api/admin/ops/diagnostics` reports `"ok": true`. These checks verify the default app, app_id columns, app-scoped unique indexes, and duplicate invariant checks.
+
+The embedded console is part of the binary and should be treated as the primary operator surface for public beta. The Functions tab must support create/edit/lint/dry-run/invoke/version rollback/invocation retry, and the Operations tab must expose readiness, diagnostics, metrics, backup download, and pending restore state without requiring ad hoc JSON inspection.
 
 ## Migration Failure Rollback
 

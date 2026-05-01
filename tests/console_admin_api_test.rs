@@ -250,3 +250,95 @@ async fn console_admin_can_manage_push_subscriptions_and_send_test_message() {
     .await;
     assert_eq!(delete.status(), StatusCode::OK);
 }
+
+#[tokio::test]
+async fn console_admin_can_manage_function_workbench_without_app_key() {
+    let (app, _dir) = common::make_app_with_functions_without_seeded_key().await;
+    let token = admin_token(&app).await;
+
+    let create = common::post_json_authed(
+        &app,
+        "/api/apps/default/functions",
+        &token,
+        serde_json::json!({
+            "name": "hello_console",
+            "display_name": "Hello Console",
+            "endpoint_slug": "hello-console",
+            "runtime": "javascript",
+            "source_code": "export default function handler(ctx) { return { ok: true, input: ctx.request.input } }",
+            "invoke_policy": "authenticated",
+            "timeout_ms": 3000,
+            "enabled": true
+        }),
+    )
+    .await;
+    assert_eq!(create.status(), StatusCode::CREATED);
+    let body: Value = common::response_json(create).await;
+    assert_eq!(body["function"]["app_id"], "default");
+    assert_eq!(body["function"]["active_version_number"], 1);
+
+    let list = common::get_authed(&app, "/api/apps/default/functions", &token).await;
+    assert_eq!(list.status(), StatusCode::OK);
+    let body: Value = common::response_json(list).await;
+    assert_eq!(body["functions"][0]["app_id"], "default");
+    assert_eq!(body["functions"][0]["name"], "hello_console");
+
+    let versions = common::get_authed(
+        &app,
+        "/api/apps/default/functions/hello_console/versions",
+        &token,
+    )
+    .await;
+    assert_eq!(versions.status(), StatusCode::OK);
+    let body: Value = common::response_json(versions).await;
+    assert_eq!(body["versions"][0]["app_id"], "default");
+    assert!(body["versions"][0]["is_active"].as_bool().unwrap());
+
+    let invoke = common::post_json_authed(
+        &app,
+        "/api/apps/default/functions/endpoints/hello-console",
+        &token,
+        serde_json::json!({ "input": { "from": "console" } }),
+    )
+    .await;
+    assert_eq!(invoke.status(), StatusCode::OK);
+    let body: Value = common::response_json(invoke).await;
+    assert_eq!(body["status"], "succeeded");
+
+    let invocations = common::get_authed(
+        &app,
+        "/api/apps/default/functions/hello_console/invocations",
+        &token,
+    )
+    .await;
+    assert_eq!(invocations.status(), StatusCode::OK);
+    let body: Value = common::response_json(invocations).await;
+    assert_eq!(body["invocations"][0]["app_id"], "default");
+}
+
+#[tokio::test]
+async fn console_admin_ops_exposes_metrics_and_backup_workflow() {
+    let (app, _dir) = common::make_file_db_app_without_seeded_key().await;
+    let token = admin_token(&app).await;
+
+    let metrics = common::get_authed(&app, "/api/admin/ops/metrics", &token).await;
+    assert_eq!(metrics.status(), StatusCode::OK);
+    let body: Value = common::response_json(metrics).await;
+    assert_eq!(body["database"]["restore_pending"], false);
+    assert!(body["storage"]["ok"].as_bool().unwrap());
+
+    let create =
+        common::post_json_authed(&app, "/api/admin/backups", &token, serde_json::json!({})).await;
+    assert_eq!(create.status(), StatusCode::CREATED);
+    let body: Value = common::response_json(create).await;
+    assert!(body["backup"]["name"]
+        .as_str()
+        .unwrap()
+        .ends_with(".backup"));
+
+    let list = common::get_authed(&app, "/api/admin/backups", &token).await;
+    assert_eq!(list.status(), StatusCode::OK);
+    let body: Value = common::response_json(list).await;
+    assert_eq!(body["backups"].as_array().unwrap().len(), 1);
+    assert!(body["restore_pending"].is_null());
+}
