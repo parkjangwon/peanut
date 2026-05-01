@@ -64,6 +64,7 @@ pub struct AppState {
     pub last_backup_at: Arc<tokio::sync::RwLock<Option<chrono::DateTime<chrono::Local>>>>,
     pub rate_limit_state: Arc<DashMap<IpAddr, (u32, Instant)>>,
     pub auth_rate_limit_state: Arc<DashMap<IpAddr, VecDeque<Instant>>>,
+    pub app_key_rate_limit_state: Arc<DashMap<String, (u32, Instant)>>,
     pub database_url: Arc<String>,
     pub trust_proxy_headers: bool,
     pub multipart_stale_hours: u64,

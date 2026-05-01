@@ -5,6 +5,7 @@ use axum::{
     response::Response,
 };
 use sqlx::FromRow;
+use tokio::time::{Duration, Instant};
 
 use crate::{
     api::common::json_error,
@@ -24,7 +25,10 @@ struct StoredSdkAppKey {
     key_type: String,
     scopes_json: String,
     created_by: String,
+    rate_limit_per_minute: Option<i64>,
 }
+
+const DEFAULT_SDK_KEY_RATE_LIMIT_PER_MINUTE: u32 = 300;
 
 pub async fn sdk_auth_middleware(
     State(state): State<crate::AppState>,
@@ -41,7 +45,13 @@ pub async fn sdk_auth_middleware(
         .filter(|value| !value.is_empty())
         .ok_or_else(|| json_error(StatusCode::UNAUTHORIZED, "missing X-Peanut-Api-Key"))?;
 
-    let principal = authenticate_sdk_app_key(&state, raw_key).await?;
+    let authenticated_key = authenticate_sdk_app_key(&state, raw_key).await?;
+    enforce_app_key_rate_limit(
+        &state,
+        &authenticated_key.key_id,
+        authenticated_key.rate_limit,
+    )?;
+    let principal = authenticated_key.principal;
     if principal.app_id.as_deref() != Some(path_app_id.as_str()) {
         return Err(json_error(
             StatusCode::FORBIDDEN,
@@ -69,14 +79,20 @@ pub async fn sdk_auth_middleware(
     Ok(next.run(req).await)
 }
 
+struct AuthenticatedSdkAppKey {
+    key_id: String,
+    principal: Principal,
+    rate_limit: u32,
+}
+
 async fn authenticate_sdk_app_key(
     state: &crate::AppState,
     raw_key: &str,
-) -> Result<Principal, Response> {
+) -> Result<AuthenticatedSdkAppKey, Response> {
     let token_hash = crate::api::auth::hash_opaque_token(raw_key);
     let stored = sqlx::query_as::<_, StoredSdkAppKey>(
         r#"
-        SELECT id, app_id, key_type, scopes_json, created_by
+        SELECT id, app_id, key_type, scopes_json, created_by, rate_limit_per_minute
         FROM app_keys
         WHERE key_hash = ?
           AND revoked_at IS NULL
@@ -102,9 +118,47 @@ async fn authenticate_sdk_app_key(
         .execute(&state.pool)
         .await;
 
+    let key_id = stored.id.clone();
+    let rate_limit = stored
+        .rate_limit_per_minute
+        .and_then(|value| u32::try_from(value).ok())
+        .filter(|value| *value > 0)
+        .unwrap_or(DEFAULT_SDK_KEY_RATE_LIMIT_PER_MINUTE);
     let principal = Principal::app_key(stored.id, stored.app_id, is_admin, scopes);
     let _ = stored.created_by;
-    Ok(principal)
+    Ok(AuthenticatedSdkAppKey {
+        key_id,
+        principal,
+        rate_limit,
+    })
+}
+
+fn enforce_app_key_rate_limit(
+    state: &crate::AppState,
+    key_id: &str,
+    max_per_minute: u32,
+) -> Result<(), Response> {
+    let now = Instant::now();
+    let mut entry = state
+        .app_key_rate_limit_state
+        .entry(key_id.to_string())
+        .or_insert((0, now));
+    let (count, last_reset) = entry.value_mut();
+
+    if now.duration_since(*last_reset) > Duration::from_secs(60) {
+        *count = 1;
+        *last_reset = now;
+        return Ok(());
+    }
+
+    if *count >= max_per_minute {
+        return Err(json_error(
+            StatusCode::TOO_MANY_REQUESTS,
+            "app key rate limit exceeded",
+        ));
+    }
+    *count += 1;
+    Ok(())
 }
 
 fn app_id_from_sdk_path(path: &str) -> Option<String> {

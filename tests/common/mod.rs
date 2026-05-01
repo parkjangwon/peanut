@@ -44,6 +44,7 @@ pub async fn make_app() -> (Router, tempfile::TempDir) {
         last_backup_at: Arc::new(tokio::sync::RwLock::new(None)),
         rate_limit_state: Arc::new(dashmap::DashMap::new()),
         auth_rate_limit_state: Arc::new(dashmap::DashMap::new()),
+        app_key_rate_limit_state: Arc::new(dashmap::DashMap::new()),
         database_url: Arc::new("sqlite::memory:".to_string()),
         trust_proxy_headers: false,
         multipart_stale_hours: 24,

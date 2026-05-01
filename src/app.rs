@@ -126,6 +126,10 @@ fn build_protected_routes(
             delete(crate::api::keys::revoke_app_key),
         )
         .route(
+            "/apps/:app_id/keys/:key_id/rotate",
+            post(crate::api::keys::rotate_app_key),
+        )
+        .route(
             "/apps/:app_id/auth/providers",
             get(crate::api::auth::list_auth_provider_configs),
         )
