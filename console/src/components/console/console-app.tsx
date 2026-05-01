@@ -349,7 +349,7 @@ function ConsoleHeader({
         <div className="flex items-center gap-3">
           <div className="hidden text-right text-sm sm:block">
             <div className="font-medium">{user.email}</div>
-            <div className="text-xs text-muted-foreground">Platform admin</div>
+            <div className="text-xs text-muted-foreground">Platform {user.admin_role}</div>
           </div>
           <Button size="icon" variant="outline" onClick={onLogout}>
             <LogOut className="h-4 w-4" />
@@ -443,7 +443,9 @@ function OverviewView({ apps, app }: { apps: AppSummary[]; app: AppSummary }) {
     queryFn: async () =>
       (await apiFetch<{ events?: ActivityEvent[]; activity?: ActivityEvent[] }>(
         `/api/apps/${app.id}/activity`,
-      )).events ?? [],
+      )).events ?? (await apiFetch<{ events?: ActivityEvent[]; activity?: ActivityEvent[] }>(
+        `/api/apps/${app.id}/activity`,
+      )).activity ?? [],
   });
 
   return (
@@ -1286,10 +1288,12 @@ function PushView({ app }: { app: AppSummary }) {
 function ActivityView({ app }: { app: AppSummary }) {
   const activity = useQuery({
     queryKey: ["activity", app.id],
-    queryFn: async () =>
-      (await apiFetch<{ events?: ActivityEvent[]; activity?: ActivityEvent[] }>(
+    queryFn: async () => {
+      const response = await apiFetch<{ events?: ActivityEvent[]; activity?: ActivityEvent[] }>(
         `/api/apps/${app.id}/activity`,
-      )).events ?? [],
+      );
+      return response.events ?? response.activity ?? [];
+    },
   });
   return (
     <Section title="Activity" description="A single feed for app mutations across auth, data, storage, functions, push, and keys.">
@@ -1326,7 +1330,14 @@ function OpsView() {
     onError: (error: Error) => toast.error(error.message),
   });
   const scheduleRestore = useMutation({
-    mutationFn: (name: string) => apiFetch(`/api/admin/backups/${name}/restore`, { method: "POST" }),
+    mutationFn: (name: string) =>
+      apiFetch(`/api/admin/backups/${name}/restore`, {
+        method: "POST",
+        body: JSON.stringify({
+          confirmation: name,
+          reason: "scheduled from Peanut Console",
+        }),
+      }),
     onSuccess: () => {
       toast.success("Restore scheduled");
       queryClient.invalidateQueries({ queryKey: ["ops", "backups"] });
@@ -1551,7 +1562,7 @@ function ActivityList({ events, loading }: { events: ActivityEvent[]; loading?: 
           <div className="min-w-0">
             <div className="font-medium">{event.action}</div>
             <div className="truncate text-sm text-muted-foreground">
-              {event.resource_type} / {event.resource_id}
+              {event.resource_type ?? event.target_type} / {event.resource_id ?? event.target_id}
             </div>
           </div>
           <div className="shrink-0 font-mono text-xs text-muted-foreground">{event.created_at}</div>

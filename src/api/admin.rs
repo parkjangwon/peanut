@@ -18,6 +18,7 @@ pub struct AdminUser {
     pub email: String,
     pub is_active: bool,
     pub is_admin: bool,
+    pub admin_role: String,
     pub created_at: String,
 }
 
@@ -55,6 +56,11 @@ pub struct CreateServiceTokenResponse {
     pub token: String,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UpdateAdminRoleRequest {
+    pub admin_role: String,
+}
+
 pub async fn list_users(
     State(state): State<crate::AppState>,
     Extension(claims): Extension<Claims>,
@@ -64,7 +70,7 @@ pub async fn list_users(
     }
 
     match sqlx::query_as::<_, AdminUser>(
-        "SELECT id, email, is_active, is_admin, created_at FROM users ORDER BY created_at DESC, email ASC",
+        "SELECT id, email, is_active, is_admin, admin_role, created_at FROM users ORDER BY created_at DESC, email ASC",
     )
     .fetch_all(&state.pool)
     .await
@@ -278,6 +284,63 @@ pub async fn deactivate_user(
     .await
 }
 
+pub async fn update_admin_role(
+    State(state): State<crate::AppState>,
+    Extension(claims): Extension<Claims>,
+    Path(user_id): Path<String>,
+    Json(payload): Json<UpdateAdminRoleRequest>,
+) -> Response {
+    if let Some(response) = require_owner(&state.pool, &claims).await {
+        return response;
+    }
+    let role = match normalize_admin_role(&payload.admin_role) {
+        Ok(role) => role,
+        Err(message) => return json_error(StatusCode::BAD_REQUEST, message),
+    };
+    if claims.sub == user_id && role != "owner" {
+        match owner_count(&state.pool).await {
+            Ok(count) if count <= 1 => {
+                return json_error(StatusCode::BAD_REQUEST, "last owner cannot be demoted")
+            }
+            Err(_) => {
+                return json_error(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "failed to inspect owner count",
+                )
+            }
+            _ => {}
+        }
+    }
+
+    match sqlx::query("UPDATE users SET is_admin = TRUE, admin_role = ? WHERE id = ?")
+        .bind(role)
+        .bind(&user_id)
+        .execute(&state.pool)
+        .await
+    {
+        Ok(result) if result.rows_affected() == 0 => {
+            json_error(StatusCode::NOT_FOUND, "user not found")
+        }
+        Ok(_) => {
+            let _ = crate::api::audit::record_audit_log(
+                &state.pool,
+                Some(&claims.app_id),
+                &claims,
+                "admin.role.updated",
+                "user",
+                &user_id,
+                serde_json::json!({ "admin_role": role }),
+            )
+            .await;
+            json_message(StatusCode::OK, "admin role updated")
+        }
+        Err(_) => json_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "failed to update admin role",
+        ),
+    }
+}
+
 async fn set_user_active(
     pool: &sqlx::SqlitePool,
     app_id: &str,
@@ -317,6 +380,49 @@ async fn set_user_active(
 
 fn sqlite_timestamp(datetime: chrono::DateTime<Utc>) -> String {
     datetime.format("%Y-%m-%d %H:%M:%S").to_string()
+}
+
+async fn require_owner(pool: &sqlx::SqlitePool, claims: &Claims) -> Option<Response> {
+    if !claims.is_admin {
+        return Some(json_error(StatusCode::FORBIDDEN, "admin access required"));
+    }
+    match sqlx::query_as::<_, (String,)>(
+        "SELECT admin_role FROM users WHERE id = ? AND is_admin = TRUE",
+    )
+    .bind(&claims.sub)
+    .fetch_optional(pool)
+    .await
+    {
+        Ok(Some((role,))) if role == "owner" => None,
+        Ok(Some(_)) => Some(json_error(
+            StatusCode::FORBIDDEN,
+            "admin role does not have required access",
+        )),
+        Ok(None) => Some(json_error(StatusCode::UNAUTHORIZED, "admin user not found")),
+        Err(_) => Some(json_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "failed to validate admin role",
+        )),
+    }
+}
+
+fn normalize_admin_role(value: &str) -> Result<&'static str, &'static str> {
+    match value.trim() {
+        "owner" => Ok("owner"),
+        "developer" => Ok("developer"),
+        "operator" => Ok("operator"),
+        "viewer" => Ok("viewer"),
+        _ => Err("admin_role must be owner, developer, operator, or viewer"),
+    }
+}
+
+async fn owner_count(pool: &sqlx::SqlitePool) -> Result<i64, sqlx::Error> {
+    sqlx::query_as::<_, (i64,)>(
+        "SELECT COUNT(*) FROM users WHERE is_admin = TRUE AND admin_role = 'owner'",
+    )
+    .fetch_one(pool)
+    .await
+    .map(|row| row.0)
 }
 
 #[cfg(test)]
@@ -494,6 +600,53 @@ mod tests {
             .find(|user| user.email == "member@example.com")
             .unwrap();
         assert!(!deactivated_member.is_active);
+    }
+
+    #[tokio::test]
+    async fn test_owner_can_update_admin_role_and_last_owner_is_protected() {
+        let (state, _dir) = test_support::make_test_state().await;
+
+        let owner_register = auth::register(
+            State(state.clone()),
+            Json(auth::RegisterRequest {
+                email: "owner@example.com".to_string(),
+                password: "secret123".to_string(),
+            }),
+        )
+        .await;
+        let owner: auth::RegisterResponse = test_support::response_json(owner_register).await;
+
+        let member_register = auth::register(
+            State(state.clone()),
+            Json(auth::RegisterRequest {
+                email: "developer@example.com".to_string(),
+                password: "secret123".to_string(),
+            }),
+        )
+        .await;
+        let member: auth::RegisterResponse = test_support::response_json(member_register).await;
+
+        let update = update_admin_role(
+            State(state.clone()),
+            Extension(admin_claims(&owner.user.id)),
+            axum::extract::Path(member.user.id.clone()),
+            Json(UpdateAdminRoleRequest {
+                admin_role: "developer".to_string(),
+            }),
+        )
+        .await;
+        assert_eq!(update.status(), StatusCode::OK);
+
+        let demote_last_owner = update_admin_role(
+            State(state),
+            Extension(admin_claims(&owner.user.id)),
+            axum::extract::Path(owner.user.id.clone()),
+            Json(UpdateAdminRoleRequest {
+                admin_role: "viewer".to_string(),
+            }),
+        )
+        .await;
+        assert_eq!(demote_last_owner.status(), StatusCode::BAD_REQUEST);
     }
 
     #[tokio::test]

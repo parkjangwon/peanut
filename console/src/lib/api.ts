@@ -6,6 +6,7 @@ export type PeanutUser = {
   email: string;
   is_active: boolean;
   is_admin: boolean;
+  admin_role: string;
 };
 
 export type LoginResponse = {
@@ -186,11 +187,16 @@ export type OpsMetrics = {
 export type ActivityEvent = {
   id: string;
   app_id?: string | null;
+  actor_role?: string;
   action: string;
-  resource_type: string;
-  resource_id: string;
+  resource_type?: string;
+  resource_id?: string;
+  target_type?: string;
+  target_id?: string;
   actor_user_id?: string | null;
   metadata?: unknown;
+  metadata_json?: string;
+  request_id?: string | null;
   created_at: string;
 };
 

@@ -5,7 +5,7 @@ pub async fn me(
     Extension(claims): Extension<crate::auth::jwt::Claims>,
 ) -> Response {
     let user = sqlx::query_as::<_, UserSummary>(
-        "SELECT id, app_id, email, is_active, is_admin FROM users WHERE app_id = ? AND id = ?",
+        "SELECT id, app_id, email, is_active, is_admin, admin_role FROM users WHERE app_id = ? AND id = ?",
     )
     .bind(&claims.app_id)
     .bind(&claims.sub)

@@ -34,10 +34,11 @@ pub async fn register_for_app(
     };
 
     let is_admin = user_count.0 == 0;
+    let admin_role = if is_admin { "owner" } else { "viewer" };
     let is_active = is_admin;
 
     let result = sqlx::query(
-        "INSERT INTO users (id, app_id, email, password_hash, is_active, is_admin) VALUES (?, ?, ?, ?, ?, ?)",
+        "INSERT INTO users (id, app_id, email, password_hash, is_active, is_admin, admin_role) VALUES (?, ?, ?, ?, ?, ?, ?)",
     )
     .bind(&id)
     .bind(app_id)
@@ -45,6 +46,7 @@ pub async fn register_for_app(
     .bind(hashed)
     .bind(is_active)
     .bind(is_admin)
+    .bind(admin_role)
     .execute(pool)
     .await;
 
@@ -65,6 +67,7 @@ pub async fn register_for_app(
                         email: payload.email.trim().to_lowercase(),
                         is_active,
                         is_admin,
+                        admin_role: admin_role.to_string(),
                     },
                 }),
             )

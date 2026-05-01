@@ -32,6 +32,12 @@ pub struct BackupResponse {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RestoreBackupRequest {
+    pub confirmation: String,
+    pub reason: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RestoreBackupResponse {
     pub message: String,
     pub backup_name: String,
@@ -87,8 +93,8 @@ pub async fn create_backup(
     State(state): State<crate::AppState>,
     Extension(claims): Extension<Claims>,
 ) -> Response {
-    if !claims.is_admin {
-        return json_error(StatusCode::FORBIDDEN, "admin access required");
+    if let Some(response) = require_admin_role(&state.pool, &claims, "operator").await {
+        return response;
     }
 
     let backup_path = match crate::db::backup_db(&state.pool, &state.database_url).await {
@@ -162,8 +168,8 @@ pub async fn download_backup(
     Extension(claims): Extension<Claims>,
     Path(backup_name): Path<String>,
 ) -> Response {
-    if !claims.is_admin {
-        return json_error(StatusCode::FORBIDDEN, "admin access required");
+    if let Some(response) = require_admin_role(&state.pool, &claims, "owner").await {
+        return response;
     }
 
     let backup_path = match resolve_backup_path(&state.database_url, &backup_name) {
@@ -195,9 +201,16 @@ pub async fn restore_backup(
     State(state): State<crate::AppState>,
     Extension(claims): Extension<Claims>,
     Path(backup_name): Path<String>,
+    Json(payload): Json<RestoreBackupRequest>,
 ) -> Response {
-    if !claims.is_admin {
-        return json_error(StatusCode::FORBIDDEN, "admin access required");
+    if let Some(response) = require_admin_role(&state.pool, &claims, "owner").await {
+        return response;
+    }
+    if payload.confirmation != backup_name {
+        return json_error(
+            StatusCode::BAD_REQUEST,
+            "confirmation must match backup name",
+        );
     }
 
     let backup_path = match resolve_backup_path(&state.database_url, &backup_name) {
@@ -213,19 +226,78 @@ pub async fn restore_backup(
     };
 
     match write_restore_marker(db_dir, &backup_name).await {
-        Ok(()) => (
-            StatusCode::OK,
-            Json(RestoreBackupResponse {
-                message: "backup restore scheduled; restart Peanut to apply it".to_string(),
-                backup_name,
-                restart_required: true,
-            }),
-        )
-            .into_response(),
+        Ok(()) => {
+            let _ = crate::api::audit::record_audit_log(
+                &state.pool,
+                None,
+                &claims,
+                "backup.restore_scheduled",
+                "backup",
+                &backup_name,
+                serde_json::json!({ "reason": payload.reason }),
+            )
+            .await;
+            (
+                StatusCode::OK,
+                Json(RestoreBackupResponse {
+                    message: "backup restore scheduled; restart Peanut to apply it".to_string(),
+                    backup_name,
+                    restart_required: true,
+                }),
+            )
+                .into_response()
+        }
         Err(_) => json_error(
             StatusCode::INTERNAL_SERVER_ERROR,
             "failed to schedule backup restore",
         ),
+    }
+}
+
+async fn require_admin_role(
+    pool: &sqlx::SqlitePool,
+    claims: &Claims,
+    minimum_role: &str,
+) -> Option<Response> {
+    if !claims.is_admin {
+        return Some(json_error(StatusCode::FORBIDDEN, "admin access required"));
+    }
+    match load_admin_role(pool, &claims.sub).await {
+        Ok(Some(role)) if role_allows(&role, minimum_role) => None,
+        Ok(Some(_)) => Some(json_error(
+            StatusCode::FORBIDDEN,
+            "admin role does not have required access",
+        )),
+        Ok(None) => Some(json_error(StatusCode::UNAUTHORIZED, "admin user not found")),
+        Err(_) => Some(json_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "failed to validate admin role",
+        )),
+    }
+}
+
+async fn load_admin_role(
+    pool: &sqlx::SqlitePool,
+    user_id: &str,
+) -> Result<Option<String>, sqlx::Error> {
+    sqlx::query_as::<_, (String,)>("SELECT admin_role FROM users WHERE id = ? AND is_admin = TRUE")
+        .bind(user_id)
+        .fetch_optional(pool)
+        .await
+        .map(|row| row.map(|value| value.0))
+}
+
+fn role_allows(actual: &str, minimum: &str) -> bool {
+    role_rank(actual) >= role_rank(minimum)
+}
+
+fn role_rank(role: &str) -> i32 {
+    match role {
+        "owner" => 4,
+        "developer" => 3,
+        "operator" => 2,
+        "viewer" => 1,
+        _ => 0,
     }
 }
 
@@ -387,6 +459,7 @@ mod tests {
         let mut state = crate::test_support::make_test_state().await.0;
         state.pool = pool;
         state.database_url = std::sync::Arc::new(database_url);
+        seed_admin_role(&state.pool, "admin", "owner").await;
 
         let claims = Extension(Claims {
             sub: "admin".to_string(),
@@ -403,6 +476,73 @@ mod tests {
         assert_eq!(body.backups.len(), 1);
         assert!(body.backups[0].name.ends_with(".backup"));
         assert!(body.restore_pending.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_restore_requires_owner_role_and_confirmation() {
+        let dir = tempfile::tempdir().unwrap();
+        let database_url = format!("sqlite://{}", dir.path().join("peanut.db").display());
+        let pool = crate::db::init_db(&database_url).await.unwrap();
+        let mut state = crate::test_support::make_test_state().await.0;
+        state.pool = pool;
+        state.database_url = std::sync::Arc::new(database_url);
+        let backup_name = "peanut.db.20260429_010203.backup";
+        tokio::fs::write(dir.path().join(backup_name), b"backup")
+            .await
+            .unwrap();
+        seed_admin_role(&state.pool, "developer", "developer").await;
+        seed_admin_role(&state.pool, "owner", "owner").await;
+
+        let developer = Extension(Claims {
+            sub: "developer".to_string(),
+            app_id: crate::app_context::DEFAULT_APP_ID.to_string(),
+            exp: 9999999999,
+            is_admin: true,
+        });
+        let response = restore_backup(
+            State(state.clone()),
+            developer,
+            Path(backup_name.to_string()),
+            Json(RestoreBackupRequest {
+                confirmation: backup_name.to_string(),
+                reason: None,
+            }),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+
+        let owner = Extension(Claims {
+            sub: "owner".to_string(),
+            app_id: crate::app_context::DEFAULT_APP_ID.to_string(),
+            exp: 9999999999,
+            is_admin: true,
+        });
+        let response = restore_backup(
+            State(state),
+            owner,
+            Path(backup_name.to_string()),
+            Json(RestoreBackupRequest {
+                confirmation: "wrong".to_string(),
+                reason: Some("rollback drill".to_string()),
+            }),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+
+    async fn seed_admin_role(pool: &sqlx::SqlitePool, user_id: &str, role: &str) {
+        sqlx::query(
+            r#"
+            INSERT INTO users (id, app_id, email, password_hash, is_active, is_admin, admin_role)
+            VALUES (?, 'default', ?, 'unused', TRUE, TRUE, ?)
+            "#,
+        )
+        .bind(user_id)
+        .bind(format!("{user_id}@example.com"))
+        .bind(role)
+        .execute(pool)
+        .await
+        .unwrap();
     }
 
     #[tokio::test]

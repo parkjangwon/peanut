@@ -144,6 +144,8 @@ if [[ -n "${ADMIN_TOKEN}" ]]; then
   test -s /tmp/peanut-backup-download.db
   curl -fsS -X POST "${BASE_URL}/api/admin/backups/${BACKUP_NAME}/restore" \
     -H "Authorization: Bearer ${ADMIN_TOKEN}" \
+    -H "Content-Type: application/json" \
+    --data "{\"confirmation\":\"${BACKUP_NAME}\",\"reason\":\"compose restore-pending safety check\"}" \
     >/tmp/peanut-restore-scheduled.json
   grep -q '"restart_required":true' /tmp/peanut-restore-scheduled.json
   curl -fsS "${BASE_URL}/api/admin/backups/restore-pending" \

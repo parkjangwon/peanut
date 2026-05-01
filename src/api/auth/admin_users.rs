@@ -31,7 +31,7 @@ pub async fn list_admin_users(
 
     match sqlx::query_as::<_, UserSummary>(
         r#"
-        SELECT id, app_id, email, is_active, is_admin
+        SELECT id, app_id, email, is_active, is_admin, admin_role
         FROM users
         WHERE app_id = ?
         ORDER BY created_at DESC, email ASC

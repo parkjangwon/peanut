@@ -941,7 +941,7 @@ async fn find_or_create_oauth_user(
 
     let normalized_email = email.trim().to_ascii_lowercase();
     let user = match sqlx::query_as::<_, super::UserSummary>(
-        "SELECT id, app_id, email, is_active, is_admin FROM users WHERE app_id = ? AND email = ?",
+        "SELECT id, app_id, email, is_active, is_admin, admin_role FROM users WHERE app_id = ? AND email = ?",
     )
     .bind(app_id)
     .bind(&normalized_email)
@@ -993,14 +993,16 @@ async fn create_oauth_user(
         crate::auth::hash::hash_password(&crate::api::auth::generate_opaque_token())
             .map_err(|_| "failed to hash oauth user password".to_string())?;
     let is_admin = user_count.0 == 0;
+    let admin_role = if is_admin { "owner" } else { "viewer" };
     sqlx::query(
-        "INSERT INTO users (id, app_id, email, password_hash, is_active, is_admin) VALUES (?, ?, ?, ?, TRUE, ?)",
+        "INSERT INTO users (id, app_id, email, password_hash, is_active, is_admin, admin_role) VALUES (?, ?, ?, ?, TRUE, ?, ?)",
     )
     .bind(&user_id)
     .bind(app_id)
     .bind(email)
     .bind(password_hash)
     .bind(is_admin)
+    .bind(admin_role)
     .execute(&state.pool)
     .await
     .map_err(|_| "failed to create oauth user".to_string())?;
@@ -1010,6 +1012,7 @@ async fn create_oauth_user(
         email: email.to_string(),
         is_active: true,
         is_admin,
+        admin_role: admin_role.to_string(),
     })
 }
 

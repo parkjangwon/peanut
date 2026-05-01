@@ -51,6 +51,7 @@ async fn admin_console_auth_lifecycle_uses_platform_admin_without_app_key() {
     .await;
     assert_eq!(login.status(), StatusCode::OK);
     let body: Value = common::response_json(login).await;
+    assert_eq!(body["user"]["admin_role"], "owner");
     let access_token = body["access_token"].as_str().unwrap();
     let refresh_token = body["refresh_token"].as_str().unwrap();
 
@@ -59,6 +60,7 @@ async fn admin_console_auth_lifecycle_uses_platform_admin_without_app_key() {
     let me_body: Value = common::response_json(me).await;
     assert_eq!(me_body["user"]["email"], "console@example.com");
     assert_eq!(me_body["user"]["is_admin"], true);
+    assert_eq!(me_body["user"]["admin_role"], "owner");
 
     let refresh = common::post_json(
         &app,

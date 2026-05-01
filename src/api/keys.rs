@@ -52,8 +52,8 @@ pub async fn list_app_keys(
     Extension(claims): Extension<Claims>,
     Path(app_id): Path<String>,
 ) -> Response {
-    if !claims.is_admin {
-        return json_error(StatusCode::FORBIDDEN, "admin access required");
+    if let Some(response) = require_admin_role(&state.pool, &claims, "operator").await {
+        return response;
     }
 
     if !app_exists(&state.pool, &app_id).await {
@@ -83,8 +83,8 @@ pub async fn create_app_key(
     Path(app_id): Path<String>,
     Json(payload): Json<CreateAppKeyRequest>,
 ) -> Response {
-    if !claims.is_admin {
-        return json_error(StatusCode::FORBIDDEN, "admin access required");
+    if let Some(response) = require_admin_role(&state.pool, &claims, "owner").await {
+        return response;
     }
 
     if !app_exists(&state.pool, &app_id).await {
@@ -202,8 +202,8 @@ pub async fn revoke_app_key(
     Extension(claims): Extension<Claims>,
     Path((app_id, key_id)): Path<(String, String)>,
 ) -> Response {
-    if !claims.is_admin {
-        return json_error(StatusCode::FORBIDDEN, "admin access required");
+    if let Some(response) = require_admin_role(&state.pool, &claims, "owner").await {
+        return response;
     }
 
     match sqlx::query(
@@ -246,8 +246,8 @@ pub async fn rotate_app_key(
     Extension(claims): Extension<Claims>,
     Path((app_id, key_id)): Path<(String, String)>,
 ) -> Response {
-    if !claims.is_admin {
-        return json_error(StatusCode::FORBIDDEN, "admin access required");
+    if let Some(response) = require_admin_role(&state.pool, &claims, "owner").await {
+        return response;
     }
 
     let existing = match sqlx::query_as::<_, AppKeySummary>(
@@ -423,6 +423,44 @@ fn sqlite_timestamp(time: chrono::DateTime<Utc>) -> String {
     time.format("%Y-%m-%d %H:%M:%S").to_string()
 }
 
+async fn require_admin_role(
+    pool: &sqlx::SqlitePool,
+    claims: &Claims,
+    minimum_role: &str,
+) -> Option<Response> {
+    if !claims.is_admin {
+        return Some(json_error(StatusCode::FORBIDDEN, "admin access required"));
+    }
+    match sqlx::query_as::<_, (String,)>(
+        "SELECT admin_role FROM users WHERE id = ? AND is_admin = TRUE",
+    )
+    .bind(&claims.sub)
+    .fetch_optional(pool)
+    .await
+    {
+        Ok(Some((role,))) if role_rank(&role) >= role_rank(minimum_role) => None,
+        Ok(Some(_)) => Some(json_error(
+            StatusCode::FORBIDDEN,
+            "admin role does not have required access",
+        )),
+        Ok(None) => Some(json_error(StatusCode::UNAUTHORIZED, "admin user not found")),
+        Err(_) => Some(json_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "failed to validate admin role",
+        )),
+    }
+}
+
+fn role_rank(role: &str) -> i32 {
+    match role {
+        "owner" => 4,
+        "developer" => 3,
+        "operator" => 2,
+        "viewer" => 1,
+        _ => 0,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -528,5 +566,44 @@ mod tests {
         .await;
 
         assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    }
+
+    #[tokio::test]
+    async fn test_developer_cannot_rotate_app_key() {
+        let (state, _dir) = test_support::make_test_state().await;
+        let admin = register_admin(state.clone()).await;
+
+        let create = create_app_key(
+            State(state.clone()),
+            Extension(claims(&admin.user.id, true)),
+            Path(crate::app_context::DEFAULT_APP_ID.to_string()),
+            Json(CreateAppKeyRequest {
+                name: "Server".to_string(),
+                key_type: "server".to_string(),
+                scopes: None,
+                expires_in_days: None,
+                rate_limit_per_minute: None,
+            }),
+        )
+        .await;
+        assert_eq!(create.status(), StatusCode::CREATED);
+        let created: CreateAppKeyResponse = test_support::response_json(create).await;
+
+        sqlx::query("UPDATE users SET admin_role = 'developer' WHERE id = ?")
+            .bind(&admin.user.id)
+            .execute(&state.pool)
+            .await
+            .unwrap();
+
+        let rotated = rotate_app_key(
+            State(state),
+            Extension(claims(&admin.user.id, true)),
+            Path((
+                crate::app_context::DEFAULT_APP_ID.to_string(),
+                created.app_key.id,
+            )),
+        )
+        .await;
+        assert_eq!(rotated.status(), StatusCode::FORBIDDEN);
     }
 }

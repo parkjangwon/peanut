@@ -95,6 +95,10 @@ fn build_protected_routes(
     Router::new()
         .route("/admin/users", get(crate::api::admin::list_users))
         .route("/admin/auth/me", get(crate::api::auth::admin_me))
+        .route(
+            "/admin/users/:user_id/role",
+            patch(crate::api::admin::update_admin_role),
+        )
         .route("/apps", get(crate::api::apps::list_apps))
         .route("/apps", post(crate::api::apps::create_app))
         .route("/apps/:app_id", get(crate::api::apps::get_app))

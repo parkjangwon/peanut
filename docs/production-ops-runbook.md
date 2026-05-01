@@ -14,6 +14,10 @@ This runbook is the default operating path for the current single-node SQLite an
   - `curl -fsS "$BASE_URL/api/admin/backups/restore-pending" -H "Authorization: Bearer $ADMIN_TOKEN"`
 - Back up the whole `./data` directory when using the default Docker compose layout.
 
+The account used for backup download or restore scheduling must have the
+`owner` admin role. Developer, operator, and viewer roles must not be used for
+restore operations.
+
 ## Docker Compose Verification
 
 Run the compose verifier after changing Dockerfile, compose config, runtime settings, or deployment docs:
@@ -45,12 +49,16 @@ Peanut does not use down migrations in production. Rollback is backup based:
 
 1. Stop writes by stopping the service or removing external traffic.
 2. Restore the pre-upgrade `./data` directory, or schedule a DB restore:
-   - `curl -fsS -X POST "$BASE_URL/api/admin/backups/<backup>.backup/restore" -H "Authorization: Bearer $ADMIN_TOKEN"`
+   - `curl -fsS -X POST "$BASE_URL/api/admin/backups/<backup>.backup/restore" -H "Authorization: Bearer $ADMIN_TOKEN" -H "Content-Type: application/json" --data '{"confirmation":"<backup>.backup","reason":"rollback"}'`
 3. Restart Peanut so the restore marker is applied.
 4. Confirm `/api/ready` returns ready.
 5. Pin `PEANUT_IMAGE` to the previous known-good image and run `docker compose up -d`.
 
 Do not pull or deploy a newer image while `/api/admin/backups/restore-pending` reports a pending restore.
+
+Restore scheduling requires the confirmation field to exactly match the backup
+file name. This is intentional friction so an operator cannot schedule a
+restore by accidentally clicking or replaying a stale request.
 
 ## Incident Checklist
 

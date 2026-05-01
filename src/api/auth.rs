@@ -53,6 +53,7 @@ pub struct UserSummary {
     pub email: String,
     pub is_active: bool,
     pub is_admin: bool,
+    pub admin_role: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -157,7 +158,7 @@ pub async fn bootstrap_admin(
     };
 
     let insert_result = sqlx::query(
-        "INSERT INTO users (id, app_id, email, password_hash, is_active, is_admin) VALUES (?, ?, ?, ?, TRUE, TRUE)",
+        "INSERT INTO users (id, app_id, email, password_hash, is_active, is_admin, admin_role) VALUES (?, ?, ?, ?, TRUE, TRUE, 'owner')",
     )
     .bind(&user_id)
     .bind(crate::app_context::DEFAULT_APP_ID)
@@ -176,6 +177,7 @@ pub async fn bootstrap_admin(
         email,
         is_active: true,
         is_admin: true,
+        admin_role: "owner".to_string(),
     };
 
     match issue_login_response(&state, crate::app_context::DEFAULT_APP_ID, user.clone()).await {
@@ -589,7 +591,7 @@ async fn load_user_summary_by_id(
     user_id: &str,
 ) -> Result<Option<UserSummary>, sqlx::Error> {
     sqlx::query_as::<_, UserSummary>(
-        "SELECT id, app_id, email, is_active, is_admin FROM users WHERE app_id = ? AND id = ?",
+        "SELECT id, app_id, email, is_active, is_admin, admin_role FROM users WHERE app_id = ? AND id = ?",
     )
     .bind(app_id)
     .bind(user_id)
@@ -603,7 +605,7 @@ async fn load_user_summary_by_email(
     email: &str,
 ) -> Result<Option<UserSummary>, sqlx::Error> {
     sqlx::query_as::<_, UserSummary>(
-        "SELECT id, app_id, email, is_active, is_admin FROM users WHERE app_id = ? AND email = ?",
+        "SELECT id, app_id, email, is_active, is_admin, admin_role FROM users WHERE app_id = ? AND email = ?",
     )
     .bind(app_id)
     .bind(email.trim().to_lowercase())
@@ -617,7 +619,7 @@ async fn load_user_with_password_by_email(
     email: &str,
 ) -> Result<Option<UserWithPassword>, sqlx::Error> {
     sqlx::query_as(
-        "SELECT id, app_id, email, password_hash, is_active, is_admin FROM users WHERE app_id = ? AND email = ?",
+        "SELECT id, app_id, email, password_hash, is_active, is_admin, admin_role FROM users WHERE app_id = ? AND email = ?",
     )
     .bind(app_id)
     .bind(email.trim().to_lowercase())
@@ -630,7 +632,7 @@ async fn load_user_with_password_by_id(
     app_id: &str,
     user_id: &str,
 ) -> Result<Option<UserWithPassword>, sqlx::Error> {
-    sqlx::query_as("SELECT id, app_id, email, password_hash, is_active, is_admin FROM users WHERE app_id = ? AND id = ?")
+    sqlx::query_as("SELECT id, app_id, email, password_hash, is_active, is_admin, admin_role FROM users WHERE app_id = ? AND id = ?")
         .bind(app_id)
         .bind(user_id)
         .fetch_optional(pool)
@@ -662,6 +664,7 @@ struct UserWithPassword {
     password_hash: String,
     is_active: bool,
     is_admin: bool,
+    admin_role: String,
 }
 
 impl UserWithPassword {
@@ -672,6 +675,7 @@ impl UserWithPassword {
             email: self.email.clone(),
             is_active: self.is_active,
             is_admin: self.is_admin,
+            admin_role: self.admin_role.clone(),
         }
     }
 }

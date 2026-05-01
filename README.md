@@ -10,6 +10,7 @@ Peanut is intentionally operationally small:
 - local filesystem object storage
 - JWT auth with server-tracked refresh tokens
 - app-scoped API keys with explicit scopes
+- platform admin roles: owner, developer, operator, viewer
 - app-scoped Data, Storage, Push, and Functions APIs
 - embedded Next.js admin console served by the Rust binary
 - console workbenches for Auth, Data, Storage, Functions, Push, activity, and operations
@@ -62,6 +63,9 @@ curl -s -X POST "$BASE_URL/api/apps/default/keys" \
   -H "content-type: application/json" \
   --data '{"name":"server","key_type":"server"}'
 ```
+
+The bootstrapped admin is assigned the `owner` role. Owner-only operations
+include app key create/revoke/rotate, backup download, and restore scheduling.
 
 Register and login an app user:
 

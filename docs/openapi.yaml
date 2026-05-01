@@ -728,6 +728,21 @@ paths:
       responses:
         "200":
           description: Admin user list.
+  /api/admin/users/{user_id}/role:
+    patch:
+      operationId: updateAdminRole
+      summary: Update a platform admin role
+      parameters:
+        - $ref: "#/components/parameters/UserId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateAdminRoleRequest"
+      responses:
+        "200":
+          description: Admin role updated.
   /api/admin/backups:
     get:
       operationId: listBackups
@@ -777,6 +792,12 @@ paths:
           required: true
           schema:
             type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RestoreBackupRequest"
       responses:
         "200":
           description: Restore scheduled.
@@ -921,7 +942,7 @@ components:
           nullable: true
     UserSummary:
       type: object
-      required: [id, app_id, email, is_active, is_admin]
+      required: [id, app_id, email, is_active, is_admin, admin_role]
       properties:
         id:
           type: string
@@ -933,6 +954,26 @@ components:
           type: boolean
         is_admin:
           type: boolean
+        admin_role:
+          type: string
+          enum: [owner, developer, operator, viewer]
+    RestoreBackupRequest:
+      type: object
+      required: [confirmation]
+      properties:
+        confirmation:
+          type: string
+          description: Must exactly match the backup file name.
+        reason:
+          type: string
+          nullable: true
+    UpdateAdminRoleRequest:
+      type: object
+      required: [admin_role]
+      properties:
+        admin_role:
+          type: string
+          enum: [owner, developer, operator, viewer]
     CreateAppRequest:
       type: object
       required: [name, display_name]
