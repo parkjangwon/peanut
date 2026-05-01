@@ -108,6 +108,11 @@ fn build_protected_routes(
 ) -> Router<crate::AppState> {
     Router::new()
         .route("/admin/users", get(crate::api::admin::list_users))
+        .route("/apps", get(crate::api::apps::list_apps))
+        .route("/apps", post(crate::api::apps::create_app))
+        .route("/apps/:app_id", get(crate::api::apps::get_app))
+        .route("/apps/:app_id", patch(crate::api::apps::update_app))
+        .route("/apps/:app_id", delete(crate::api::apps::delete_app))
         .route("/admin/backups", get(crate::api::backups::list_backups))
         .route("/admin/backups", post(crate::api::backups::create_backup))
         .route(
