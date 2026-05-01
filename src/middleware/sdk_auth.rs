@@ -191,6 +191,7 @@ fn app_id_from_sdk_path(path: &str) -> Option<String> {
     let mut parts = path.trim_start_matches('/').split('/');
     match (parts.next(), parts.next(), parts.next()) {
         (Some("api"), Some("apps"), Some(app_id)) if !app_id.is_empty() => Some(app_id.to_string()),
+        (Some("apps"), Some(app_id), _) if !app_id.is_empty() => Some(app_id.to_string()),
         _ => None,
     }
 }

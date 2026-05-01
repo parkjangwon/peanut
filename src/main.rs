@@ -3,7 +3,9 @@
     clippy::io_other_error,
     clippy::items_after_test_module,
     clippy::result_large_err,
-    clippy::too_many_arguments
+    clippy::too_many_arguments,
+    dead_code,
+    unused_imports
 )]
 
 mod api;

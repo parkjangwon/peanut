@@ -23,7 +23,8 @@ pub async fn register_for_app(
         Err(_) => return json_error(StatusCode::INTERNAL_SERVER_ERROR, "failed to hash password"),
     };
 
-    let user_count: (i64,) = match sqlx::query_as("SELECT COUNT(*) FROM users")
+    let user_count: (i64,) = match sqlx::query_as("SELECT COUNT(*) FROM users WHERE app_id = ?")
+        .bind(app_id)
         .fetch_one(pool)
         .await
     {

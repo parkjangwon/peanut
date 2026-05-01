@@ -8,6 +8,7 @@ ALTER TABLE function_invocations ADD COLUMN parent_invocation_id TEXT;
 
 CREATE TABLE IF NOT EXISTS function_versions (
     id TEXT PRIMARY KEY,
+    app_id TEXT NOT NULL DEFAULT 'default',
     function_id TEXT NOT NULL,
     version_number INTEGER NOT NULL,
     runtime TEXT NOT NULL,
@@ -27,6 +28,8 @@ CREATE TABLE IF NOT EXISTS function_versions (
 
 CREATE INDEX IF NOT EXISTS idx_function_versions_function_id
 ON function_versions(function_id, version_number DESC);
+CREATE INDEX IF NOT EXISTS idx_function_versions_app_function
+ON function_versions(app_id, function_id, version_number DESC);
 
 CREATE TABLE IF NOT EXISTS function_version_secrets (
     version_id TEXT NOT NULL,
@@ -41,6 +44,7 @@ ON function_version_secrets(version_id);
 
 INSERT INTO function_versions (
     id,
+    app_id,
     function_id,
     version_number,
     runtime,
@@ -56,6 +60,7 @@ INSERT INTO function_versions (
 )
 SELECT
     lower(hex(randomblob(16))),
+    app_id,
     id,
     1,
     runtime,

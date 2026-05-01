@@ -7,17 +7,20 @@ use serde_json::Value;
 async fn register_and_login_roundtrip() {
     let (app, _dir) = common::make_app().await;
 
-    let register = common::post_json(
+    let register = common::post_json_with_app_key(
         &app,
-        "/api/register",
+        &format!("/api/apps/{}/auth/register", common::TEST_APP_ID),
         serde_json::json!({ "email": "alice@example.com", "password": "password123" }),
     )
     .await;
-    assert_eq!(register.status(), StatusCode::CREATED);
+    if register.status() != StatusCode::CREATED {
+        let body: Value = common::response_json(register).await;
+        panic!("register failed: {body}");
+    }
 
-    let login = common::post_json(
+    let login = common::post_json_with_app_key(
         &app,
-        "/api/login",
+        &format!("/api/apps/{}/auth/login", common::TEST_APP_ID),
         serde_json::json!({ "email": "alice@example.com", "password": "password123" }),
     )
     .await;
@@ -31,9 +34,9 @@ async fn register_and_login_roundtrip() {
 async fn register_rejects_malformed_email() {
     let (app, _dir) = common::make_app().await;
 
-    let response = common::post_json(
+    let response = common::post_json_with_app_key(
         &app,
-        "/api/register",
+        &format!("/api/apps/{}/auth/register", common::TEST_APP_ID),
         serde_json::json!({ "email": "not-an-email", "password": "password123" }),
     )
     .await;
@@ -44,16 +47,16 @@ async fn register_rejects_malformed_email() {
 async fn login_rejects_wrong_password() {
     let (app, _dir) = common::make_app().await;
 
-    common::post_json(
+    common::post_json_with_app_key(
         &app,
-        "/api/register",
+        &format!("/api/apps/{}/auth/register", common::TEST_APP_ID),
         serde_json::json!({ "email": "bob@example.com", "password": "password123" }),
     )
     .await;
 
-    let response = common::post_json(
+    let response = common::post_json_with_app_key(
         &app,
-        "/api/login",
+        &format!("/api/apps/{}/auth/login", common::TEST_APP_ID),
         serde_json::json!({ "email": "bob@example.com", "password": "wrongpassword" }),
     )
     .await;
@@ -65,7 +68,12 @@ async fn me_returns_current_user() {
     let (app, _dir) = common::make_app().await;
     let token = common::register_and_login(&app, "charlie@example.com", "password123").await;
 
-    let response = common::get_authed(&app, "/api/me", &token).await;
+    let response = common::get_authed_with_app_key(
+        &app,
+        &format!("/api/apps/{}/auth/me", common::TEST_APP_ID),
+        &token,
+    )
+    .await;
     assert_eq!(response.status(), StatusCode::OK);
     let body: Value = common::response_json(response).await;
     assert_eq!(body["user"]["email"], "charlie@example.com");
@@ -74,6 +82,7 @@ async fn me_returns_current_user() {
 #[tokio::test]
 async fn me_requires_auth() {
     let (app, _dir) = common::make_app().await;
-    let response = common::get_plain(&app, "/api/me").await;
+    let response =
+        common::get_plain(&app, &format!("/api/apps/{}/auth/me", common::TEST_APP_ID)).await;
     assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
 }

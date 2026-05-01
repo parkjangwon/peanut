@@ -1,6 +1,7 @@
 use crate::i18n::get_message;
 use axum::{extract::State, http::HeaderMap, response::Json};
 use serde_json::{json, Value};
+use sqlx::Row;
 
 pub async fn health_check(headers: HeaderMap) -> Json<Value> {
     let locale = headers
@@ -135,12 +136,167 @@ pub async fn readiness_check(State(state): State<crate::AppState>) -> Json<Value
         },
     }));
 
-    let ready = db_ready && restore_pending_ok && storage_ready && functions_ready;
+    let platform_checks = platform_checks(&state).await;
+    let platform_ready = platform_checks
+        .iter()
+        .all(|check| check.get("ok").and_then(Value::as_bool).unwrap_or(false));
+    checks.push(json!({
+        "name": "platform",
+        "ok": platform_ready,
+        "message": if platform_ready { "platform isolation invariants passed" } else { "platform isolation invariants failed" },
+        "checks": platform_checks,
+    }));
+
+    let ready =
+        db_ready && restore_pending_ok && storage_ready && functions_ready && platform_ready;
 
     Json(json!({
         "status": if ready { "ready" } else { "not_ready" },
+        "ready": ready,
         "checks": checks,
     }))
+}
+
+pub async fn platform_diagnostics(State(state): State<crate::AppState>) -> Json<Value> {
+    let checks = platform_checks(&state).await;
+    let ok = checks
+        .iter()
+        .all(|check| check.get("ok").and_then(Value::as_bool).unwrap_or(false));
+    Json(json!({
+        "ok": ok,
+        "checks": checks,
+    }))
+}
+
+async fn platform_checks(state: &crate::AppState) -> Vec<Value> {
+    let mut checks = Vec::new();
+
+    let schema_version = sqlx::query_scalar::<_, Option<i64>>(
+        "SELECT MAX(version) FROM _sqlx_migrations WHERE success = 1",
+    )
+    .fetch_one(&state.pool)
+    .await
+    .ok()
+    .flatten();
+    checks.push(json!({
+        "name": "db_schema_version",
+        "ok": schema_version.is_some(),
+        "version": schema_version,
+        "message": if schema_version.is_some() { "database migrations are recorded" } else { "database migration metadata is missing" },
+    }));
+
+    let default_app_exists = sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM apps WHERE id = ?")
+        .bind(crate::app_context::DEFAULT_APP_ID)
+        .fetch_one(&state.pool)
+        .await
+        .map(|count| count > 0)
+        .unwrap_or(false);
+    checks.push(json!({
+        "name": "default_app",
+        "ok": default_app_exists,
+        "message": if default_app_exists { "default app exists" } else { "default app is missing" },
+    }));
+
+    for (table, column) in [
+        ("users", "app_id"),
+        ("refresh_tokens", "app_id"),
+        ("password_reset_tokens", "app_id"),
+        ("auth_events", "app_id"),
+        ("data_tables", "app_id"),
+        ("data_rows", "app_id"),
+        ("data_row_events", "app_id"),
+        ("data_query_presets", "app_id"),
+        ("functions", "app_id"),
+        ("function_versions", "app_id"),
+        ("function_invocations", "app_id"),
+        ("push_subscriptions", "app_id"),
+        ("push_queue", "app_id"),
+    ] {
+        let ok = column_exists(&state.pool, table, column).await;
+        checks.push(json!({
+            "name": "app_id_column",
+            "table": table,
+            "column": column,
+            "ok": ok,
+            "message": if ok { "app_id column exists" } else { "app_id column is missing" },
+        }));
+    }
+
+    for (table, index) in [
+        ("users", "sqlite_autoindex_users_2"),
+        ("data_tables", "sqlite_autoindex_data_tables_2"),
+        ("functions", "sqlite_autoindex_functions_2"),
+        ("functions", "sqlite_autoindex_functions_3"),
+        (
+            "push_subscriptions",
+            "sqlite_autoindex_push_subscriptions_1",
+        ),
+    ] {
+        let ok = index_exists(&state.pool, table, index).await;
+        checks.push(json!({
+            "name": "app_scoped_unique_index",
+            "table": table,
+            "index": index,
+            "ok": ok,
+            "message": if ok { "app-scoped unique index exists" } else { "app-scoped unique index is missing" },
+        }));
+    }
+
+    for (name, sql) in [
+        (
+            "duplicate_user_email_per_app",
+            "SELECT COUNT(*) FROM (SELECT app_id, lower(email), COUNT(*) c FROM users GROUP BY app_id, lower(email) HAVING c > 1)",
+        ),
+        (
+            "duplicate_table_name_per_app",
+            "SELECT COUNT(*) FROM (SELECT app_id, name, COUNT(*) c FROM data_tables GROUP BY app_id, name HAVING c > 1)",
+        ),
+        (
+            "duplicate_function_name_per_app",
+            "SELECT COUNT(*) FROM (SELECT app_id, name, COUNT(*) c FROM functions GROUP BY app_id, name HAVING c > 1)",
+        ),
+        (
+            "duplicate_function_endpoint_per_app",
+            "SELECT COUNT(*) FROM (SELECT app_id, endpoint_slug, COUNT(*) c FROM functions GROUP BY app_id, endpoint_slug HAVING c > 1)",
+        ),
+    ] {
+        let duplicates = sqlx::query_scalar::<_, i64>(sql)
+            .fetch_one(&state.pool)
+            .await
+            .unwrap_or(1);
+        checks.push(json!({
+            "name": name,
+            "ok": duplicates == 0,
+            "duplicate_groups": duplicates,
+            "message": if duplicates == 0 { "no duplicate groups found" } else { "duplicate groups found" },
+        }));
+    }
+
+    checks
+}
+
+async fn column_exists(pool: &sqlx::SqlitePool, table: &str, column: &str) -> bool {
+    let pragma = format!("PRAGMA table_info({table})");
+    sqlx::query_as::<_, (i64, String, String, i64, Option<String>, i64)>(&pragma)
+        .fetch_all(pool)
+        .await
+        .map(|rows| rows.iter().any(|(_, name, _, _, _, _)| name == column))
+        .unwrap_or(false)
+}
+
+async fn index_exists(pool: &sqlx::SqlitePool, table: &str, index: &str) -> bool {
+    let pragma = format!("PRAGMA index_list({table})");
+    sqlx::query(&pragma)
+        .fetch_all(pool)
+        .await
+        .map(|rows| {
+            rows.iter().any(|row| {
+                row.try_get::<String, _>("name")
+                    .map(|name| name == index)
+                    .unwrap_or(false)
+            })
+        })
+        .unwrap_or(false)
 }
 
 async fn ensure_storage_ready(path: &std::path::Path) -> std::io::Result<()> {

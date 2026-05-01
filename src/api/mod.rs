@@ -1,4 +1,5 @@
 pub mod admin;
+pub mod app_scope;
 pub mod apps;
 pub mod audit;
 pub mod auth;

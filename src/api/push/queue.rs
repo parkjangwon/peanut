@@ -150,14 +150,16 @@ pub async fn list_queue(
 ) -> Response {
     let items_result = if claims.is_admin {
         sqlx::query_as::<_, PushQueueEntryRow>(
-            "SELECT id, user_id, title, body, status, retry_count, last_error, partial_failure_count, failed_destinations_json, next_retry_at, created_at, processed_at FROM push_queue ORDER BY id DESC LIMIT 50",
+            "SELECT id, user_id, title, body, status, retry_count, last_error, partial_failure_count, failed_destinations_json, next_retry_at, created_at, processed_at FROM push_queue WHERE app_id = ? ORDER BY id DESC LIMIT 50",
         )
+        .bind(&claims.app_id)
         .fetch_all(&state.pool)
         .await
     } else {
         sqlx::query_as::<_, PushQueueEntryRow>(
-            "SELECT id, user_id, title, body, status, retry_count, last_error, partial_failure_count, failed_destinations_json, next_retry_at, created_at, processed_at FROM push_queue WHERE user_id = ? ORDER BY id DESC LIMIT 50",
+            "SELECT id, user_id, title, body, status, retry_count, last_error, partial_failure_count, failed_destinations_json, next_retry_at, created_at, processed_at FROM push_queue WHERE app_id = ? AND user_id = ? ORDER BY id DESC LIMIT 50",
         )
+        .bind(&claims.app_id)
         .bind(&claims.sub)
         .fetch_all(&state.pool)
         .await
@@ -175,11 +177,15 @@ pub async fn list_queue(
                 COALESCE(SUM(CASE WHEN status = 'sent' AND partial_failure_count > 0 THEN 1 ELSE 0 END), 0) AS partial_success,
                 COALESCE(SUM(CASE WHEN status = 'pending' AND retry_count > 0 AND next_retry_at > CURRENT_TIMESTAMP THEN 1 ELSE 0 END), 0) AS retry_scheduled,
                 COALESCE(SUM(CASE WHEN status = 'pending' AND retry_count > 0 AND next_retry_at IS NOT NULL AND next_retry_at <= CURRENT_TIMESTAMP THEN 1 ELSE 0 END), 0) AS retry_overdue,
-                (SELECT COUNT(*) FROM push_subscriptions WHERE p256dh = '' AND auth = '') AS ntfy_subscriptions,
-                (SELECT COUNT(*) FROM push_subscriptions WHERE NOT (p256dh = '' AND auth = '')) AS web_push_subscriptions
+                (SELECT COUNT(*) FROM push_subscriptions WHERE app_id = ? AND p256dh = '' AND auth = '') AS ntfy_subscriptions,
+                (SELECT COUNT(*) FROM push_subscriptions WHERE app_id = ? AND NOT (p256dh = '' AND auth = '')) AS web_push_subscriptions
             FROM push_queue
+            WHERE app_id = ?
             "#,
         )
+        .bind(&claims.app_id)
+        .bind(&claims.app_id)
+        .bind(&claims.app_id)
         .fetch_one(&state.pool)
         .await
     } else {
@@ -194,14 +200,17 @@ pub async fn list_queue(
                 COALESCE(SUM(CASE WHEN status = 'sent' AND partial_failure_count > 0 THEN 1 ELSE 0 END), 0) AS partial_success,
                 COALESCE(SUM(CASE WHEN status = 'pending' AND retry_count > 0 AND next_retry_at > CURRENT_TIMESTAMP THEN 1 ELSE 0 END), 0) AS retry_scheduled,
                 COALESCE(SUM(CASE WHEN status = 'pending' AND retry_count > 0 AND next_retry_at IS NOT NULL AND next_retry_at <= CURRENT_TIMESTAMP THEN 1 ELSE 0 END), 0) AS retry_overdue,
-                (SELECT COUNT(*) FROM push_subscriptions WHERE user_id = ? AND p256dh = '' AND auth = '') AS ntfy_subscriptions,
-                (SELECT COUNT(*) FROM push_subscriptions WHERE user_id = ? AND NOT (p256dh = '' AND auth = '')) AS web_push_subscriptions
+                (SELECT COUNT(*) FROM push_subscriptions WHERE app_id = ? AND user_id = ? AND p256dh = '' AND auth = '') AS ntfy_subscriptions,
+                (SELECT COUNT(*) FROM push_subscriptions WHERE app_id = ? AND user_id = ? AND NOT (p256dh = '' AND auth = '')) AS web_push_subscriptions
             FROM push_queue
-            WHERE user_id = ?
+            WHERE app_id = ? AND user_id = ?
             "#,
         )
+        .bind(&claims.app_id)
         .bind(&claims.sub)
+        .bind(&claims.app_id)
         .bind(&claims.sub)
+        .bind(&claims.app_id)
         .bind(&claims.sub)
         .fetch_one(&state.pool)
         .await
@@ -245,15 +254,17 @@ pub async fn list_queue_stats(
 
     let rows_result = if claims.is_admin {
         sqlx::query_as::<_, PushQueueStatsRow>(
-            "SELECT last_error, partial_failure_count, failed_destinations_json FROM push_queue WHERE processed_at IS NOT NULL AND processed_at >= datetime('now', ?)",
+            "SELECT last_error, partial_failure_count, failed_destinations_json FROM push_queue WHERE app_id = ? AND processed_at IS NOT NULL AND processed_at >= datetime('now', ?)",
         )
+        .bind(&claims.app_id)
         .bind(&window_clause)
         .fetch_all(&state.pool)
         .await
     } else {
         sqlx::query_as::<_, PushQueueStatsRow>(
-            "SELECT last_error, partial_failure_count, failed_destinations_json FROM push_queue WHERE user_id = ? AND processed_at IS NOT NULL AND processed_at >= datetime('now', ?)",
+            "SELECT last_error, partial_failure_count, failed_destinations_json FROM push_queue WHERE app_id = ? AND user_id = ? AND processed_at IS NOT NULL AND processed_at >= datetime('now', ?)",
         )
+        .bind(&claims.app_id)
         .bind(&claims.sub)
         .bind(&window_clause)
         .fetch_all(&state.pool)
@@ -262,14 +273,16 @@ pub async fn list_queue_stats(
 
     let retry_backlog_result = if claims.is_admin {
         sqlx::query_as::<_, (i64, i64)>(
-            "SELECT COALESCE(SUM(CASE WHEN status = 'pending' AND retry_count > 0 AND next_retry_at > CURRENT_TIMESTAMP THEN 1 ELSE 0 END), 0) AS retry_scheduled, COALESCE(SUM(CASE WHEN status = 'pending' AND retry_count > 0 AND next_retry_at IS NOT NULL AND next_retry_at <= CURRENT_TIMESTAMP THEN 1 ELSE 0 END), 0) AS retry_overdue FROM push_queue",
+            "SELECT COALESCE(SUM(CASE WHEN status = 'pending' AND retry_count > 0 AND next_retry_at > CURRENT_TIMESTAMP THEN 1 ELSE 0 END), 0) AS retry_scheduled, COALESCE(SUM(CASE WHEN status = 'pending' AND retry_count > 0 AND next_retry_at IS NOT NULL AND next_retry_at <= CURRENT_TIMESTAMP THEN 1 ELSE 0 END), 0) AS retry_overdue FROM push_queue WHERE app_id = ?",
         )
+        .bind(&claims.app_id)
         .fetch_one(&state.pool)
         .await
     } else {
         sqlx::query_as::<_, (i64, i64)>(
-            "SELECT COALESCE(SUM(CASE WHEN status = 'pending' AND retry_count > 0 AND next_retry_at > CURRENT_TIMESTAMP THEN 1 ELSE 0 END), 0) AS retry_scheduled, COALESCE(SUM(CASE WHEN status = 'pending' AND retry_count > 0 AND next_retry_at IS NOT NULL AND next_retry_at <= CURRENT_TIMESTAMP THEN 1 ELSE 0 END), 0) AS retry_overdue FROM push_queue WHERE user_id = ?",
+            "SELECT COALESCE(SUM(CASE WHEN status = 'pending' AND retry_count > 0 AND next_retry_at > CURRENT_TIMESTAMP THEN 1 ELSE 0 END), 0) AS retry_scheduled, COALESCE(SUM(CASE WHEN status = 'pending' AND retry_count > 0 AND next_retry_at IS NOT NULL AND next_retry_at <= CURRENT_TIMESTAMP THEN 1 ELSE 0 END), 0) AS retry_overdue FROM push_queue WHERE app_id = ? AND user_id = ?",
         )
+        .bind(&claims.app_id)
         .bind(&claims.sub)
         .fetch_one(&state.pool)
         .await

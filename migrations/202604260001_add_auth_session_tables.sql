@@ -8,9 +8,11 @@ WHERE session_id = '';
 
 CREATE INDEX IF NOT EXISTS idx_refresh_tokens_user_id ON refresh_tokens(user_id);
 CREATE INDEX IF NOT EXISTS idx_refresh_tokens_session_id ON refresh_tokens(session_id);
+CREATE INDEX IF NOT EXISTS idx_refresh_tokens_app_session ON refresh_tokens(app_id, session_id);
 
 CREATE TABLE IF NOT EXISTS password_reset_tokens (
     token TEXT PRIMARY KEY,
+    app_id TEXT NOT NULL DEFAULT 'default',
     user_id TEXT NOT NULL,
     expires_at DATETIME NOT NULL,
     created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -19,3 +21,4 @@ CREATE TABLE IF NOT EXISTS password_reset_tokens (
 );
 
 CREATE INDEX IF NOT EXISTS idx_password_reset_tokens_user_id ON password_reset_tokens(user_id);
+CREATE INDEX IF NOT EXISTS idx_password_reset_tokens_app_user ON password_reset_tokens(app_id, user_id);

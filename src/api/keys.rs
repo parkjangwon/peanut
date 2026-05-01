@@ -379,10 +379,8 @@ fn default_scopes_for_type(key_type: &str) -> Vec<String> {
         "client" => vec!["auth:public", "storage:read", "push:subscribe"],
         "server" => vec![
             "auth:public",
-            "data:read",
-            "data:write",
-            "storage:read",
-            "storage:write",
+            "data:*",
+            "storage:*",
             "functions:invoke",
             "push:send",
         ],
@@ -398,8 +396,10 @@ fn allowed_scopes() -> &'static [&'static str] {
     &[
         "auth:public",
         "auth:admin",
+        "data:*",
         "data:read",
         "data:write",
+        "storage:*",
         "storage:read",
         "storage:write",
         "functions:invoke",

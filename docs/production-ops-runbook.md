@@ -6,6 +6,8 @@ This runbook is the default operating path for the current single-node SQLite an
 
 - Confirm readiness:
   - `curl -fsS "$BASE_URL/api/ready"`
+- Confirm platform diagnostics:
+  - `curl -fsS "$BASE_URL/api/admin/ops/diagnostics" -H "Authorization: Bearer $ADMIN_TOKEN"`
 - Create a SQLite backup through the admin API:
   - `curl -fsS -X POST "$BASE_URL/api/admin/backups" -H "Authorization: Bearer $ADMIN_TOKEN"`
 - Confirm no restore is pending:
@@ -21,7 +23,19 @@ JWT_SECRET=replace-me docker compose -f docker-compose.yml -f docker-compose.bui
 PEANUT_ADMIN_TOKEN=... scripts/verify-compose.sh
 ```
 
-Without `PEANUT_ADMIN_TOKEN`, the verifier still checks compose startup, readiness, and Deno availability.
+Without `PEANUT_ADMIN_TOKEN`, the verifier still checks compose startup, readiness, and Deno availability. With a token, it also checks app-scoped diagnostics and Function editor routes under `/api/apps/:app_id/...`.
+
+## App Isolation Minimum
+
+Peanut is pre-public and does not expose legacy global API routes. Production traffic should use only app-scoped routes:
+
+- Auth: `/api/apps/:app_id/auth/...`
+- Data: `/api/apps/:app_id/data/...`
+- Storage: `/api/apps/:app_id/storage/...`
+- Push: `/api/apps/:app_id/push/...`
+- Functions: `/api/apps/:app_id/functions/...`
+
+Before opening traffic after a deploy, confirm `/api/ready` reports `"ready": true` and `/api/admin/ops/diagnostics` reports `"ok": true`. These checks verify the default app, app_id columns, app-scoped unique indexes, and duplicate invariant checks.
 
 ## Migration Failure Rollback
 
@@ -43,11 +57,12 @@ Do not pull or deploy a newer image while `/api/admin/backups/restore-pending` r
 - Check readiness and ops metrics:
   - `/api/ready`
   - `/api/admin/ops/metrics`
+  - `/api/admin/ops/diagnostics`
 - For Functions issues:
   - confirm `deno --version` inside the container
   - run the Function editor lint endpoint with a minimal handler
 - For Push issues:
-  - check `/api/push/diagnostics`
+  - check `/api/apps/:app_id/push/diagnostics`
   - inspect retry backlog and terminal failure reasons
 - For Storage issues:
   - confirm `STORAGE_DIR` is writable

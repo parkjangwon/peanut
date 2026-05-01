@@ -1,5 +1,6 @@
 CREATE TABLE IF NOT EXISTS auth_events (
     id TEXT PRIMARY KEY,
+    app_id TEXT NOT NULL DEFAULT 'default',
     user_id TEXT NOT NULL,
     actor_user_id TEXT NULL,
     action TEXT NOT NULL,
@@ -11,3 +12,5 @@ CREATE TABLE IF NOT EXISTS auth_events (
 
 CREATE INDEX IF NOT EXISTS idx_auth_events_user_id_created_at
 ON auth_events(user_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_auth_events_app_user_created_at
+ON auth_events(app_id, user_id, created_at DESC);

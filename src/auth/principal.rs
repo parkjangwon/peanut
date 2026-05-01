@@ -73,8 +73,11 @@ impl Principal {
 
     #[allow(dead_code)]
     pub fn has_scope(&self, scope: &str) -> bool {
-        self.scopes
-            .iter()
-            .any(|value| value == "admin:all" || value == scope)
+        let wildcard = scope
+            .split_once(':')
+            .map(|(namespace, _)| format!("{namespace}:*"));
+        self.scopes.iter().any(|value| {
+            value == "admin:all" || value == scope || wildcard.as_deref() == Some(value.as_str())
+        })
     }
 }

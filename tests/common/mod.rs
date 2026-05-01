@@ -15,10 +15,13 @@ use serde_json::Value;
 use tower::ServiceExt;
 
 const TEST_ADDR: &str = "127.0.0.1:12345";
+pub const TEST_APP_ID: &str = "default";
+pub const TEST_APP_KEY: &str = "pk_test_default";
 
 pub async fn make_app() -> (Router, tempfile::TempDir) {
     let pool = peanut::db::init_db("sqlite::memory:").await.unwrap();
     let dir = tempfile::tempdir().unwrap();
+    seed_test_app_key(&pool).await;
     let state = peanut::AppState {
         pool,
         storage: Arc::new(peanut::storage::local::LocalStorage::new(dir.path())),
@@ -78,6 +81,55 @@ pub async fn make_app() -> (Router, tempfile::TempDir) {
     (app, dir)
 }
 
+async fn seed_test_app_key(pool: &sqlx::SqlitePool) {
+    let key_hash = openssl::sha::sha256(TEST_APP_KEY.as_bytes())
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
+
+    sqlx::query(
+        r#"
+        INSERT OR IGNORE INTO users (id, app_id, email, password_hash, is_active, is_admin)
+        VALUES ('test-admin', '__platform', 'test-admin@example.com', 'unused', TRUE, TRUE)
+        "#,
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+
+    sqlx::query(
+        r#"
+        INSERT OR IGNORE INTO app_keys (
+            id, app_id, name, key_prefix, key_hash, key_type, scopes_json, created_by
+        ) VALUES (
+            'test-default-server-key',
+            'default',
+            'Test server key',
+            'pk_test_default',
+            ?,
+            'server',
+            '["auth:public","data:*","storage:*","functions:invoke","push:send","push:subscribe"]',
+            'test-admin'
+        )
+        "#,
+    )
+    .bind(key_hash)
+    .execute(pool)
+    .await
+    .unwrap();
+
+    sqlx::query(
+        r#"
+        INSERT OR IGNORE INTO storage_buckets (
+            app_id, name, public_read, allow_client_uploads, allowed_mime_types_json
+        ) VALUES ('default', 'notes', FALSE, TRUE, '[]')
+        "#,
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+}
+
 fn test_connect_info() -> ConnectInfo<SocketAddr> {
     ConnectInfo(TEST_ADDR.parse().unwrap())
 }
@@ -93,11 +145,35 @@ pub async fn post_json(app: &Router, uri: &str, body: Value) -> Response {
     app.clone().oneshot(request).await.unwrap()
 }
 
+pub async fn post_json_with_app_key(app: &Router, uri: &str, body: Value) -> Response {
+    let request = Request::builder()
+        .method(Method::POST)
+        .uri(uri)
+        .header("content-type", "application/json")
+        .header("x-peanut-api-key", TEST_APP_KEY)
+        .extension(test_connect_info())
+        .body(axum::body::Body::from(serde_json::to_vec(&body).unwrap()))
+        .unwrap();
+    app.clone().oneshot(request).await.unwrap()
+}
+
 pub async fn get_authed(app: &Router, uri: &str, token: &str) -> Response {
     let request = Request::builder()
         .method(Method::GET)
         .uri(uri)
         .header("authorization", format!("Bearer {token}"))
+        .extension(test_connect_info())
+        .body(axum::body::Body::empty())
+        .unwrap();
+    app.clone().oneshot(request).await.unwrap()
+}
+
+pub async fn get_authed_with_app_key(app: &Router, uri: &str, token: &str) -> Response {
+    let request = Request::builder()
+        .method(Method::GET)
+        .uri(uri)
+        .header("authorization", format!("Bearer {token}"))
+        .header("x-peanut-api-key", TEST_APP_KEY)
         .extension(test_connect_info())
         .body(axum::body::Body::empty())
         .unwrap();
@@ -120,16 +196,16 @@ pub async fn response_json<T: DeserializeOwned>(response: Response) -> T {
 }
 
 pub async fn register_and_login(app: &Router, email: &str, password: &str) -> String {
-    post_json(
+    post_json_with_app_key(
         app,
-        "/api/register",
+        &format!("/api/apps/{TEST_APP_ID}/auth/register"),
         serde_json::json!({ "email": email, "password": password }),
     )
     .await;
 
-    let login_response = post_json(
+    let login_response = post_json_with_app_key(
         app,
-        "/api/login",
+        &format!("/api/apps/{TEST_APP_ID}/auth/login"),
         serde_json::json!({ "email": email, "password": password }),
     )
     .await;

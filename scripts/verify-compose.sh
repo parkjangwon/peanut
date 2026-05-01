@@ -5,6 +5,7 @@ COMPOSE_FILE="${COMPOSE_FILE:-docker-compose.yml}"
 BASE_URL="${BASE_URL:-http://127.0.0.1:3000}"
 SERVICE="${SERVICE:-peanut}"
 ADMIN_TOKEN="${PEANUT_ADMIN_TOKEN:-}"
+APP_ID="${PEANUT_VERIFY_APP_ID:-default}"
 
 echo "==> Building and starting Peanut with ${COMPOSE_FILE}"
 docker compose -f "${COMPOSE_FILE}" up -d --build "${SERVICE}"
@@ -37,14 +38,24 @@ if [[ -n "${ADMIN_TOKEN}" ]]; then
   grep -q '"backup"' /tmp/peanut-backup.json
 
   echo "==> Verifying Function editor lint API"
-  curl -fsS -X POST "${BASE_URL}/api/functions/editor/lint" \
+  curl -fsS -X POST "${BASE_URL}/api/apps/${APP_ID}/functions/editor/lint" \
     -H "Authorization: Bearer ${ADMIN_TOKEN}" \
     -H "Content-Type: application/json" \
     --data '{"runtime":"typescript","source_code":"export default function handler(){ return { ok: true } }"}' \
     >/tmp/peanut-function-lint.json
   grep -q '"status":"passed"' /tmp/peanut-function-lint.json
+
+  echo "==> Verifying app-scoped platform diagnostics"
+  curl -fsS "${BASE_URL}/api/admin/ops/diagnostics" \
+    -H "Authorization: Bearer ${ADMIN_TOKEN}" >/tmp/peanut-platform-diagnostics.json
+  grep -q '"ok":true' /tmp/peanut-platform-diagnostics.json
+
+  echo "==> Verifying app-scoped push diagnostics"
+  curl -fsS "${BASE_URL}/api/apps/${APP_ID}/push/diagnostics" \
+    -H "Authorization: Bearer ${ADMIN_TOKEN}" >/tmp/peanut-push-diagnostics.json
+  grep -q '"checks"' /tmp/peanut-push-diagnostics.json
 else
-  echo "==> Skipping authenticated checks; set PEANUT_ADMIN_TOKEN to verify backup and Function editor APIs"
+  echo "==> Skipping authenticated checks; set PEANUT_ADMIN_TOKEN to verify backup and app-scoped diagnostics"
 fi
 
 echo "==> Compose verification complete"

@@ -31,9 +31,10 @@ const LANDING_HTML: &str = r#"<!doctype html>
         <p>Useful endpoints:</p>
         <ul>
           <li><code>GET /api/health</code></li>
-          <li><code>POST /api/register</code></li>
-          <li><code>POST /api/login</code></li>
-          <li><code>GET /api/me</code></li>
+          <li><code>GET /api/ready</code></li>
+          <li><code>POST /api/apps/:app_id/auth/register</code></li>
+          <li><code>POST /api/apps/:app_id/auth/login</code></li>
+          <li><code>GET /api/apps/:app_id/auth/me</code></li>
         </ul>
       </div>
     </main>

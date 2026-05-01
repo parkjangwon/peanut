@@ -21,27 +21,30 @@ pub async fn enqueue_message(
         claims.sub.clone()
     };
 
-    let user_exists: Option<(String,)> = match sqlx::query_as("SELECT id FROM users WHERE id = ?")
-        .bind(&target_user_id)
-        .fetch_optional(&state.pool)
-        .await
-    {
-        Ok(user) => user,
-        Err(_) => {
-            return json_error(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "failed to verify target user",
-            )
-        }
-    };
+    let user_exists: Option<(String,)> =
+        match sqlx::query_as("SELECT id FROM users WHERE app_id = ? AND id = ?")
+            .bind(&claims.app_id)
+            .bind(&target_user_id)
+            .fetch_optional(&state.pool)
+            .await
+        {
+            Ok(user) => user,
+            Err(_) => {
+                return json_error(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "failed to verify target user",
+                )
+            }
+        };
 
     if user_exists.is_none() {
         return json_error(StatusCode::NOT_FOUND, "target user not found");
     }
 
     match sqlx::query(
-        "INSERT INTO push_queue (user_id, title, body, status, retry_count, last_error) VALUES (?, ?, ?, 'pending', 0, NULL)",
+        "INSERT INTO push_queue (app_id, user_id, title, body, status, retry_count, last_error) VALUES (?, ?, ?, ?, 'pending', 0, NULL)",
     )
+    .bind(&claims.app_id)
     .bind(&target_user_id)
     .bind(title)
     .bind(body)
@@ -51,7 +54,7 @@ pub async fn enqueue_message(
         Ok(_) => {
             let _ = crate::api::audit::record_audit_log(
                 &state.pool,
-                Some(crate::app_context::DEFAULT_APP_ID),
+                Some(&claims.app_id),
                 &claims,
                 "push.message.enqueued",
                 "push_message",

@@ -45,12 +45,16 @@ pub async fn get_push_diagnostics(
     let counts = match sqlx::query_as::<_, PushDiagnosticsCounts>(
         r#"
         SELECT
-            (SELECT COUNT(*) FROM push_subscriptions WHERE p256dh = '' AND auth = '') AS ntfy_subscriptions,
-            (SELECT COUNT(*) FROM push_subscriptions WHERE NOT (p256dh = '' AND auth = '')) AS web_push_subscriptions,
-            (SELECT COUNT(*) FROM push_queue WHERE status = 'pending') AS pending_queue_items,
-            (SELECT COUNT(*) FROM push_queue WHERE status = 'pending' AND retry_count > 0 AND next_retry_at IS NOT NULL AND next_retry_at <= CURRENT_TIMESTAMP) AS retry_overdue_items
+            (SELECT COUNT(*) FROM push_subscriptions WHERE app_id = ? AND p256dh = '' AND auth = '') AS ntfy_subscriptions,
+            (SELECT COUNT(*) FROM push_subscriptions WHERE app_id = ? AND NOT (p256dh = '' AND auth = '')) AS web_push_subscriptions,
+            (SELECT COUNT(*) FROM push_queue WHERE app_id = ? AND status = 'pending') AS pending_queue_items,
+            (SELECT COUNT(*) FROM push_queue WHERE app_id = ? AND status = 'pending' AND retry_count > 0 AND next_retry_at IS NOT NULL AND next_retry_at <= CURRENT_TIMESTAMP) AS retry_overdue_items
         "#,
     )
+    .bind(&claims.app_id)
+    .bind(&claims.app_id)
+    .bind(&claims.app_id)
+    .bind(&claims.app_id)
     .fetch_one(&state.pool)
     .await
     {
