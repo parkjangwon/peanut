@@ -261,6 +261,10 @@ fn build_push_routes() -> Router<crate::AppState> {
             "/push/vapid-public-key",
             get(crate::api::push::get_vapid_public_key),
         )
+        .route(
+            "/push/diagnostics",
+            get(crate::api::push::get_push_diagnostics),
+        )
         .route("/push/messages", post(crate::api::push::enqueue_message))
         .route("/push/queue", get(crate::api::push::list_queue))
         .route("/push/queue/stats", get(crate::api::push::list_queue_stats))

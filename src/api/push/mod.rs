@@ -15,12 +15,14 @@ use std::collections::HashMap;
 use crate::api::common::{json_error, json_message};
 use crate::auth::jwt::Claims;
 
+mod diagnostics;
 mod enqueue;
 mod queue;
 mod subscriptions;
 mod types;
 mod vapid;
 
+pub use diagnostics::get_push_diagnostics;
 pub use enqueue::enqueue_message;
 pub use queue::{list_queue, list_queue_stats};
 #[allow(unused_imports)]
