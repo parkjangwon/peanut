@@ -19,9 +19,19 @@ pub const TEST_APP_ID: &str = "default";
 pub const TEST_APP_KEY: &str = "pk_test_default";
 
 pub async fn make_app() -> (Router, tempfile::TempDir) {
+    make_app_with_seeded_key(true).await
+}
+
+pub async fn make_app_without_seeded_key() -> (Router, tempfile::TempDir) {
+    make_app_with_seeded_key(false).await
+}
+
+async fn make_app_with_seeded_key(seed_app_key: bool) -> (Router, tempfile::TempDir) {
     let pool = peanut::db::init_db("sqlite::memory:").await.unwrap();
     let dir = tempfile::tempdir().unwrap();
-    seed_test_app_key(&pool).await;
+    if seed_app_key {
+        seed_test_app_key(&pool).await;
+    }
     let state = peanut::AppState {
         pool,
         storage: Arc::new(peanut::storage::local::LocalStorage::new(dir.path())),

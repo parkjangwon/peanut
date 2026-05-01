@@ -8,6 +8,7 @@ use tower_http::cors::{Any, CorsLayer};
 
 pub fn build_app(state: crate::AppState, config: &crate::config::AppConfig) -> Router {
     let cors_layer = build_cors_layer(&config.auth_allowed_origins);
+    let bootstrap_routes = build_bootstrap_routes(state.clone());
     let auth_public_routes = build_auth_public_routes(state.clone());
     let protected_routes = build_protected_routes(state.clone(), config.max_upload_bytes);
     let sdk_routes = build_sdk_routes(state.clone(), config.max_upload_bytes);
@@ -15,6 +16,7 @@ pub fn build_app(state: crate::AppState, config: &crate::config::AppConfig) -> R
     Router::new()
         .route("/api/health", get(crate::api::health::health_check))
         .route("/api/ready", get(crate::api::health::readiness_check))
+        .nest("/api", bootstrap_routes)
         .nest("/api", auth_public_routes)
         .nest("/api", sdk_routes)
         .nest("/api", protected_routes)
@@ -28,6 +30,17 @@ pub fn build_app(state: crate::AppState, config: &crate::config::AppConfig) -> R
         ))
         .layer(cors_layer)
         .with_state(state)
+}
+
+fn build_bootstrap_routes(state: crate::AppState) -> Router<crate::AppState> {
+    let auth_rate_limit = axum::middleware::from_fn_with_state(
+        state.clone(),
+        crate::middleware::rate_limit::auth_rate_limit_middleware,
+    );
+
+    Router::new()
+        .route("/bootstrap/admin", post(crate::api::auth::bootstrap_admin))
+        .layer(auth_rate_limit)
 }
 
 fn build_auth_public_routes(state: crate::AppState) -> Router<crate::AppState> {

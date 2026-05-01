@@ -1,877 +1,97 @@
 # Peanut
 
-<img width="1376" height="768" alt="1777174518806" src="https://github.com/user-attachments/assets/d4a00c2e-8b5d-46a4-86e6-38220cb6e3fd" />
+Peanut is a self-hosted backend platform core packaged as a Rust service. It is
+designed around app-level isolation: every app gets its own user namespace, data
+tables, storage buckets, functions, push state, keys, and activity feed.
 
-Peanut is a small self-host backend runtime that ships as a single Rust binary.
+Peanut is intentionally operationally small:
 
-It is intentionally narrow:
 - SQLite for persistence
 - local filesystem object storage
-- JWT-based auth with admin approval flow
-- API-first backend surface for external apps and operator tooling
-- a simple ntfy-based push queue MVP
+- JWT auth with server-tracked refresh tokens
+- app-scoped API keys with explicit scopes
+- app-scoped Data, Storage, Push, and Functions APIs
+- single-node production runbooks and diagnostics
 
-The goal is not to become a giant backend platform. The goal is to give a solo developer or small team a backend core that is easy to understand, easy to deploy, and easy to operate.
+## API Shape
 
-## Product philosophy
+The public application API is app-scoped:
 
-Peanut is built around a few constraints:
+- Auth: `/api/apps/:app_id/auth/...`
+- Data: `/api/apps/:app_id/data/...`
+- Storage: `/api/apps/:app_id/storage/...`
+- Push: `/api/apps/:app_id/push/...`
+- Functions: `/api/apps/:app_id/functions/...`
 
-1. Single-binary deployment
-   - the Rust server ships the full backend in one binary and serves an API-first landing page at `/`
-2. Low operational complexity
-   - SQLite + local storage instead of mandatory external services
-3. Honest feature scope
-   - ship a complete small feature rather than a large half-implemented platform
-4. Self-host first
-   - one machine, one folder, one service is a valid production shape
+Application calls require `X-Peanut-Api-Key`. User-protected calls also require
+`Authorization: Bearer <access_token>`. The JWT contains `app_id`, and Peanut
+rejects bearer tokens used against a different app path.
 
-## Current feature set
+Legacy global paths such as `/api/register`, `/api/login`, `/api/data`,
+`/api/storage`, `/api/s3`, `/api/push`, and `/api/functions` are not mounted.
 
-### Auth and admin
-- `POST /api/register`
-  - first user becomes active admin automatically
-  - later users are created inactive and require admin approval
-- `POST /api/login`
-  - returns a typed JSON login response with short-lived bearer access token, refresh token, and expiry
-- `POST /api/auth/refresh`
-  - rotates a valid refresh token and returns a fresh access token + refresh token pair
-- `POST /api/auth/logout`
-  - revokes a refresh token so external apps can explicitly end a session
-- `POST /api/auth/change-password`
-  - authenticated password change flow
-  - revokes existing refresh sessions for that user after success
-- `POST /api/auth/forgot-password`
-  - creates a password reset token for the matching user
-  - delivery is controlled by `PASSWORD_RESET_DELIVERY`
-  - `inline` returns the reset token in JSON for local/dev/self-host flows
-  - `log` omits the token from the response and writes it to the server log for operator-managed delivery
-- `POST /api/auth/reset-password`
-  - one-time reset token flow for setting a new password
-  - revokes existing refresh sessions for that user after success
-- `GET /api/auth/sessions`
-  - returns the current user's tracked auth sessions
-- `GET /api/auth/events`
-  - returns the current user's latest auth events for audit/debug visibility
-- `DELETE /api/auth/sessions/:session_id`
-  - revokes a single tracked auth session
-- `POST /api/auth/sessions/revoke-all`
-  - revokes all tracked auth sessions for the current user
-- `GET /api/me`
-  - returns the authenticated user as JSON
-  - protected routes now re-check the current user record on every request, so deactivated users lose access immediately even if they still hold an unexpired token
-- `GET /api/admin/users`
-  - admin-only user list
-- `PUT /api/admin/users/:user_id/activate`
-  - admin-only activation flow
-- `PUT /api/admin/users/:user_id/deactivate`
-  - admin-only suspension flow that immediately blocks protected API access for that user
-- `GET /api/admin/service-tokens`
-  - lists admin-managed service tokens for server-to-server automation
-- `POST /api/admin/service-tokens`
-  - creates an opaque service token and returns the plaintext token once
-- `DELETE /api/admin/service-tokens/:token_id`
-  - revokes a service token immediately
+## First Install
 
-What this means for external frontend apps:
-- Peanut can now act as the app's auth backend for signup, login, session refresh, logout, password change, and password reset
-- access tokens stay short-lived while refresh tokens provide longer-lived sessions
-- refresh sessions are server-tracked and revoked on logout, password change, password reset, or admin deactivation
-- apps can inspect recent auth events through `GET /api/auth/events` to debug login/session/reset activity
-- operators can optionally lock app-facing auth routes to specific browser origins and client ids
-- operators can also mint admin-only service tokens for server-to-server automation on protected APIs
-- see `docs/auth-client.md` for the integration guide and `examples/auth-client-web/` for a minimal browser example
-
-### External auth client guide
-- English guide: `docs/auth-client.md`
-- Korean guide: `docs/auth-client.ko.md`
-- browser example: `examples/auth-client-web/`
-
-### Service token guide
-- English guide: `docs/service-tokens.md`
-- Korean guide: `docs/service-tokens.ko.md`
-- automation runbook: `docs/automation-runbook.md`
-- MVP OpenAPI contract: `docs/openapi.yaml`
-- curl examples: `examples/service-tokens/`
-- jq-assisted token bootstrap: `examples/service-tokens/create-token-jq.sh`
-- end-to-end operations example: `examples/operations-e2e/`
-- runnable automation examples + env sample: `examples/automation/`
-
-### Storage
-- detailed compatibility matrix: `docs/storage-s3-compat.md`
-- Korean matrix: `docs/storage-s3-compat.ko.md`
-- user-scoped object storage
-- legacy simple endpoints remain available for authenticated users:
-  - list their own keys
-  - upload objects
-  - fetch objects
-  - delete objects
-- S3-like path-style endpoints are now also available under `/api/s3/:bucket/*key`
-- authenticated clients can now mint presigned S3-like URLs through `POST /api/s3/:bucket/presign/*key`
-- the presign helper now also supports object tagging subresource URLs for flows like `PUT/GET/DELETE ...?tagging`
-- the presign helper now also supports a minimal multipart-compatible query contract:
-  - `POST ...?uploads`
-  - `PUT ...?partNumber=N&uploadId=...`
-  - `GET ...?uploadId=...`
-  - `POST ...?uploadId=...`
-  - `DELETE ...?uploadId=...`
-- when `subresource` is provided to the presign helper, Peanut currently accepts only `tagging` and `uploads`
-- S3-like object routes now accept either bearer auth, SigV4-style `Authorization` header auth, or SigV4-style query auth from presigned URLs
-- S3-like multipart upload now supports a stronger S3-compatible contract:
-  - `POST /api/s3/:bucket/*key?uploads` to initiate and receive an `UploadId`
-  - `GET /api/s3/:bucket?uploads=1&prefix=...&max-uploads=...&key-marker=...&upload-id-marker=...` to list active multipart uploads in a bucket with marker pagination
-  - `PUT /api/s3/:bucket/*key` with `x-amz-copy-source: /src-bucket/src-key` to CopyObject into a new key
-  - `x-amz-copy-source` must use the path-style `/bucket/key` form
-  - `x-amz-metadata-directive: COPY|REPLACE` is supported for CopyObject metadata behavior
-  - copying an object onto itself now requires `x-amz-metadata-directive: REPLACE`
-  - `x-amz-copy-source-range` is rejected for CopyObject and only supported for CopyPart
-  - `PUT /api/s3/:bucket/*key?partNumber=N&uploadId=...` to upload parts
-  - non-final multipart parts must be at least 5 MiB, matching the usual S3 minimum part-size rule
-  - `PUT /api/s3/:bucket/*key?partNumber=N&uploadId=...` with `x-amz-copy-source: /src-bucket/src-key` to CopyPart from an existing object
-  - `x-amz-copy-source-range: bytes=start-end` is also supported for ranged CopyPart
-  - `GET /api/s3/:bucket/*key?uploadId=...&max-parts=...&part-number-marker=...` to list staged parts for an upload with marker pagination
-  - `POST /api/s3/:bucket/*key?uploadId=...` with `CompleteMultipartUpload` XML to assemble the final object
-  - `DELETE /api/s3/:bucket/*key?uploadId=...` to abort a staged upload
-- multipart completion now returns and persists a multipart-composite ETag (`etag-partcount`) instead of the final assembled object hash
-- multipart compatibility now has additional SDK-style smoke coverage for ranged CopyPart flows
-- S3-like object responses now include content-type, content-length, ETag, and last-modified metadata
-- S3-like GET now supports single `Range: bytes=...` requests and returns `206 Partial Content` with `Content-Range`
-- S3-like range handling now also covers open-ended (`bytes=start-`) and suffix (`bytes=-N`) requests, while invalid and multi-range requests return `416 InvalidRange`
-- S3-like GET and HEAD now honor basic conditional request headers: `If-Match`, `If-None-Match`, `If-Modified-Since`, `If-Unmodified-Since`
-- `HEAD /api/s3/:bucket/*key` remains an object-metadata route only; tagging or multipart subresource-style queries are rejected explicitly
-- when ETag validators are present, date validators are ignored in the usual HTTP precondition order (`If-Match` over `If-Unmodified-Since`, `If-None-Match` over `If-Modified-Since`)
-- object response headers `Cache-Control`, `Content-Disposition`, `Content-Encoding`, `Content-Language`, and `Expires` are now persisted on PUT and replayed on subsequent PUT/GET/HEAD responses
-- CopyObject with `x-amz-metadata-directive: REPLACE` now preserves unspecified standard response headers from the source object while applying any explicitly provided replacements
-- CopyObject tagging/checksum interactions are now documented and aligned with the current contract:
-  - default `COPY` preserves stored tagging and checksum headers
-  - `REPLACE` can override tagging while still preserving the source checksum contract
-- CopyObject does not yet support `x-amz-copy-source-if-*` conditional headers; Peanut now rejects them explicitly with `InvalidRequest`
-- when `x-amz-checksum-sha256` is sent on PUT, Peanut validates it against the payload and replays it on subsequent object responses (PUT/GET/HEAD)
-- Peanut now also accepts `x-amz-checksum-sha1` on PUT under the same minimal contract
-- multiple checksum headers on the same PUT are rejected explicitly
-- when `x-amz-tagging` is sent on PUT, Peanut stores a minimal tagging contract and replays the derived `x-amz-tagging-count` on subsequent object responses
-- `x-amz-tagging` is now normalized as URL-encoded query-string style key/value pairs, so values such as spaces or `/` survive round trips through `GET ?tagging`
-- invalid percent-encoding in `x-amz-tagging` is rejected explicitly instead of being stored verbatim
-- Peanut now also supports the object tagging subresource at a minimal level:
-  - `GET /api/s3/:bucket/*key?tagging`
-  - `PUT /api/s3/:bucket/*key?tagging` with `Tagging` XML
-  - `DELETE /api/s3/:bucket/*key?tagging`
-- tagging XML is currently validated under a minimal contract, but duplicate keys and more than 10 tags are rejected explicitly
-- custom object metadata sent as `x-amz-meta-*` on PUT is now persisted and returned again on subsequent PUT/GET/HEAD responses
-- S3-like success/error responses now also include `x-amz-request-id` headers, and object `Last-Modified` headers are emitted as HTTP-date strings
-- S3-like bucket listing supports `list-type=2`, `prefix`, `delimiter`, `max-keys`, `continuation-token`, `start-after`, `encoding-type=url`, and `fetch-owner=true`
-- when both `continuation-token` and `start-after` are present, Peanut follows the opaque continuation token and ignores `start-after`
-- invalid `encoding-type` values are rejected with `InvalidArgument`
-- `max-keys=0` now returns an empty page with the expected truncation metadata instead of failing the request
-- continuation tokens are now opaque base64url-style tokens instead of raw object keys
-- S3-like listing now emits `CommonPrefixes` XML blocks when `delimiter=/` is used
-- S3-like storage errors now return XML error envelopes such as `NoSuchKey` and `InvalidRequest`
-- storage keys remain automatically isolated per authenticated user
-
-### Data API (SQLite-backed)
-Peanut now exposes a constrained SQLite-backed data API for Peanut-managed logical tables.
-
-Detailed guide:
-- English guide: `docs/data-api.md`
-- Korean guide: `docs/data-api.ko.md`
-- payload examples: `examples/data-api/`
-
-Current capabilities:
-- `GET /api/data/tables`
-- `POST /api/data/tables`
-- `GET /api/data/tables/:table`
-- `PATCH /api/data/tables/:table`
-- `GET /api/data/tables/:table/presets`
-- `POST /api/data/tables/:table/presets`
-- `GET /api/data/tables/:table/presets/:preset_id/run`
-- `PATCH /api/data/tables/:table/presets/:preset_id`
-- `DELETE /api/data/tables/:table/presets/:preset_id`
-- `GET /api/data/tables/:table/export`
-- `POST /api/data/tables/:table/import`
-- `GET /api/data/tables/:table/rows`
-- `POST /api/data/tables/:table/rows`
-- `GET /api/data/tables/:table/events`
-- `GET /api/data/tables/:table/events/checkpoint`
-- `GET /api/data/tables/:table/events/stream`
-- `GET /api/data/tables/:table/rows/:row_id`
-- `PATCH /api/data/tables/:table/rows/:row_id`
-- `DELETE /api/data/tables/:table/rows/:row_id`
-
-Current model:
-- admins define logical tables with JSON schema + fixed access policy
-- rows are stored in Peanut-managed SQLite tables
-- `owner_private` policy isolates rows per authenticated user
-- row mutations are recorded in an internal event log
-- admin APIs can fetch the latest durable row-event checkpoint through `GET /api/data/tables/:table/events/checkpoint` before attaching a realtime consumer
-- admin APIs can replay row mutations from `GET /api/data/tables/:table/events?since_id=<event_id>` for resume/sync flows
-- admin APIs can subscribe to row mutation events through `GET /api/data/tables/:table/events/stream` (SSE), with event ids included in each payload
-- admin APIs can persist reusable query presets per table for repeated operator workflows
-- table snapshots can be exported and re-imported through bounded admin APIs
-- schema updates now follow safe evolution rules:
-  - existing field types cannot change in place
-  - non-empty tables cannot drop existing fields
-  - new required fields on non-empty tables must provide defaults
-
-What this still does not mean:
-- Peanut does not expose raw SQL like `POST /api/sql`
-- Peanut is not trying to be a full database-console-as-a-service
-- query/filter support is intentionally narrow in this release
-
-### Push (current release MVP)
-Peanut currently ships a practical hybrid push layer:
-- ntfy topic subscriptions for the simple self-host flow
-- Web Push delivery for stored browser subscriptions when VAPID env vars are configured
-
-Endpoints:
-- `GET /api/push/subscriptions`
-- `POST /api/push/subscriptions`
-- `DELETE /api/push/subscriptions/:subscription_id`
-- `GET /api/push/vapid-public-key`
-- `POST /api/push/messages`
-- `GET /api/push/queue`
-- `GET /api/push/queue/stats`
-
-Runtime settings:
-- `NTFY_BASE_URL`
-  - defaults to `https://ntfy.sh`
-  - can point at a self-hosted ntfy server such as `https://push.example.com`
-- `NTFY_AUTH_TOKEN`
-  - optional bearer token for authenticated ntfy servers
-
-What this means:
-- users can subscribe an ntfy topic with `{ "topic": "alerts_main" }`
-- browsers can register a Web Push subscription with `{ "endpoint": "...", "keys": { "p256dh": "...", "auth": "..." } }`
-- clients can fetch `GET /api/push/vapid-public-key` to bootstrap browser `PushManager.subscribe(...)`
-- push messages are queued in SQLite
-- a background worker delivers queue items to ntfy or Web Push subscriptions
-- `GET /api/push/queue` now also returns a `summary` block with total/pending/processing/sent/failed/partial_success counts
-- the queue summary also includes retry backlog visibility: `retry_scheduled` for delayed retries and `retry_overdue` for items already eligible to be retried again
-- queue items no longer fail just because one destination failed; if at least one subscription accepts the delivery, the queue item is marked sent
-- queue items with no subscriptions configured now fail terminally instead of pointlessly retrying
-- permanently invalid delivery paths also fail terminally now: a queue item no longer burns extra retries after all remaining Web Push subscriptions were pruned as dead, and ntfy 4xx responses are treated as non-retryable operator errors
-- missing or invalid Web Push VAPID runtime config is also treated as a terminal operator error, so Web Push queue items fail fast instead of churning retries until someone fixes env
-- queue status, retries, last error, and `next_retry_at` are visible through the API and console
-- dead Web Push subscriptions that return terminal 404/410-style errors are automatically removed from the subscription table
-- partial-delivery metadata is now structured too: queue items expose `partial_failure_count` and `failed_destinations[]` alongside `last_error`
-- queue summary also exposes current `ntfy_subscriptions` and `web_push_subscriptions` counts for operator visibility by delivery kind
-- `GET /api/push/queue/stats` exposes recent top failure reasons grouped separately for terminal item failures and per-destination delivery failures
-- even when a queue item is marked `sent`, partial-delivery failures are preserved in `last_error` so operators can spot dead destinations without losing the successful delivery
-
-What this does not mean yet:
-- Peanut still does not try to be a complete push platform
-- there is no polished browser service-worker setup flow in the embedded console yet
-- Web Push delivery requires VAPID runtime configuration
-
-### Peanut Functions (JS/TS sandbox MVP)
-Peanut now includes a minimal function runtime for small backend extensions.
-
-Current capabilities:
-- admin-managed functions stored in SQLite
-- JavaScript or TypeScript source managed from the console/API
-- per-function endpoint slug, invoke policy, env/secrets JSON, allowed origins, rate limit, and timeout
-- secrets are stored per function version, encrypted at rest, never returned in API payloads, and only exposed as `secret_key_count`
-- authenticated, public, admin-only, or api-key invoke policy through `POST /api/functions/endpoints/:endpoint_slug`
-- same endpoint supports inline sync execution or queued async execution with `async_invoke: true`
-- admin APIs expose version history through `GET /api/functions/:name/versions`
-- admins can roll back the active runtime through `POST /api/functions/:name/versions/:version_number/rollback`
-- admin APIs can subscribe to invocation lifecycle events through `GET /api/functions/:name/events` (SSE)
-- separate Deno subprocess execution with a temp working directory and bounded runtime timeout
-- invocation logs stored in SQLite, with queued/running/succeeded/failed lifecycle, `invoke_mode`, `function_version_id`, `retry_count`, `parent_invocation_id`, detail lookup, attempt-chain lookup, and retry from the console/API
-- bounded in-process Peanut host bindings for authenticated functions:
-  - `ctx.peanut.storage.list/get/put/delete`
-  - `ctx.peanut.push.enqueue`
-  - `ctx.peanut.data.listRows/getRow/createRow/updateRow/deleteRow`
-- host bindings reuse Peanut's existing auth and policy checks, so owner-scoped data/storage access stays user-scoped inside functions too
-
-Current constraints:
-- Functions are intended for trusted admin-managed code only.
-- functions must export `default` or named `handler`
-- JSON input/output only
-- no arbitrary package installation
-- source containing blocked runtime escape patterns is rejected
-- Peanut Functions use process-only hardening and are not a hostile-tenant sandbox
-- Peanut does not provide OS-level or container-level sandboxing for Functions; use `FUNCTIONS_ENABLED=false` on installs that do not need runtime extensions
-- `FUNCTIONS_ALLOW_NETWORK=false` keeps common browser-style network APIs unavailable inside the Deno runner
-- `FUNCTIONS_WORK_DIR` must not point at the filesystem root, user home directory, or database directory
-- `FUNCTIONS_MAX_CONCURRENT` limits simultaneous Function invocations in this Peanut process
-- this is a narrow sandboxed extension layer, not a full Lambda clone
-
-### Console / operator surface
-Peanut is currently running in API-first mode.
-
-- the old embedded Next.js console source was removed
-- the backend now serves a small landing page at `/` and keeps the product usable through `/api/...`
-- a new operations console is planned as part of v2 and will be rebuilt separately from the backend core
-
-## API contract summary
-
-Request/response notes:
-- every response now includes an `x-request-id` header for correlation
-- JSON error responses use a structured envelope with `error`, `code`, and `request_id`
-
-Example error body:
-
-```json
-{
-  "error": "missing bearer token",
-  "code": "unauthorized",
-  "request_id": "req_123"
-}
-```
-
-### `GET /api/health`
-Returns localized JSON:
-
-```json
-{
-  "status": "ok",
-  "message": "Systems are operational."
-}
-```
-
-### `GET /api/ready`
-Returns backend readiness state for operators:
-
-```json
-{
-  "status": "ready",
-  "checks": [
-    { "name": "database", "ok": true, "message": "database query succeeded" },
-    { "name": "storage", "ok": true, "message": "storage directory is writable", "path": "data/storage" }
-  ]
-}
-```
-
-### `GET /api/admin/ops/metrics`
-Admin-only operational snapshot:
+Create the first platform admin once:
 
 ```bash
-curl -s "$BASE_URL/api/admin/ops/metrics" \
-  -H "authorization: Bearer $ADMIN_JWT" | jq .
-```
-
-The response includes database size and restore state, storage totals, multipart stale count, push retry backlog, Function invocation counts, version, and uptime.
-
-### `POST /api/register`
-Request:
-
-```json
-{
-  "email": "admin@example.com",
-  "password": "secret123"
-}
-```
-
-Response:
-
-```json
-{
-  "message": "First user registered as active admin.",
-  "user": {
-    "id": "uuid",
-    "email": "admin@example.com",
-    "is_active": true,
-    "is_admin": true
-  }
-}
-```
-
-Validation rules:
-- email is required and must look like a valid address
-- password must be at least 8 characters
-
-### `POST /api/login`
-Response:
-
-```json
-{
-  "access_token": "***",
-  "refresh_token": "***",
-  "token_type": "Bearer",
-  "expires_at": "2026-04-25T00:00:00Z",
-  "user": {
-    "id": "uuid",
-    "email": "admin@example.com",
-    "is_active": true,
-    "is_admin": true
-  }
-}
-```
-
-### `GET /api/me`
-Response:
-
-```json
-{
-  "user": {
-    "id": "uuid",
-    "email": "admin@example.com",
-    "is_active": true,
-    "is_admin": true
-  }
-}
-```
-
-### `GET /api/storage`
-Response:
-
-```json
-{
-  "keys": ["notes/welcome.txt"]
-}
-```
-
-### S3-like storage endpoints
-- `GET /api/s3/:bucket?list-type=2&prefix=notes/&max-keys=100&continuation-token=...`
-- `HEAD /api/s3/:bucket/*key`
-- `GET /api/s3/:bucket/*key`
-- `PUT /api/s3/:bucket/*key`
-- `DELETE /api/s3/:bucket/*key`
-
-### `POST /api/push/subscriptions`
-Request:
-
-```json
-{
-  "topic": "alerts_main"
-}
-```
-
-### `POST /api/data/tables`
-Typical admin request:
-
-```json
-{
-  "name": "todos",
-  "display_name": "Todos",
-  "schema": {
-    "fields": {
-      "title": { "type": "string", "required": true, "max_length": 200 },
-      "done": { "type": "boolean", "required": false, "default": false }
-    }
-  },
-  "access_policy": {
-    "mode": "owner_private"
-  }
-}
-```
-
-Typical response:
-
-```json
-{
-  "table": {
-    "name": "todos",
-    "display_name": "Todos",
-    "schema": {
-      "fields": {
-        "title": { "type": "string", "required": true, "max_length": 200, "default": null },
-        "done": { "type": "boolean", "required": false, "max_length": null, "default": false }
-      }
-    },
-    "access_policy": {
-      "mode": "owner_private"
-    }
-  }
-}
-```
-
-### `POST /api/data/tables/:table/rows`
-Typical authenticated request:
-
-```json
-{
-  "data": {
-    "title": "buy milk"
-  }
-}
-```
-
-Typical response:
-
-```json
-{
-  "row": {
-    "id": "uuid",
-    "owner_user_id": "uuid",
-    "data": {
-      "title": "buy milk",
-      "done": false
-    },
-    "created_at": "2026-04-25 01:05:58",
-    "updated_at": "2026-04-25 01:05:58"
-  }
-}
-```
-
-### `GET /api/data/tables/:table/rows`
-Example query:
-
-```text
-/api/data/tables/todos/rows?filter_field=title&filter_op=contains&filter_value=milk&order_by=created_at&order=desc&limit=10
-```
-
-What to expect:
-- `search` scans declared string fields while keeping the query surface bounded
-- `title_contains` and generic `filter_field/filter_op/filter_value` can be combined with `order_by`, `order`, `limit`, and `offset`
-- common console flow uses `contains`, `starts_with`, `ends_with`, `eq`, `ne`, `gt`, `gte`, `lt`, `lte`
-
-### `GET /api/data/tables/:table/export`
-Admin snapshot export:
-- returns table metadata plus normalized rows
-- includes `metadata.export_version`, `metadata.row_count`, and `metadata.checksum_sha256`
-- checksum is calculated over the exported table+rows artifact for backup verification
-- useful for backups, migration between environments, or fixture generation
-
-### `GET /api/data/tables/:table/events`
-### `GET /api/data/tables/:table/events/checkpoint`
-Admin row event log:
-- supports `limit`, `row_id`, `action`, and `since_id`
-- `GET /api/data/tables/:table/events/checkpoint` returns the latest durable row-event id for resume checkpoints
-- default mode returns latest events first for audit/debugging
-- `since_id` switches to ascending replay order for resume/sync workers
-
-### `GET /api/data/tables/:table/events/stream`
-Admin row realtime stream:
-- SSE endpoint for row mutation events
-- emits insert, update, delete events as they happen
-- each payload includes the durable event `id` so clients can resume with `since_id`
-- useful for operator dashboards or live sync workers
-
-### `GET /api/data/tables/:table/presets`
-### `POST /api/data/tables/:table/presets`
-### `GET /api/data/tables/:table/presets/:preset_id/run`
-### `PATCH /api/data/tables/:table/presets/:preset_id`
-### `DELETE /api/data/tables/:table/presets/:preset_id`
-Admin saved query presets:
-- store reusable bounded row-query params per table
-- useful for repeated operator filters like "open items", "recent failures", or "buy-* tasks"
-- presets persist `search`, filters, ordering, limit, and offset
-- `GET /api/data/tables/:table/presets/:preset_id/run` executes the saved preset and returns bounded row results directly
-
-### `POST /api/data/tables/:table/import`
-Admin snapshot import:
-- accepts `{ "mode": "append" | "replace", "rows": [...] }`
-- `dry_run: true` validates checksum/schema/rows and returns a preview without mutating the database
-- `restore_table: true` can also restore `display_name`, `schema`, and `access_policy` before rows are inserted
-- `verify_checksum: true` with `metadata` validates the incoming artifact before import mutates rows
-- checksum verification expects export-style artifact fields (`table.created_by`, `table.created_at`, row ids, `created_at`, `updated_at`)
-- imported rows are normalized against the current schema before insert
-- owner-private tables require `owner_user_id` per imported row
-- dry-run responses include `would_insert`, `would_replace`, `schema_changes`, and `validation_errors`
-
-## Repository layout
-
-```text
-.
-├── Cargo.toml
-├── Cargo.lock
-├── Dockerfile
-├── docker-compose.yml
-├── build.rs
-├── migrations/
-├── src/
-│   ├── main.rs
-│   ├── db.rs
-│   ├── console.rs
-│   ├── i18n.rs
-│   ├── api/
-│   │   ├── admin.rs
-│   │   ├── auth.rs
-│   │   ├── common.rs
-│   │   ├── health.rs
-│   │   ├── push.rs
-│   │   ├── storage.rs
-│   │   └── mod.rs
-│   ├── auth/
-│   ├── middleware/
-│   ├── push/
-│   └── storage/
-└── locales/
-```
-
-## Configuration
-
-Peanut reads configuration from environment variables.
-
-Required:
-- `JWT_SECRET`
-
-Optional:
-- `DATABASE_URL` (default: `sqlite://peanut.db`; must use `sqlite:`)
-- `STORAGE_DIR` (default: `data/storage`; must not be empty)
-- `BIND_ADDR` (default: `127.0.0.1:3000`; must be a valid socket address)
-- `MAX_UPLOAD_BYTES` (default: `5242880`; must be a positive integer)
-- `PASSWORD_RESET_DELIVERY` (default: `inline`; `inline` or `log`)
-- `FUNCTIONS_ENABLED` (default: `true`; set `false` to disable all Functions APIs and invocation endpoints)
-- `FUNCTIONS_ALLOW_NETWORK` (default: `false`; keeps `fetch`, `WebSocket`, and `XMLHttpRequest` unavailable inside Functions)
-- `FUNCTIONS_MAX_CONCURRENT` (default: `4`; caps simultaneous Function invocations)
-- `FUNCTIONS_MEMORY_MB` (default: `128`; caps the Deno/V8 heap for each Function invocation)
-- `FUNCTIONS_MAX_SOURCE_BYTES` (default: `262144`; rejects oversized Function source before execution)
-- `FUNCTIONS_MAX_OUTPUT_BYTES` (default: `65536`; caps captured Function stderr/log output)
-- `FUNCTIONS_WORK_DIR` (default: OS temp dir plus `peanut-functions`; must be writable and must not be root, home, or the DB directory)
-- `FUNCTIONS_SECRETS_MASTER_KEY` (default: falls back to `JWT_SECRET`; set this explicitly in production if you want Function secret encryption to rotate independently from JWT signing)
-- `BACKUP_ON_STARTUP` (default: `false`; set `true` to run one SQLite backup before the server starts accepting requests)
-- `TRUST_PROXY_HEADERS` (default: `false`; set `true` only behind a trusted reverse proxy so rate limiting can use `x-forwarded-for`)
-- `MULTIPART_STALE_HOURS` (default: `24`; staged multipart uploads older than this can be cleaned up)
-- `MULTIPART_CLEANUP_INTERVAL_SECONDS` (default: `3600`; background cleanup interval)
-- `AUTH_ALLOWED_ORIGINS` (comma-separated origins; when set, auth routes require a matching `Origin` header)
-- `AUTH_ALLOWED_CLIENT_IDS` (comma-separated client ids; when set, auth routes require a matching `x-peanut-client-id` header)
-- `RUST_LOG` (default: `info`)
-- `WEB_PUSH_VAPID_PRIVATE_KEY` (required only for Web Push delivery)
-- `WEB_PUSH_VAPID_SUBJECT` (required only for Web Push delivery; `mailto:` or `https://`)
-
-See `.env.example` for a starter config.
-
-## API quickstart with curl
-
-This is the fastest way to exercise Peanut without relying on any browser UI.
-
-```bash
-export BASE_URL=http://127.0.0.1:3000
-export CLIENT_ID=peanut-web-dev
-
-# 1) register first admin
-curl -s -X POST "$BASE_URL/api/register" \
-  -H 'content-type: application/json' \
-  -H "x-peanut-client-id: $CLIENT_ID" \
-  -d '{"email":"admin@example.com","password": "***"}'
-
-# 2) login
-LOGIN_JSON=$(curl -s -X POST "$BASE_URL/api/login" \
-  -H 'content-type: application/json' \
-  -H "x-peanut-client-id: $CLIENT_ID" \
-  -d '{"email":"admin@example.com","password": "***"}')
-
-# 3) copy access_token from the login response and paste it below
-
-# 4) create a table
-curl -s -X POST "$BASE_URL/api/data/tables" \
-  -H 'authorization: Bearer <PASTE_ACCESS_TOKEN_HERE>' \
-  -H 'content-type: application/json' \
-  -d '{
-    "name": "todos",
-    "display_name": "Todos",
-    "schema": {
-      "fields": {
-        "title": { "type": "string", "required": true, "max_length": 200 },
-        "done": { "type": "boolean", "required": false, "default": false }
-      }
-    },
-    "access_policy": { "mode": "owner_private" }
-  }'
-
-# 5) insert a row
-curl -s -X POST "$BASE_URL/api/data/tables/todos/rows" \
+curl -s -X POST "$BASE_URL/api/bootstrap/admin" \
   -H "content-type: application/json" \
-  -H 'authorization: Bearer <PASTE_ACCESS_TOKEN_HERE>' \
-  -d '{"data":{"title":"buy milk"}}'
-
-# 6) query rows with filtering, search, and offset
-curl -s "$BASE_URL/api/data/tables/todos/rows?search=buy&filter_field=title&filter_op=starts_with&filter_value=buy&order_by=title&order=asc&limit=10&offset=0" \
-  -H 'authorization: Bearer <PASTE_ACCESS_TOKEN_HERE>'
+  --data '{"email":"owner@example.com","password":"password123"}'
 ```
 
-Quick notes:
-- the first registered user becomes active admin automatically
-- if `AUTH_ALLOWED_CLIENT_IDS` is enabled, keep sending `x-peanut-client-id` on auth routes like the example above
-- `owner_private` rows are scoped to the authenticated user
-- the same bearer token works for storage, data, push, and session endpoints
-- for server-to-server admin automation, see `docs/service-tokens.md`
-- for cron/operator automation patterns, see `docs/automation-runbook.md`
-- for a fuller Data API walkthrough, see `docs/data-api.md`
-- for ready-to-send payload files, see `examples/data-api/`
-- for a combined service-token + data + storage runbook, see `examples/operations-e2e/`
-- that runbook now also includes Data API list/export/import and checkpoint/replay steps
-- for backend module ownership boundaries, see `docs/module-boundaries.md`
-- for reusable env-backed cron scripts, see `examples/automation/`
-- for a full external frontend auth flow, see `docs/auth-client.md` and `examples/auth-client-web/`
+The response contains an admin access token and refresh token. After any admin
+exists, bootstrap returns `409`.
 
-## Local development
+Create an app key:
 
-### Prerequisites
-- Rust toolchain
+```bash
+curl -s -X POST "$BASE_URL/api/apps/default/keys" \
+  -H "authorization: Bearer $ADMIN_TOKEN" \
+  -H "content-type: application/json" \
+  --data '{"name":"server","key_type":"server"}'
+```
 
-### Run tests
+Register and login an app user:
+
+```bash
+curl -s -X POST "$BASE_URL/api/apps/default/auth/register" \
+  -H "x-peanut-api-key: $APP_KEY" \
+  -H "content-type: application/json" \
+  --data '{"email":"user@example.com","password":"password123"}'
+
+curl -s -X POST "$BASE_URL/api/apps/default/auth/login" \
+  -H "x-peanut-api-key: $APP_KEY" \
+  -H "content-type: application/json" \
+  --data '{"email":"user@example.com","password":"password123"}'
+```
+
+## Core Docs
+
+- `docs/openapi.yaml`
+- `docs/app-scoped-api.md`
+- `docs/auth-client.md`
+- `docs/data-api.md`
+- `docs/production-ops-runbook.md`
+- `docs/migration-backup-guide.md`
+- `docs/deployment.md`
+
+## Verification
+
+Local Rust checks:
 
 ```bash
 cargo test
+cargo clippy --all-targets --all-features -- -D warnings
 ```
 
-### Build the full project
+Docker Compose smoke:
 
 ```bash
-./scripts/build.sh
+PEANUT_BOOTSTRAP_EMAIL=owner@example.com \
+PEANUT_BOOTSTRAP_PASSWORD=password123 \
+scripts/verify-compose.sh
 ```
 
-### Run the binary
-
-```bash
-export JWT_SECRET='replace-this'
-./target/release/peanut
-```
-
-Then open:
-- `http://127.0.0.1:3000`
-
-## Docker
-
-```bash
-cp .env.example .env
-# edit JWT_SECRET in .env
-
-docker compose pull
-docker compose up -d
-```
-
-For local image development:
-
-```bash
-docker compose -f docker-compose.yml -f docker-compose.build.yml up --build -d
-```
-
-### Docker Compose operations guide
-
-Operational notes for the provided `docker-compose.yml`:
-- container port `3000` is published to host `3000`
-- `./data` is mounted into `/app/data`
-- the default SQLite path is `sqlite://data/peanut.db`
-- the default storage path is `data/storage`
-- restart policy is `always`
-
-Recommended day-1 flow:
-
-```bash
-cp .env.example .env
-# set JWT_SECRET
-# optionally set WEB_PUSH_VAPID_PRIVATE_KEY / WEB_PUSH_VAPID_SUBJECT
-
-docker compose pull
-docker compose up -d
-docker compose logs -f peanut
-```
-
-Recommended day-2 operations:
-
-```bash
-# restart after config change
-docker compose up -d
-
-# inspect current logs
-docker compose logs --tail=200 peanut
-
-# stop without deleting data
-docker compose stop
-
-# start again
-docker compose start
-```
-
-Backup and restore notes:
-- back up `./data/peanut.db` and `./data/storage/`
-- if you keep the default compose layout, backing up the entire `./data/` directory is enough
-- for API-managed DB restore, schedule the restore, verify pending state, restart Peanut, then verify readiness after startup
-- do not upgrade images while a restore marker is pending
-- for full directory restores, stop the container, replace `./data/`, and start the stack again
-
-API-managed restore flow:
-
-```bash
-curl -s -X POST "$BASE_URL/api/admin/backups/<backup-name>/restore" \
-  -H "authorization: Bearer $ADMIN_JWT"
-curl -s "$BASE_URL/api/admin/backups/restore-pending" \
-  -H "authorization: Bearer $ADMIN_JWT" | jq .
-docker compose restart peanut
-curl -s "$BASE_URL/api/ready" | jq .
-```
-
-## Local browser Web Push experiment guide
-
-Use this when you want to verify the browser-facing Web Push path end to end on your own machine.
-
-1. Set runtime env:
-   - `JWT_SECRET`
-   - `WEB_PUSH_VAPID_PRIVATE_KEY`
-   - `WEB_PUSH_VAPID_SUBJECT`
-2. Start Peanut and open `http://127.0.0.1:3000`
-3. Register the first admin user and log in
-4. In the Push section, confirm that the VAPID public key field is auto-filled
-5. Click `Register browser Web Push`
-6. Allow browser notification permission when prompted
-7. Confirm that a `web_push` subscription appears in the console
-8. Enqueue a push message
-9. Confirm the queue item moves to `sent` or inspect `last_error` if delivery fails
-
-Notes:
-- automatic browser registration requires notification permission in the real browser
-- the manual Web Push subscription form is useful for validating the backend API path even when browser permission prompts are blocked
-- if `GET /api/push/vapid-public-key` returns 404, check the VAPID env vars first
-
-## Release checklist
-
-Before shipping a change, verify:
-
-```bash
-cargo fmt --all -- --check
-cargo clippy --all-targets -- -D warnings
-cargo test
-cargo test -- --test-threads=1
-scripts/check-openapi.sh
-./scripts/build.sh
-node --check examples/auth-client-web/app.js
-```
-
-Tagged releases are published as GitHub Releases and GHCR images:
-- `ghcr.io/parkjangwon/peanut:<version>`
-- `ghcr.io/parkjangwon/peanut:latest`
-
-Upgrade:
-
-```bash
-curl -s "$BASE_URL/api/admin/backups/restore-pending" \
-  -H "authorization: Bearer $ADMIN_JWT" | jq .
-docker compose pull
-docker compose up -d
-```
-
-Rollback by setting `PEANUT_IMAGE=ghcr.io/parkjangwon/peanut:<previous-version>` in `.env`, then run `docker compose up -d`.
-
-Manual smoke test:
-1. open `/` and confirm the API-first landing page renders
-2. register first admin
-3. login
-4. create a data table
-5. create and update a row
-6. verify title filter or generic field filter works
-7. subscribe an ntfy topic and enqueue a push message
-8. if VAPID is configured, confirm the public key auto-loads and try browser or manual Web Push subscription
-9. if auth client policy is enabled, verify `examples/auth-client-web/` works with `x-peanut-client-id`
-
-## Backups and operations
-
-For a simple single-node deployment, back up:
-- the SQLite database file
-- the storage directory
-
-In the default docker-compose layout that means backing up `./data/`.
-
-Peanut also exposes admin APIs for DB backup operations:
-- `GET /api/admin/backups`
-- `POST /api/admin/backups`
-- `GET /api/admin/backups/:backup_name/download`
-- `POST /api/admin/backups/:backup_name/restore`
-- `GET /api/admin/backups/restore-pending`
-- `DELETE /api/admin/backups/restore-pending`
-
-## Current non-goals
-
-Peanut is intentionally not trying to be:
-- a large multi-tenant backend cloud
-- a plugin/orchestration framework
-- a Supabase/Firebase replacement
-- a full Web Push platform yet
-
-## License
-
-No license file has been chosen yet.
-If you plan to distribute Peanut publicly, add an explicit license before release.
+For an existing install, provide `PEANUT_ADMIN_TOKEN` instead of bootstrap
+credentials.

@@ -1,77 +1,36 @@
 # Peanut Module Boundaries
 
-This note fixes the intended boundaries for the largest backend modules before
-more MVP hardening work lands. It is not a rewrite plan; it is a guardrail for
-small, safe changes.
+This note captures the current backend module ownership. Keep changes app-scoped
+by default; new public behavior should normally live under `/api/apps/:app_id`.
 
-## Current Rule
+## API Modules
 
-Do not add new unrelated responsibilities to these large API files:
+- `src/api/auth/`: app-scoped password auth, refresh sessions, auth events, OIDC,
+  and first-admin bootstrap.
+- `src/api/data/`: app-scoped table definitions, row CRUD, query presets,
+  import/export, and row events.
+- `src/api/storage/`: app-scoped bucket and object APIs.
+- `src/api/functions/`: app-scoped function CRUD, versions, invocations, editor
+  helpers, and endpoint invocation.
+- `src/api/push/`: app-scoped subscriptions, queue state, diagnostics, and send
+  flows.
+- `src/api/app_scope.rs`: admin wrappers that bind existing domain handlers to a
+  path `app_id`.
+- `src/middleware/sdk_auth.rs`: app-key auth, scope checks, and bearer/app
+  mismatch checks for SDK routes.
 
-- `src/api/storage.rs`
-- `src/api/data.rs`
-- `src/api/functions.rs`
+## Route Policy
 
-When touching one of them, keep new helpers close to the behavior they support
-and prefer extracting a focused module when the new code is reusable or protocol
-specific.
-
-## Storage
-
-Current responsibilities:
-
-- route handlers for legacy storage and S3-like storage
-- S3 XML response and error envelopes
-- range and conditional request handling
-- object tagging and checksum parsing
-- multipart upload request parsing and responses
-
-Preferred extraction targets:
-
-- `src/api/storage_xml.rs` for XML response builders and XML parsing helpers
-- `src/api/storage_conditions.rs` for range and conditional read evaluation
-- `src/api/storage_multipart.rs` for multipart query parsing and response builders
-- `src/api/storage_tags.rs` for tagging header/XML normalization
-
-## Data API
-
-Current responsibilities:
-
-- table and row handlers
-- schema validation and schema evolution checks
-- row filter/search/sort evaluation
-- import/export checksum handling
-- row event replay and SSE
-
-Preferred extraction targets:
-
-- `src/api/data_schema.rs` for schema validation and evolution rules
-- `src/api/data_query.rs` for bounded filter/search/sort logic
-- `src/api/data_import_export.rs` for snapshot checksum and import/export helpers
-- `src/api/data_events.rs` for event payload and SSE helpers
-
-## Functions
-
-Current responsibilities:
-
-- function CRUD and version lifecycle
-- invocation lifecycle and retry
-- policy checks, API key checks, and per-function rate limits
-- event emission
-- runtime invocation handoff to `src/functions/mod.rs`
-
-Preferred extraction targets:
-
-- `src/api/functions_policy.rs` for invoke policy, origin, API key, and rate-limit checks
-- `src/api/functions_versions.rs` for version persistence and rollback helpers
-- `src/api/functions_invocations.rs` for invocation creation, status updates, retry, and events
+Legacy global runtime paths are intentionally not mounted. If a new endpoint is
+for application developers, add it under `/api/apps/:app_id/...`. If it is for
+platform operation, keep it behind admin bearer auth.
 
 ## Runtime Trust Boundary
 
 Peanut Functions are trusted admin-managed extensions. The runtime uses a local
-Deno subprocess and bounded Peanut host bindings. This is process-only
-hardening, not a hostile-tenant sandbox, and Peanut does not claim OS-level or
-container-level sandboxing. Installations that do not need Functions should set:
+Deno subprocess and bounded Peanut host bindings. This is process-level
+hardening, not a hostile-tenant sandbox. Installations that do not need
+Functions should set:
 
 ```bash
 FUNCTIONS_ENABLED=false
@@ -79,6 +38,5 @@ FUNCTIONS_ENABLED=false
 
 The readiness endpoint reports whether Functions are enabled and whether the
 local Deno runtime and work directory are available. `FUNCTIONS_ALLOW_NETWORK=false`
-keeps common browser-style network APIs unavailable, and
-`FUNCTIONS_MAX_CONCURRENT` caps simultaneous Function invocations in the Peanut
-process.
+keeps common network APIs unavailable, and `FUNCTIONS_MAX_CONCURRENT` caps
+simultaneous Function invocations in the Peanut process.

@@ -54,6 +54,12 @@ pub struct RegisterRequest {
 }
 
 #[derive(Debug, Clone, Deserialize)]
+pub struct BootstrapAdminRequest {
+    pub email: String,
+    pub password: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
 pub struct LoginRequest {
     pub email: String,
     pub password: String,
@@ -94,6 +100,91 @@ pub struct LoginResponse {
     pub token_type: String,
     pub expires_at: DateTime<Utc>,
     pub user: UserSummary,
+}
+
+pub async fn bootstrap_admin(
+    State(state): State<crate::AppState>,
+    Json(payload): Json<BootstrapAdminRequest>,
+) -> Response {
+    if let Err(message) = validate_credentials(&payload.email, &payload.password) {
+        return json_error(StatusCode::BAD_REQUEST, message);
+    }
+
+    let admin_count: (i64,) =
+        match sqlx::query_as("SELECT COUNT(*) FROM users WHERE is_admin = TRUE")
+            .fetch_one(&state.pool)
+            .await
+        {
+            Ok(row) => row,
+            Err(_) => {
+                return json_error(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "failed to inspect admins",
+                )
+            }
+        };
+    if admin_count.0 > 0 {
+        return json_error(StatusCode::CONFLICT, "admin already exists");
+    }
+
+    if sqlx::query("INSERT OR IGNORE INTO apps (id, name, display_name) VALUES (?, ?, ?)")
+        .bind(crate::app_context::DEFAULT_APP_ID)
+        .bind(crate::app_context::DEFAULT_APP_ID)
+        .bind("Default App")
+        .execute(&state.pool)
+        .await
+        .is_err()
+    {
+        return json_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "failed to ensure default app",
+        );
+    }
+
+    let user_id = Uuid::new_v4().to_string();
+    let email = payload.email.trim().to_lowercase();
+    let password_hash = match crate::auth::hash::hash_password(&payload.password) {
+        Ok(hash) => hash,
+        Err(_) => return json_error(StatusCode::INTERNAL_SERVER_ERROR, "failed to hash password"),
+    };
+
+    let insert_result = sqlx::query(
+        "INSERT INTO users (id, app_id, email, password_hash, is_active, is_admin) VALUES (?, ?, ?, ?, TRUE, TRUE)",
+    )
+    .bind(&user_id)
+    .bind(crate::app_context::DEFAULT_APP_ID)
+    .bind(&email)
+    .bind(password_hash)
+    .execute(&state.pool)
+    .await;
+
+    if insert_result.is_err() {
+        return json_error(StatusCode::CONFLICT, "admin user could not be bootstrapped");
+    }
+
+    let user = UserSummary {
+        id: user_id,
+        app_id: crate::app_context::DEFAULT_APP_ID.to_string(),
+        email,
+        is_active: true,
+        is_admin: true,
+    };
+
+    match issue_login_response(&state, crate::app_context::DEFAULT_APP_ID, user.clone()).await {
+        Ok(response) => {
+            let _ = record_auth_event(
+                &state.pool,
+                crate::app_context::DEFAULT_APP_ID,
+                &user.id,
+                Some(&user.id),
+                "admin_bootstrapped",
+                None,
+            )
+            .await;
+            (StatusCode::CREATED, Json(response)).into_response()
+        }
+        Err(message) => json_error(StatusCode::INTERNAL_SERVER_ERROR, message),
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

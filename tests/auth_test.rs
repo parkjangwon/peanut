@@ -4,6 +4,34 @@ use axum::http::StatusCode;
 use serde_json::Value;
 
 #[tokio::test]
+async fn bootstrap_admin_returns_token_once_on_fresh_install() {
+    let (app, _dir) = common::make_app_without_seeded_key().await;
+
+    let bootstrap = common::post_json(
+        &app,
+        "/api/bootstrap/admin",
+        serde_json::json!({ "email": "owner@example.com", "password": "password123" }),
+    )
+    .await;
+    assert_eq!(bootstrap.status(), StatusCode::CREATED);
+    let body: Value = common::response_json(bootstrap).await;
+    assert!(body["access_token"].is_string());
+    assert!(body["refresh_token"].is_string());
+    assert_eq!(body["token_type"], "Bearer");
+    assert_eq!(body["user"]["app_id"], "default");
+    assert_eq!(body["user"]["email"], "owner@example.com");
+    assert_eq!(body["user"]["is_admin"], true);
+
+    let second_bootstrap = common::post_json(
+        &app,
+        "/api/bootstrap/admin",
+        serde_json::json!({ "email": "second@example.com", "password": "password123" }),
+    )
+    .await;
+    assert_eq!(second_bootstrap.status(), StatusCode::CONFLICT);
+}
+
+#[tokio::test]
 async fn register_and_login_roundtrip() {
     let (app, _dir) = common::make_app().await;
 
