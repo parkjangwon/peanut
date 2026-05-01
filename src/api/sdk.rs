@@ -43,45 +43,49 @@ fn scoped_user_claims(auth: &SdkAuthContext, scope: &str) -> Result<Claims, Resp
 pub async fn register(
     State(state): State<crate::AppState>,
     Extension(auth): Extension<SdkAuthContext>,
+    Path(app_id): Path<String>,
     Json(payload): Json<crate::api::auth::RegisterRequest>,
 ) -> Response {
     if let Err(response) = scoped_actor_claims(&auth, "auth:public") {
         return response;
     }
-    crate::api::auth::register(State(state), Json(payload)).await
+    crate::api::auth::register_for_app(&state, &app_id, payload).await
 }
 
 pub async fn login(
     State(state): State<crate::AppState>,
     Extension(auth): Extension<SdkAuthContext>,
+    Path(app_id): Path<String>,
     Json(payload): Json<crate::api::auth::LoginRequest>,
 ) -> Response {
     if let Err(response) = scoped_actor_claims(&auth, "auth:public") {
         return response;
     }
-    crate::api::auth::login(State(state), Json(payload)).await
+    crate::api::auth::login_for_app(&state, &app_id, payload).await
 }
 
 pub async fn refresh_session(
     State(state): State<crate::AppState>,
     Extension(auth): Extension<SdkAuthContext>,
+    Path(app_id): Path<String>,
     Json(payload): Json<crate::api::auth::RefreshTokenRequest>,
 ) -> Response {
     if let Err(response) = scoped_actor_claims(&auth, "auth:public") {
         return response;
     }
-    crate::api::auth::refresh_session(State(state), Json(payload)).await
+    crate::api::auth::refresh_session_for_app(&state, &app_id, payload).await
 }
 
 pub async fn logout(
     State(state): State<crate::AppState>,
     Extension(auth): Extension<SdkAuthContext>,
+    Path(app_id): Path<String>,
     Json(payload): Json<crate::api::auth::RefreshTokenRequest>,
 ) -> Response {
     if let Err(response) = scoped_actor_claims(&auth, "auth:public") {
         return response;
     }
-    crate::api::auth::logout(State(state), Json(payload)).await
+    crate::api::auth::logout_for_app(&state, &app_id, payload).await
 }
 
 pub async fn me(
@@ -429,8 +433,7 @@ async fn save_app_push_subscription(
         r#"
         INSERT INTO push_subscriptions (app_id, user_id, endpoint, p256dh, auth)
         VALUES (?, ?, ?, ?, ?)
-        ON CONFLICT(user_id, endpoint) DO UPDATE SET
-            app_id = excluded.app_id,
+        ON CONFLICT(app_id, user_id, endpoint) DO UPDATE SET
             p256dh = excluded.p256dh,
             auth = excluded.auth
         "#,
@@ -478,6 +481,7 @@ mod tests {
     fn claims(user_id: &str, is_admin: bool) -> Claims {
         Claims {
             sub: user_id.to_string(),
+            app_id: crate::app_context::DEFAULT_APP_ID.to_string(),
             exp: 9999999999,
             is_admin,
         }

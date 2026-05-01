@@ -175,6 +175,7 @@ pub async fn put_sdk_object(
         Ok(metadata) => {
             let fallback_claims = crate::auth::jwt::Claims {
                 sub: auth.principal.actor_id.clone(),
+                app_id: app_id.clone(),
                 exp: 0,
                 is_admin: auth.principal.is_admin,
             };
@@ -224,6 +225,7 @@ pub async fn delete_sdk_object(
         Ok(()) => {
             let fallback_claims = crate::auth::jwt::Claims {
                 sub: auth.principal.actor_id.clone(),
+                app_id: app_id.clone(),
                 exp: 0,
                 is_admin: auth.principal.is_admin,
             };
@@ -338,6 +340,7 @@ mod tests {
             ),
             actor: crate::auth::jwt::Claims {
                 sub: "admin_1".to_string(),
+                app_id: crate::app_context::DEFAULT_APP_ID.to_string(),
                 exp: 9999999999,
                 is_admin: true,
             },
@@ -348,6 +351,7 @@ mod tests {
     fn user_claims() -> crate::auth::jwt::Claims {
         crate::auth::jwt::Claims {
             sub: "user_1".to_string(),
+            app_id: crate::app_context::DEFAULT_APP_ID.to_string(),
             exp: 9999999999,
             is_admin: false,
         }

@@ -15,11 +15,24 @@ pub struct Principal {
 }
 
 impl Principal {
+    #[allow(dead_code)]
     pub fn user(user_id: impl Into<String>, is_admin: bool) -> Self {
+        Self::user_for_app(
+            user_id,
+            crate::app_context::DEFAULT_APP_ID.to_string(),
+            is_admin,
+        )
+    }
+
+    pub fn user_for_app(
+        user_id: impl Into<String>,
+        app_id: impl Into<String>,
+        is_admin: bool,
+    ) -> Self {
         Self {
             actor_id: user_id.into(),
             actor_kind: ActorKind::User,
-            app_id: None,
+            app_id: Some(app_id.into()),
             is_admin,
             scopes: if is_admin {
                 vec!["admin:all".to_string()]

@@ -70,6 +70,7 @@ async fn insert_function_version(
     tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
     functions_secrets_key: &str,
     function_id: &str,
+    app_id: &str,
     version_number: i64,
     validated: &ValidatedFunction,
     created_by: &str,
@@ -78,11 +79,12 @@ async fn insert_function_version(
     sqlx::query(
         r#"
         INSERT INTO function_versions (
-            id, function_id, version_number, runtime, source_code, invoke_policy, env_json, api_key_hash, allowed_origins_json, rate_limit_per_minute, timeout_ms, created_by
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            id, app_id, function_id, version_number, runtime, source_code, invoke_policy, env_json, api_key_hash, allowed_origins_json, rate_limit_per_minute, timeout_ms, created_by
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         "#,
     )
     .bind(&version_id)
+    .bind(app_id)
     .bind(function_id)
     .bind(version_number)
     .bind(&validated.runtime)
@@ -481,11 +483,13 @@ async fn find_root_invocation_id(
 
 async fn load_function_by_name(
     pool: &sqlx::SqlitePool,
+    app_id: &str,
     name: &str,
 ) -> Result<FunctionDetail, LoadFunctionError> {
     sqlx::query_as::<_, FunctionDetail>(
-        "SELECT id, name, display_name, endpoint_slug, runtime, source_code, invoke_policy, env_json, api_key_hash, allowed_origins_json, rate_limit_per_minute, CASE WHEN api_key_hash IS NULL OR api_key_hash = '' THEN 0 ELSE 1 END AS api_key_present, timeout_ms, enabled, active_version_number, active_version_id, secret_key_count, created_by, updated_by, created_at, updated_at FROM functions WHERE name = ?",
+        "SELECT id, name, display_name, endpoint_slug, runtime, source_code, invoke_policy, env_json, api_key_hash, allowed_origins_json, rate_limit_per_minute, CASE WHEN api_key_hash IS NULL OR api_key_hash = '' THEN 0 ELSE 1 END AS api_key_present, timeout_ms, enabled, active_version_number, active_version_id, secret_key_count, created_by, updated_by, created_at, updated_at FROM functions WHERE app_id = ? AND name = ?",
     )
+    .bind(app_id)
     .bind(name)
     .fetch_optional(pool)
     .await
@@ -498,8 +502,9 @@ async fn load_function_by_endpoint(
     endpoint_slug: &str,
 ) -> Result<FunctionDetail, LoadFunctionError> {
     sqlx::query_as::<_, FunctionDetail>(
-        "SELECT id, name, display_name, endpoint_slug, runtime, source_code, invoke_policy, env_json, api_key_hash, allowed_origins_json, rate_limit_per_minute, CASE WHEN api_key_hash IS NULL OR api_key_hash = '' THEN 0 ELSE 1 END AS api_key_present, timeout_ms, enabled, active_version_number, active_version_id, secret_key_count, created_by, updated_by, created_at, updated_at FROM functions WHERE endpoint_slug = ?",
+        "SELECT id, name, display_name, endpoint_slug, runtime, source_code, invoke_policy, env_json, api_key_hash, allowed_origins_json, rate_limit_per_minute, CASE WHEN api_key_hash IS NULL OR api_key_hash = '' THEN 0 ELSE 1 END AS api_key_present, timeout_ms, enabled, active_version_number, active_version_id, secret_key_count, created_by, updated_by, created_at, updated_at FROM functions WHERE app_id = ? AND endpoint_slug = ?",
     )
+    .bind(crate::app_context::DEFAULT_APP_ID)
     .bind(endpoint_slug)
     .fetch_optional(pool)
     .await
@@ -587,6 +592,7 @@ mod tests {
     fn claims(user_id: &str, is_admin: bool) -> Claims {
         Claims {
             sub: user_id.to_string(),
+            app_id: crate::app_context::DEFAULT_APP_ID.to_string(),
             exp: 9999999999,
             is_admin,
         }

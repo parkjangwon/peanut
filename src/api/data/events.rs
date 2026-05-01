@@ -10,7 +10,7 @@ pub async fn list_row_events(
         return json_error(StatusCode::FORBIDDEN, "admin access required");
     }
 
-    let table = match load_table(&state.pool, &table).await {
+    let table = match load_table(&state.pool, &claims.app_id, &table).await {
         Ok(table) => table,
         Err(LoadTableError::NotFound) => {
             return json_error(StatusCode::NOT_FOUND, "data table not found")
@@ -47,8 +47,9 @@ pub async fn list_row_events(
 
     let records = if let Some(since_id) = params.since_id {
         match sqlx::query_as::<_, DataRowEventRecord>(
-            "SELECT id, row_id, actor_user_id, action, diff_json, created_at FROM data_row_events WHERE table_id = ? AND id > ? ORDER BY id ASC LIMIT ?",
+            "SELECT id, row_id, actor_user_id, action, diff_json, created_at FROM data_row_events WHERE app_id = ? AND table_id = ? AND id > ? ORDER BY id ASC LIMIT ?",
         )
+        .bind(&claims.app_id)
         .bind(&table.id)
         .bind(since_id)
         .bind(limit as i64)
@@ -60,8 +61,9 @@ pub async fn list_row_events(
         }
     } else {
         match sqlx::query_as::<_, DataRowEventRecord>(
-            "SELECT id, row_id, actor_user_id, action, diff_json, created_at FROM data_row_events WHERE table_id = ? ORDER BY id DESC LIMIT 200",
+            "SELECT id, row_id, actor_user_id, action, diff_json, created_at FROM data_row_events WHERE app_id = ? AND table_id = ? ORDER BY id DESC LIMIT 200",
         )
+        .bind(&claims.app_id)
         .bind(&table.id)
         .fetch_all(&state.pool)
         .await
@@ -115,7 +117,7 @@ pub async fn get_row_event_checkpoint(
         return json_error(StatusCode::FORBIDDEN, "admin access required");
     }
 
-    let table = match load_table(&state.pool, &table).await {
+    let table = match load_table(&state.pool, &claims.app_id, &table).await {
         Ok(table) => table,
         Err(LoadTableError::NotFound) => {
             return json_error(StatusCode::NOT_FOUND, "data table not found")
@@ -132,8 +134,9 @@ pub async fn get_row_event_checkpoint(
     };
 
     let latest_event_id = match sqlx::query_scalar::<_, Option<i64>>(
-        "SELECT MAX(id) FROM data_row_events WHERE table_id = ?",
+        "SELECT MAX(id) FROM data_row_events WHERE app_id = ? AND table_id = ?",
     )
+    .bind(&claims.app_id)
     .bind(&table.id)
     .fetch_one(&state.pool)
     .await
@@ -166,19 +169,22 @@ pub async fn stream_row_events(
         return json_error(StatusCode::FORBIDDEN, "admin access required");
     }
 
-    if let Err(LoadTableError::NotFound) = load_table(&state.pool, &table).await {
+    if let Err(LoadTableError::NotFound) = load_table(&state.pool, &claims.app_id, &table).await {
         return json_error(StatusCode::NOT_FOUND, "data table not found");
     }
+    let app_id = claims.app_id.clone();
 
     let stream =
         BroadcastStream::new(state.data_event_sender.subscribe()).filter_map(move |message| {
             match message {
-                Ok(event) if event.table_name == table => Some(Ok::<Event, Infallible>(
-                    Event::default()
-                        .event("data.row_changed")
-                        .json_data(event)
-                        .unwrap_or_else(|_| Event::default().data("{}")),
-                )),
+                Ok(event) if event.app_id == app_id && event.table_name == table => {
+                    Some(Ok::<Event, Infallible>(
+                        Event::default()
+                            .event("data.row_changed")
+                            .json_data(event)
+                            .unwrap_or_else(|_| Event::default().data("{}")),
+                    ))
+                }
                 _ => None,
             }
         });

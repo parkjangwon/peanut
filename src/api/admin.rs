@@ -138,6 +138,7 @@ pub async fn create_service_token(
         Ok(_) => {
             let _ = crate::api::auth::record_auth_event(
                 &state.pool,
+                &claims.app_id,
                 &claims.sub,
                 Some(&claims.sub),
                 "service_token_created",
@@ -219,6 +220,7 @@ pub async fn revoke_service_token(
         Ok(_) => {
             let _ = crate::api::auth::record_auth_event(
                 &state.pool,
+                &claims.app_id,
                 &claims.sub,
                 Some(&claims.sub),
                 "service_token_revoked",
@@ -245,6 +247,7 @@ pub async fn activate_user(
 
     set_user_active(
         &state.pool,
+        &claims.app_id,
         &claims.sub,
         &user_id,
         true,
@@ -265,6 +268,7 @@ pub async fn deactivate_user(
 
     set_user_active(
         &state.pool,
+        &claims.app_id,
         &claims.sub,
         &user_id,
         false,
@@ -276,6 +280,7 @@ pub async fn deactivate_user(
 
 async fn set_user_active(
     pool: &sqlx::SqlitePool,
+    app_id: &str,
     actor_user_id: &str,
     user_id: &str,
     is_active: bool,
@@ -294,6 +299,7 @@ async fn set_user_active(
         Ok(_) => {
             let _ = crate::api::auth::record_auth_event(
                 pool,
+                app_id,
                 user_id,
                 Some(actor_user_id),
                 event_action,
@@ -323,6 +329,7 @@ mod tests {
     fn admin_claims(user_id: &str) -> Claims {
         Claims {
             sub: user_id.to_string(),
+            app_id: crate::app_context::DEFAULT_APP_ID.to_string(),
             exp: 9999999999,
             is_admin: true,
         }
@@ -331,6 +338,7 @@ mod tests {
     fn member_claims(user_id: &str) -> Claims {
         Claims {
             sub: user_id.to_string(),
+            app_id: crate::app_context::DEFAULT_APP_ID.to_string(),
             exp: 9999999999,
             is_admin: false,
         }

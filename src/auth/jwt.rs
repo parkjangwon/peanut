@@ -5,8 +5,14 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Claims {
     pub sub: String,
+    #[serde(default = "default_app_id")]
+    pub app_id: String,
     pub exp: i64,
     pub is_admin: bool,
+}
+
+fn default_app_id() -> String {
+    crate::app_context::DEFAULT_APP_ID.to_string()
 }
 
 fn jwt_validation() -> Validation {
@@ -16,7 +22,24 @@ fn jwt_validation() -> Validation {
     validation
 }
 
+#[allow(dead_code)]
 pub fn create_jwt(
+    user_id: &str,
+    is_admin: bool,
+    secret: &str,
+    expires_at: DateTime<Utc>,
+) -> String {
+    create_app_jwt(
+        crate::app_context::DEFAULT_APP_ID,
+        user_id,
+        is_admin,
+        secret,
+        expires_at,
+    )
+}
+
+pub fn create_app_jwt(
+    app_id: &str,
     user_id: &str,
     is_admin: bool,
     secret: &str,
@@ -24,6 +47,7 @@ pub fn create_jwt(
 ) -> String {
     let claims = Claims {
         sub: user_id.to_owned(),
+        app_id: app_id.to_owned(),
         exp: expires_at.timestamp(),
         is_admin,
     };
@@ -57,7 +81,24 @@ mod tests {
         let token = create_jwt("user123", true, secret, Utc::now() + Duration::minutes(15));
         let claims = verify_jwt(&token, secret).unwrap();
         assert_eq!(claims.sub, "user123");
+        assert_eq!(claims.app_id, crate::app_context::DEFAULT_APP_ID);
         assert!(claims.is_admin);
+    }
+
+    #[test]
+    fn test_app_jwt_flow() {
+        let secret = "test_secret";
+        let token = create_app_jwt(
+            "app_a",
+            "user123",
+            false,
+            secret,
+            Utc::now() + Duration::minutes(15),
+        );
+        let claims = verify_jwt(&token, secret).unwrap();
+        assert_eq!(claims.sub, "user123");
+        assert_eq!(claims.app_id, "app_a");
+        assert!(!claims.is_admin);
     }
 
     #[test]

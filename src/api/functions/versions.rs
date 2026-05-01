@@ -9,7 +9,7 @@ pub async fn list_function_versions(
         return response;
     }
 
-    let function = match load_function_by_name(&state.pool, &name).await {
+    let function = match load_function_by_name(&state.pool, &claims.app_id, &name).await {
         Ok(function) => function,
         Err(LoadFunctionError::NotFound) => {
             return json_error(StatusCode::NOT_FOUND, "function not found")
@@ -59,7 +59,7 @@ pub async fn rollback_function_version(
         return response;
     }
 
-    let function = match load_function_by_name(&state.pool, &name).await {
+    let function = match load_function_by_name(&state.pool, &claims.app_id, &name).await {
         Ok(function) => function,
         Err(LoadFunctionError::NotFound) => {
             return json_error(StatusCode::NOT_FOUND, "function not found")
@@ -129,11 +129,11 @@ pub async fn rollback_function_version(
         );
     }
 
-    match load_function_by_name(&state.pool, &function.name).await {
+    match load_function_by_name(&state.pool, &claims.app_id, &function.name).await {
         Ok(function) => {
             let _ = crate::api::audit::record_audit_log(
                 &state.pool,
-                Some(crate::app_context::DEFAULT_APP_ID),
+                Some(&claims.app_id),
                 &claims,
                 "function.rolled_back",
                 "function",

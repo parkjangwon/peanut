@@ -9,7 +9,7 @@ pub async fn list_query_presets(
     if !claims.is_admin {
         return json_error(StatusCode::FORBIDDEN, "admin access required");
     }
-    let table = match load_table(&state.pool, &table).await {
+    let table = match load_table(&state.pool, &claims.app_id, &table).await {
         Ok(table) => table,
         Err(LoadTableError::NotFound) => {
             return json_error(StatusCode::NOT_FOUND, "data table not found")
@@ -25,7 +25,7 @@ pub async fn list_query_presets(
         }
     };
 
-    match load_query_presets(&state.pool, &table.id).await {
+    match load_query_presets(&state.pool, &claims.app_id, &table.id).await {
         Ok(presets) => (StatusCode::OK, Json(QueryPresetsResponse { presets })).into_response(),
         Err(message) => json_error(StatusCode::INTERNAL_SERVER_ERROR, message),
     }
@@ -40,7 +40,7 @@ pub async fn create_query_preset(
     if !claims.is_admin {
         return json_error(StatusCode::FORBIDDEN, "admin access required");
     }
-    let table = match load_table(&state.pool, &table).await {
+    let table = match load_table(&state.pool, &claims.app_id, &table).await {
         Ok(table) => table,
         Err(LoadTableError::NotFound) => {
             return json_error(StatusCode::NOT_FOUND, "data table not found")
@@ -72,9 +72,10 @@ pub async fn create_query_preset(
     };
 
     match sqlx::query(
-        "INSERT INTO data_query_presets (id, table_id, name, display_name, params_json, created_by) VALUES (?, ?, ?, ?, ?, ?)",
+        "INSERT INTO data_query_presets (id, app_id, table_id, name, display_name, params_json, created_by) VALUES (?, ?, ?, ?, ?, ?, ?)",
     )
     .bind(&preset_id)
+    .bind(&claims.app_id)
     .bind(&table.id)
     .bind(payload.name.trim())
     .bind(payload.display_name.trim())
@@ -83,7 +84,7 @@ pub async fn create_query_preset(
     .execute(&state.pool)
     .await
     {
-        Ok(_) => match load_query_preset(&state.pool, &table.id, &preset_id).await {
+        Ok(_) => match load_query_preset(&state.pool, &claims.app_id, &table.id, &preset_id).await {
             Ok(preset) => (StatusCode::CREATED, Json(preset)).into_response(),
             Err(LoadPresetError::NotFound) => json_error(StatusCode::INTERNAL_SERVER_ERROR, "created preset could not be reloaded"),
             Err(LoadPresetError::Invalid(message)) => json_error(StatusCode::INTERNAL_SERVER_ERROR, message),
@@ -102,7 +103,7 @@ pub async fn update_query_preset(
     if !claims.is_admin {
         return json_error(StatusCode::FORBIDDEN, "admin access required");
     }
-    let table = match load_table(&state.pool, &table).await {
+    let table = match load_table(&state.pool, &claims.app_id, &table).await {
         Ok(table) => table,
         Err(LoadTableError::NotFound) => {
             return json_error(StatusCode::NOT_FOUND, "data table not found")
@@ -131,18 +132,19 @@ pub async fn update_query_preset(
     };
 
     match sqlx::query(
-        "UPDATE data_query_presets SET name = ?, display_name = ?, params_json = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND table_id = ?",
+        "UPDATE data_query_presets SET name = ?, display_name = ?, params_json = ?, updated_at = CURRENT_TIMESTAMP WHERE app_id = ? AND id = ? AND table_id = ?",
     )
     .bind(payload.name.trim())
     .bind(payload.display_name.trim())
     .bind(params_json)
+    .bind(&claims.app_id)
     .bind(&preset_id)
     .bind(&table.id)
     .execute(&state.pool)
     .await
     {
         Ok(result) if result.rows_affected() == 0 => json_error(StatusCode::NOT_FOUND, "query preset not found"),
-        Ok(_) => match load_query_preset(&state.pool, &table.id, &preset_id).await {
+        Ok(_) => match load_query_preset(&state.pool, &claims.app_id, &table.id, &preset_id).await {
             Ok(preset) => (StatusCode::OK, Json(preset)).into_response(),
             Err(LoadPresetError::NotFound) => json_error(StatusCode::INTERNAL_SERVER_ERROR, "updated preset could not be reloaded"),
             Err(LoadPresetError::Invalid(message)) => json_error(StatusCode::INTERNAL_SERVER_ERROR, message),
@@ -160,7 +162,7 @@ pub async fn delete_query_preset(
     if !claims.is_admin {
         return json_error(StatusCode::FORBIDDEN, "admin access required");
     }
-    let table = match load_table(&state.pool, &table).await {
+    let table = match load_table(&state.pool, &claims.app_id, &table).await {
         Ok(table) => table,
         Err(LoadTableError::NotFound) => {
             return json_error(StatusCode::NOT_FOUND, "data table not found")
@@ -176,7 +178,8 @@ pub async fn delete_query_preset(
         }
     };
 
-    match sqlx::query("DELETE FROM data_query_presets WHERE id = ? AND table_id = ?")
+    match sqlx::query("DELETE FROM data_query_presets WHERE app_id = ? AND id = ? AND table_id = ?")
+        .bind(&claims.app_id)
         .bind(&preset_id)
         .bind(&table.id)
         .execute(&state.pool)
@@ -205,7 +208,7 @@ pub async fn run_query_preset(
         return json_error(StatusCode::FORBIDDEN, "admin access required");
     }
 
-    let table = match load_table(&state.pool, &table).await {
+    let table = match load_table(&state.pool, &claims.app_id, &table).await {
         Ok(table) => table,
         Err(LoadTableError::NotFound) => {
             return json_error(StatusCode::NOT_FOUND, "data table not found")
@@ -221,7 +224,7 @@ pub async fn run_query_preset(
         }
     };
 
-    let preset = match load_query_preset(&state.pool, &table.id, &preset_id).await {
+    let preset = match load_query_preset(&state.pool, &claims.app_id, &table.id, &preset_id).await {
         Ok(preset) => preset,
         Err(LoadPresetError::NotFound) => {
             return json_error(StatusCode::NOT_FOUND, "query preset not found")

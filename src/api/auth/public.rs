@@ -4,6 +4,14 @@ pub async fn register(
     State(state): State<crate::AppState>,
     Json(payload): Json<RegisterRequest>,
 ) -> Response {
+    register_for_app(&state, crate::app_context::DEFAULT_APP_ID, payload).await
+}
+
+pub async fn register_for_app(
+    state: &crate::AppState,
+    app_id: &str,
+    payload: RegisterRequest,
+) -> Response {
     if let Err(message) = validate_credentials(&payload.email, &payload.password) {
         return json_error(StatusCode::BAD_REQUEST, message);
     }
@@ -27,9 +35,10 @@ pub async fn register(
     let is_active = is_admin;
 
     let result = sqlx::query(
-        "INSERT INTO users (id, email, password_hash, is_active, is_admin) VALUES (?, ?, ?, ?, ?)",
+        "INSERT INTO users (id, app_id, email, password_hash, is_active, is_admin) VALUES (?, ?, ?, ?, ?, ?)",
     )
     .bind(&id)
+    .bind(app_id)
     .bind(payload.email.trim().to_lowercase())
     .bind(hashed)
     .bind(is_active)
@@ -39,7 +48,7 @@ pub async fn register(
 
     match result {
         Ok(_) => {
-            let _ = record_auth_event(pool, &id, Some(&id), "user_registered", None).await;
+            let _ = record_auth_event(pool, app_id, &id, Some(&id), "user_registered", None).await;
             (
                 StatusCode::CREATED,
                 Json(RegisterResponse {
@@ -50,6 +59,7 @@ pub async fn register(
                     },
                     user: UserSummary {
                         id,
+                        app_id: app_id.to_string(),
                         email: payload.email.trim().to_lowercase(),
                         is_active,
                         is_admin,
@@ -66,15 +76,24 @@ pub async fn login(
     State(state): State<crate::AppState>,
     Json(payload): Json<LoginRequest>,
 ) -> Response {
+    login_for_app(&state, crate::app_context::DEFAULT_APP_ID, payload).await
+}
+
+pub async fn login_for_app(
+    state: &crate::AppState,
+    app_id: &str,
+    payload: LoginRequest,
+) -> Response {
     if let Err(message) = validate_credentials(&payload.email, &payload.password) {
         return json_error(StatusCode::BAD_REQUEST, message);
     }
 
-    let user = match load_user_with_password_by_email(&state.pool, payload.email.trim()).await {
-        Ok(Some(user)) => user,
-        Ok(None) => return json_error(StatusCode::UNAUTHORIZED, "invalid credentials"),
-        Err(_) => return json_error(StatusCode::INTERNAL_SERVER_ERROR, "failed to query user"),
-    };
+    let user =
+        match load_user_with_password_by_email(&state.pool, app_id, payload.email.trim()).await {
+            Ok(Some(user)) => user,
+            Ok(None) => return json_error(StatusCode::UNAUTHORIZED, "invalid credentials"),
+            Err(_) => return json_error(StatusCode::INTERNAL_SERVER_ERROR, "failed to query user"),
+        };
 
     if !user.is_active {
         return json_error(StatusCode::FORBIDDEN, "user is not active");
@@ -84,10 +103,11 @@ pub async fn login(
         return json_error(StatusCode::UNAUTHORIZED, "invalid credentials");
     }
 
-    match issue_login_response(&state, user.summary()).await {
+    match issue_login_response(state, app_id, user.summary()).await {
         Ok(response) => {
             let _ = record_auth_event(
                 &state.pool,
+                app_id,
                 &user.id,
                 Some(&user.id),
                 "login_succeeded",
@@ -104,14 +124,22 @@ pub async fn refresh_session(
     State(state): State<crate::AppState>,
     Json(payload): Json<RefreshTokenRequest>,
 ) -> Response {
-    let Some(stored_token) = load_active_refresh_token(&state.pool, &payload.refresh_token)
+    refresh_session_for_app(&state, crate::app_context::DEFAULT_APP_ID, payload).await
+}
+
+pub async fn refresh_session_for_app(
+    state: &crate::AppState,
+    app_id: &str,
+    payload: RefreshTokenRequest,
+) -> Response {
+    let Some(stored_token) = load_active_refresh_token(&state.pool, app_id, &payload.refresh_token)
         .await
         .unwrap_or(None)
     else {
         return json_error(StatusCode::UNAUTHORIZED, "valid refresh token is required");
     };
 
-    let user = match load_user_summary_by_id(&state.pool, &stored_token.user_id).await {
+    let user = match load_user_summary_by_id(&state.pool, app_id, &stored_token.user_id).await {
         Ok(Some(user)) => user,
         Ok(None) => return json_error(StatusCode::UNAUTHORIZED, "user not found"),
         Err(_) => return json_error(StatusCode::INTERNAL_SERVER_ERROR, "failed to load user"),
@@ -125,7 +153,8 @@ pub async fn refresh_session(
     match rotate_refresh_token(&state.pool, &stored_token).await {
         Ok(new_refresh_token) => {
             let expires_at = Utc::now() + Duration::minutes(ACCESS_TOKEN_TTL_MINUTES);
-            let access_token = crate::auth::jwt::create_jwt(
+            let access_token = crate::auth::jwt::create_app_jwt(
+                app_id,
                 &user.id,
                 user.is_admin,
                 state.auth.jwt_secret.as_str(),
@@ -133,6 +162,7 @@ pub async fn refresh_session(
             );
             let _ = record_auth_event(
                 &state.pool,
+                app_id,
                 &user.id,
                 Some(&user.id),
                 "session_refreshed",
@@ -159,7 +189,15 @@ pub async fn logout(
     State(state): State<crate::AppState>,
     Json(payload): Json<RefreshTokenRequest>,
 ) -> Response {
-    let stored_token = load_active_refresh_token(&state.pool, &payload.refresh_token)
+    logout_for_app(&state, crate::app_context::DEFAULT_APP_ID, payload).await
+}
+
+pub async fn logout_for_app(
+    state: &crate::AppState,
+    app_id: &str,
+    payload: RefreshTokenRequest,
+) -> Response {
+    let stored_token = load_active_refresh_token(&state.pool, app_id, &payload.refresh_token)
         .await
         .unwrap_or(None);
 
@@ -168,6 +206,7 @@ pub async fn logout(
     if let Some(stored_token) = stored_token {
         let _ = record_auth_event(
             &state.pool,
+            app_id,
             &stored_token.user_id,
             Some(&stored_token.user_id),
             "logged_out",

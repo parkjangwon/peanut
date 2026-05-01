@@ -104,6 +104,7 @@ mod tests {
             crate::test_support::response_json(user).await;
         let claims = Claims {
             sub: user.user.id,
+            app_id: crate::app_context::DEFAULT_APP_ID.to_string(),
             exp: 9999999999,
             is_admin: true,
         };

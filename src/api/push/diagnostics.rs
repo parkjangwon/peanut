@@ -135,6 +135,7 @@ mod tests {
     fn claims(is_admin: bool) -> Claims {
         Claims {
             sub: "admin".to_string(),
+            app_id: crate::app_context::DEFAULT_APP_ID.to_string(),
             exp: 9999999999,
             is_admin,
         }

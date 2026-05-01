@@ -6,7 +6,7 @@ pub async fn create_row(
     Path(table): Path<String>,
     Json(payload): Json<CreateRowRequest>,
 ) -> Response {
-    let table = match load_table(&state.pool, &table).await {
+    let table = match load_table(&state.pool, &claims.app_id, &table).await {
         Ok(table) => table,
         Err(LoadTableError::NotFound) => {
             return json_error(StatusCode::NOT_FOUND, "data table not found")
@@ -44,9 +44,10 @@ pub async fn create_row(
     };
 
     let insert_result = sqlx::query(
-        "INSERT INTO data_rows (id, table_id, owner_user_id, data_json) VALUES (?, ?, ?, ?)",
+        "INSERT INTO data_rows (id, app_id, table_id, owner_user_id, data_json) VALUES (?, ?, ?, ?, ?)",
     )
     .bind(&row_id)
+    .bind(&claims.app_id)
     .bind(&table.id)
     .bind(&owner_user_id)
     .bind(&data_json)
@@ -57,6 +58,7 @@ pub async fn create_row(
         Ok(_) => {
             if let Ok(event_id) = record_row_event(
                 &state.pool,
+                &claims.app_id,
                 &table.id,
                 &row_id,
                 &claims.sub,
@@ -67,6 +69,7 @@ pub async fn create_row(
             {
                 emit_data_row_event(
                     &state,
+                    &claims.app_id,
                     event_id,
                     &table.name,
                     &row_id,
@@ -77,7 +80,7 @@ pub async fn create_row(
             }
             let _ = crate::api::audit::record_audit_log(
                 &state.pool,
-                Some(crate::app_context::DEFAULT_APP_ID),
+                Some(&claims.app_id),
                 &claims,
                 "data.row.created",
                 "data_row",
@@ -112,7 +115,7 @@ pub async fn list_rows(
     Path(table): Path<String>,
     Query(params): Query<ListRowsParams>,
 ) -> Response {
-    let table = match load_table(&state.pool, &table).await {
+    let table = match load_table(&state.pool, &claims.app_id, &table).await {
         Ok(table) => table,
         Err(LoadTableError::NotFound) => {
             return json_error(StatusCode::NOT_FOUND, "data table not found")
@@ -150,7 +153,13 @@ pub(crate) async fn execute_list_rows(
     } else {
         None
     };
-    let row_query = build_row_query(params, &table.schema, &table.id, owner_user_id);
+    let row_query = build_row_query(
+        params,
+        &table.schema,
+        &table.app_id,
+        &table.id,
+        owner_user_id,
+    );
     let sql = format!(
         "SELECT id, owner_user_id, data_json, created_at, updated_at FROM data_rows WHERE {} {} LIMIT ? OFFSET ?",
         row_query.where_clauses.join(" AND "),
@@ -193,7 +202,7 @@ pub async fn get_row(
     Extension(claims): Extension<Claims>,
     Path((table, row_id)): Path<(String, String)>,
 ) -> Response {
-    let table = match load_table(&state.pool, &table).await {
+    let table = match load_table(&state.pool, &claims.app_id, &table).await {
         Ok(table) => table,
         Err(LoadTableError::NotFound) => {
             return json_error(StatusCode::NOT_FOUND, "data table not found")
@@ -237,7 +246,7 @@ pub async fn update_row(
     Path((table, row_id)): Path<(String, String)>,
     Json(payload): Json<CreateRowRequest>,
 ) -> Response {
-    let table = match load_table(&state.pool, &table).await {
+    let table = match load_table(&state.pool, &claims.app_id, &table).await {
         Ok(table) => table,
         Err(LoadTableError::NotFound) => {
             return json_error(StatusCode::NOT_FOUND, "data table not found")
@@ -308,12 +317,12 @@ pub async fn update_row(
     .await
     {
         Ok(_) => {
-            if let Ok(event_id) = record_row_event(&state.pool, &table.id, &row_id, &claims.sub, "update", Some(&normalized)).await {
-                emit_data_row_event(&state, event_id, &table.name, &row_id, &claims.sub, "update", Some(&normalized));
+            if let Ok(event_id) = record_row_event(&state.pool, &claims.app_id, &table.id, &row_id, &claims.sub, "update", Some(&normalized)).await {
+                emit_data_row_event(&state, &claims.app_id, event_id, &table.name, &row_id, &claims.sub, "update", Some(&normalized));
             }
             let _ = crate::api::audit::record_audit_log(
                 &state.pool,
-                Some(crate::app_context::DEFAULT_APP_ID),
+                Some(&claims.app_id),
                 &claims,
                 "data.row.updated",
                 "data_row",
@@ -339,7 +348,7 @@ pub async fn delete_row(
     Extension(claims): Extension<Claims>,
     Path((table, row_id)): Path<(String, String)>,
 ) -> Response {
-    let table = match load_table(&state.pool, &table).await {
+    let table = match load_table(&state.pool, &claims.app_id, &table).await {
         Ok(table) => table,
         Err(LoadTableError::NotFound) => {
             return json_error(StatusCode::NOT_FOUND, "data table not found")
@@ -384,6 +393,7 @@ pub async fn delete_row(
             let previous = parse_json(&existing.data_json).ok();
             if let Ok(event_id) = record_row_event(
                 &state.pool,
+                &claims.app_id,
                 &table.id,
                 &row_id,
                 &claims.sub,
@@ -394,6 +404,7 @@ pub async fn delete_row(
             {
                 emit_data_row_event(
                     &state,
+                    &claims.app_id,
                     event_id,
                     &table.name,
                     &row_id,
@@ -404,7 +415,7 @@ pub async fn delete_row(
             }
             let _ = crate::api::audit::record_audit_log(
                 &state.pool,
-                Some(crate::app_context::DEFAULT_APP_ID),
+                Some(&claims.app_id),
                 &claims,
                 "data.row.deleted",
                 "data_row",

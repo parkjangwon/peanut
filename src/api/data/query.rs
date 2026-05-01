@@ -101,11 +101,15 @@ pub(crate) fn validate_list_rows_params(
 pub(crate) fn build_row_query(
     params: &ListRowsParams,
     schema: &DataTableSchema,
+    app_id: &str,
     table_id: &str,
     owner_user_id: Option<&str>,
 ) -> RowQuery {
-    let mut where_clauses = vec!["table_id = ?".to_string()];
-    let mut binds = vec![RowQueryBind::Text(table_id.to_string())];
+    let mut where_clauses = vec!["app_id = ?".to_string(), "table_id = ?".to_string()];
+    let mut binds = vec![
+        RowQueryBind::Text(app_id.to_string()),
+        RowQueryBind::Text(table_id.to_string()),
+    ];
 
     if let Some(owner_user_id) = owner_user_id {
         where_clauses.push("owner_user_id = ?".to_string());
@@ -536,6 +540,7 @@ mod tests {
                 filter_value: Some("2".to_string()),
             },
             &todo_schema(),
+            crate::app_context::DEFAULT_APP_ID,
             "table_123",
             Some("user_123"),
         );
@@ -573,6 +578,7 @@ mod tests {
         let query = build_row_query(
             &ListRowsParams::default(),
             &todo_schema(),
+            crate::app_context::DEFAULT_APP_ID,
             "table_123",
             None,
         );

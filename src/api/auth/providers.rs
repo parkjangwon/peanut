@@ -373,6 +373,12 @@ pub async fn oauth_start(
         Ok(config) => config,
         Err(error) => return json_error(StatusCode::BAD_REQUEST, error),
     };
+    if let Some(redirect_to) = query.redirect_to.as_deref() {
+        let provider_config = parse_config_json(&row.config_json);
+        if !redirect_to_allowed(&provider_config, redirect_to) {
+            return json_error(StatusCode::BAD_REQUEST, "redirect_to is not allowed");
+        }
+    }
 
     let oauth_state = crate::api::auth::generate_opaque_token();
     let state_hash = crate::api::auth::hash_opaque_token(&oauth_state);
@@ -527,6 +533,53 @@ fn discovery_url_for_provider(row: &AuthProviderConfigRow, config: &Value) -> Op
         })
 }
 
+fn redirect_to_allowed(config: &Value, redirect_to: &str) -> bool {
+    let redirect_to = redirect_to.trim();
+    if redirect_to.is_empty() {
+        return false;
+    }
+    if string_array(config, "allowed_redirect_urls")
+        .iter()
+        .any(|url| url == redirect_to)
+    {
+        return true;
+    }
+    let Some(origin) = redirect_origin(redirect_to) else {
+        return false;
+    };
+    string_array(config, "allowed_redirect_origins")
+        .iter()
+        .any(|allowed| allowed.trim_end_matches('/') == origin)
+}
+
+fn string_array(config: &Value, key: &str) -> Vec<String> {
+    config
+        .get(key)
+        .and_then(Value::as_array)
+        .map(|values| {
+            values
+                .iter()
+                .filter_map(Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(ToOwned::to_owned)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn redirect_origin(url: &str) -> Option<String> {
+    let (scheme, rest) = url.split_once("://")?;
+    if scheme != "http" && scheme != "https" {
+        return None;
+    }
+    let authority = rest.split('/').next()?.trim();
+    if authority.is_empty() {
+        return None;
+    }
+    Some(format!("{scheme}://{}", authority.trim_end_matches('/')))
+}
+
 async fn fetch_discovery_check(url: &str) -> AuthProviderDiagnosticCheck {
     let client = match reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(5))
@@ -654,10 +707,11 @@ pub async fn oauth_callback(
         .execute(&state.pool)
         .await;
 
-    match super::issue_login_response(&state, user.clone()).await {
+    match super::issue_login_response(&state, &app_id, user.clone()).await {
         Ok(response) => {
             let _ = super::record_auth_event(
                 &state.pool,
+                &app_id,
                 &user.id,
                 Some(&user.id),
                 "oauth_login_succeeded",
@@ -869,7 +923,7 @@ async fn find_or_create_oauth_user(
 ) -> Result<super::UserSummary, String> {
     if let Some(user) = sqlx::query_as::<_, super::UserSummary>(
         r#"
-        SELECT u.id, u.email, u.is_active, u.is_admin
+        SELECT u.id, u.app_id, u.email, u.is_active, u.is_admin
         FROM auth_identities ai
         JOIN users u ON u.id = ai.user_id
         WHERE ai.app_id = ? AND ai.provider = ? AND ai.provider_user_id = ?
@@ -887,15 +941,16 @@ async fn find_or_create_oauth_user(
 
     let normalized_email = email.trim().to_ascii_lowercase();
     let user = match sqlx::query_as::<_, super::UserSummary>(
-        "SELECT id, email, is_active, is_admin FROM users WHERE email = ?",
+        "SELECT id, app_id, email, is_active, is_admin FROM users WHERE app_id = ? AND email = ?",
     )
+    .bind(app_id)
     .bind(&normalized_email)
     .fetch_optional(&state.pool)
     .await
     .map_err(|_| "failed to load oauth user".to_string())?
     {
         Some(user) => user,
-        None => create_oauth_user(state, &normalized_email).await?,
+        None => create_oauth_user(state, app_id, &normalized_email).await?,
     };
 
     let profile_json = serde_json::to_string(userinfo).unwrap_or_else(|_| "{}".to_string());
@@ -926,6 +981,7 @@ async fn find_or_create_oauth_user(
 
 async fn create_oauth_user(
     state: &crate::AppState,
+    app_id: &str,
     email: &str,
 ) -> Result<super::UserSummary, String> {
     let user_count: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM users")
@@ -938,9 +994,10 @@ async fn create_oauth_user(
             .map_err(|_| "failed to hash oauth user password".to_string())?;
     let is_admin = user_count.0 == 0;
     sqlx::query(
-        "INSERT INTO users (id, email, password_hash, is_active, is_admin) VALUES (?, ?, ?, TRUE, ?)",
+        "INSERT INTO users (id, app_id, email, password_hash, is_active, is_admin) VALUES (?, ?, ?, ?, TRUE, ?)",
     )
     .bind(&user_id)
+    .bind(app_id)
     .bind(email)
     .bind(password_hash)
     .bind(is_admin)
@@ -949,6 +1006,7 @@ async fn create_oauth_user(
     .map_err(|_| "failed to create oauth user".to_string())?;
     Ok(super::UserSummary {
         id: user_id,
+        app_id: app_id.to_string(),
         email: email.to_string(),
         is_active: true,
         is_admin,
@@ -989,6 +1047,7 @@ mod tests {
     fn claims(user_id: &str, is_admin: bool) -> Claims {
         Claims {
             sub: user_id.to_string(),
+            app_id: crate::app_context::DEFAULT_APP_ID.to_string(),
             exp: 9999999999,
             is_admin,
         }
@@ -1102,6 +1161,8 @@ mod tests {
                     "authorization_endpoint": "https://issuer.test/auth",
                     "token_endpoint": "https://issuer.test/token",
                     "userinfo_endpoint": "https://issuer.test/userinfo",
+                    "allowed_redirect_urls": ["https://app.test/done"],
+                    "allowed_redirect_origins": ["https://app.test"],
                     "scopes": ["openid", "email"]
                 })),
             }),

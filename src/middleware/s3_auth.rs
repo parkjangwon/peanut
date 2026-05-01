@@ -330,6 +330,7 @@ async fn authenticate_presigned_request(
     let user = load_active_user(state, &access_key).await?;
     Ok(crate::auth::jwt::Claims {
         sub: user.id,
+        app_id: crate::app_context::DEFAULT_APP_ID.to_string(),
         exp: (request_time + Duration::seconds(expires as i64)).timestamp(),
         is_admin: user.is_admin,
     })
@@ -394,6 +395,7 @@ async fn authenticate_header_signed_request(
     let user = load_active_user(state, &access_key).await?;
     Ok(crate::auth::jwt::Claims {
         sub: user.id,
+        app_id: crate::app_context::DEFAULT_APP_ID.to_string(),
         exp: (request_time + Duration::minutes(15)).timestamp(),
         is_admin: user.is_admin,
     })

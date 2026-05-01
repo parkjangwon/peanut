@@ -9,7 +9,7 @@ pub async fn export_table(
         return json_error(StatusCode::FORBIDDEN, "admin access required");
     }
 
-    let table = match load_table(&state.pool, &table).await {
+    let table = match load_table(&state.pool, &claims.app_id, &table).await {
         Ok(table) => table,
         Err(LoadTableError::NotFound) => {
             return json_error(StatusCode::NOT_FOUND, "data table not found")
@@ -26,8 +26,9 @@ pub async fn export_table(
     };
 
     let records = match sqlx::query_as::<_, DataRowRecord>(
-        "SELECT id, owner_user_id, data_json, created_at, updated_at FROM data_rows WHERE table_id = ? ORDER BY created_at ASC, id ASC",
+        "SELECT id, owner_user_id, data_json, created_at, updated_at FROM data_rows WHERE app_id = ? AND table_id = ? ORDER BY created_at ASC, id ASC",
     )
+    .bind(&claims.app_id)
     .bind(&table.id)
     .fetch_all(&state.pool)
     .await
@@ -141,7 +142,7 @@ pub async fn import_rows(
         return json_error(StatusCode::FORBIDDEN, "admin access required");
     }
 
-    let mut table = match load_table(&state.pool, &table).await {
+    let mut table = match load_table(&state.pool, &claims.app_id, &table).await {
         Ok(table) => table,
         Err(LoadTableError::NotFound) => {
             return json_error(StatusCode::NOT_FOUND, "data table not found")
@@ -263,7 +264,8 @@ pub async fn import_rows(
     }
 
     if mode == "replace"
-        && sqlx::query("DELETE FROM data_rows WHERE table_id = ?")
+        && sqlx::query("DELETE FROM data_rows WHERE app_id = ? AND table_id = ?")
+            .bind(&claims.app_id)
             .bind(&table.id)
             .execute(&state.pool)
             .await
@@ -282,7 +284,7 @@ pub async fn import_rows(
                 "table is required when restore_table is true",
             );
         };
-        match restore_table_definition(&state.pool, &table, restore_spec).await {
+        match restore_table_definition(&state.pool, &claims.app_id, &table, restore_spec).await {
             Ok(restored) => table = restored,
             Err(RestoreTableError::BadRequest(message)) => {
                 return json_error(StatusCode::BAD_REQUEST, message)
@@ -318,9 +320,10 @@ pub async fn import_rows(
         };
 
         let insert_result = sqlx::query(
-            "INSERT INTO data_rows (id, table_id, owner_user_id, data_json) VALUES (?, ?, ?, ?)",
+            "INSERT INTO data_rows (id, app_id, table_id, owner_user_id, data_json) VALUES (?, ?, ?, ?, ?)",
         )
         .bind(&row_id)
+        .bind(&claims.app_id)
         .bind(&table.id)
         .bind(&owner_user_id)
         .bind(&data_json)
@@ -331,6 +334,7 @@ pub async fn import_rows(
             Ok(_) => {
                 if let Ok(event_id) = record_row_event(
                     &state.pool,
+                    &claims.app_id,
                     &table.id,
                     &row_id,
                     &claims.sub,
@@ -341,6 +345,7 @@ pub async fn import_rows(
                 {
                     emit_data_row_event(
                         &state,
+                        &claims.app_id,
                         event_id,
                         &table.name,
                         &row_id,

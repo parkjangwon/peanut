@@ -2,11 +2,12 @@ use super::*;
 
 pub async fn list_tables(
     State(state): State<crate::AppState>,
-    Extension(_claims): Extension<Claims>,
+    Extension(claims): Extension<Claims>,
 ) -> Response {
     let records = sqlx::query_as::<_, DataTableRecord>(
-        "SELECT id, name, display_name, schema_json, access_policy_json, created_by, created_at FROM data_tables ORDER BY created_at DESC, name ASC",
+        "SELECT id, app_id, name, display_name, schema_json, access_policy_json, created_by, created_at FROM data_tables WHERE app_id = ? ORDER BY created_at DESC, name ASC",
     )
+    .bind(&claims.app_id)
     .fetch_all(&state.pool)
     .await;
 
@@ -73,9 +74,10 @@ pub async fn create_table(
     };
 
     match sqlx::query(
-        "INSERT INTO data_tables (id, name, display_name, schema_json, access_policy_json, created_by) VALUES (?, ?, ?, ?, ?, ?)",
+        "INSERT INTO data_tables (id, app_id, name, display_name, schema_json, access_policy_json, created_by) VALUES (?, ?, ?, ?, ?, ?, ?)",
     )
     .bind(&table_id)
+    .bind(&claims.app_id)
     .bind(&name)
     .bind(payload.display_name.trim())
     .bind(schema_json)
@@ -84,11 +86,11 @@ pub async fn create_table(
     .execute(&state.pool)
     .await
     {
-        Ok(_) => match load_table(&state.pool, &name).await {
+        Ok(_) => match load_table(&state.pool, &claims.app_id, &name).await {
             Ok(table) => {
                 let _ = crate::api::audit::record_audit_log(
                     &state.pool,
-                    Some(crate::app_context::DEFAULT_APP_ID),
+                    Some(&claims.app_id),
                     &claims,
                     "data.table.created",
                     "data_table",
@@ -112,10 +114,10 @@ pub async fn create_table(
 
 pub async fn get_table(
     State(state): State<crate::AppState>,
-    Extension(_claims): Extension<Claims>,
+    Extension(claims): Extension<Claims>,
     Path(table): Path<String>,
 ) -> Response {
-    match load_table(&state.pool, &table).await {
+    match load_table(&state.pool, &claims.app_id, &table).await {
         Ok(table) => (
             StatusCode::OK,
             Json(DataTableResponse {
@@ -144,7 +146,7 @@ pub async fn update_table(
         return json_error(StatusCode::FORBIDDEN, "admin access required");
     }
 
-    let existing = match load_table(&state.pool, &table).await {
+    let existing = match load_table(&state.pool, &claims.app_id, &table).await {
         Ok(table) => table,
         Err(LoadTableError::NotFound) => {
             return json_error(StatusCode::NOT_FOUND, "data table not found")
@@ -218,11 +220,11 @@ pub async fn update_table(
     .execute(&state.pool)
     .await
     {
-        Ok(_) => match load_table(&state.pool, &existing.name).await {
+        Ok(_) => match load_table(&state.pool, &claims.app_id, &existing.name).await {
             Ok(table) => {
                 let _ = crate::api::audit::record_audit_log(
                     &state.pool,
-                    Some(crate::app_context::DEFAULT_APP_ID),
+                    Some(&claims.app_id),
                     &claims,
                     "data.table.updated",
                     "data_table",
@@ -249,7 +251,7 @@ pub async fn delete_table(
         return json_error(StatusCode::FORBIDDEN, "admin access required");
     }
 
-    let existing = match load_table(&state.pool, &table).await {
+    let existing = match load_table(&state.pool, &claims.app_id, &table).await {
         Ok(table) => table,
         Err(LoadTableError::NotFound) => {
             return json_error(StatusCode::NOT_FOUND, "data table not found")
@@ -276,7 +278,7 @@ pub async fn delete_table(
         Ok(_) => {
             let _ = crate::api::audit::record_audit_log(
                 &state.pool,
-                Some(crate::app_context::DEFAULT_APP_ID),
+                Some(&claims.app_id),
                 &claims,
                 "data.table.deleted",
                 "data_table",

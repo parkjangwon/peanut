@@ -23,10 +23,11 @@ pub async fn list_subscriptions(
             END AS endpoint,
             created_at
         FROM push_subscriptions
-        WHERE user_id = ?
+        WHERE app_id = ? AND user_id = ?
         ORDER BY created_at DESC
         "#,
     )
+    .bind(&claims.app_id)
     .bind(&claims.sub)
     .fetch_all(&state.pool)
     .await
@@ -55,7 +56,7 @@ pub async fn create_subscription(
                 return json_error(StatusCode::BAD_REQUEST, message);
             }
 
-            save_subscription(&state.pool, &claims.sub, &topic, "", "")
+            save_subscription(&state.pool, &claims.app_id, &claims.sub, &topic, "", "")
                 .await
                 .map(|created| {
                     if created {
@@ -78,6 +79,7 @@ pub async fn create_subscription(
 
             save_subscription(
                 &state.pool,
+                &claims.app_id,
                 &claims.sub,
                 endpoint.trim(),
                 keys.p256dh.trim(),
@@ -111,27 +113,31 @@ pub async fn create_subscription(
 
 async fn save_subscription(
     pool: &SqlitePool,
+    app_id: &str,
     user_id: &str,
     endpoint: &str,
     p256dh: &str,
     auth: &str,
 ) -> Result<bool, sqlx::Error> {
-    let existed: Option<(i64,)> =
-        sqlx::query_as("SELECT id FROM push_subscriptions WHERE user_id = ? AND endpoint = ?")
-            .bind(user_id)
-            .bind(endpoint)
-            .fetch_optional(pool)
-            .await?;
+    let existed: Option<(i64,)> = sqlx::query_as(
+        "SELECT id FROM push_subscriptions WHERE app_id = ? AND user_id = ? AND endpoint = ?",
+    )
+    .bind(app_id)
+    .bind(user_id)
+    .bind(endpoint)
+    .fetch_optional(pool)
+    .await?;
 
     sqlx::query(
         r#"
-        INSERT INTO push_subscriptions (user_id, endpoint, p256dh, auth)
-        VALUES (?, ?, ?, ?)
-        ON CONFLICT(user_id, endpoint) DO UPDATE SET
+        INSERT INTO push_subscriptions (app_id, user_id, endpoint, p256dh, auth)
+        VALUES (?, ?, ?, ?, ?)
+        ON CONFLICT(app_id, user_id, endpoint) DO UPDATE SET
             p256dh = excluded.p256dh,
             auth = excluded.auth
         "#,
     )
+    .bind(app_id)
     .bind(user_id)
     .bind(endpoint)
     .bind(p256dh)
@@ -147,7 +153,8 @@ pub async fn delete_subscription(
     Extension(claims): Extension<Claims>,
     Path(subscription_id): Path<i64>,
 ) -> Response {
-    match sqlx::query("DELETE FROM push_subscriptions WHERE id = ? AND user_id = ?")
+    match sqlx::query("DELETE FROM push_subscriptions WHERE app_id = ? AND id = ? AND user_id = ?")
+        .bind(&claims.app_id)
         .bind(subscription_id)
         .bind(&claims.sub)
         .execute(&state.pool)

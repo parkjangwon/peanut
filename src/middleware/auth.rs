@@ -14,6 +14,7 @@ use sqlx::FromRow;
 #[derive(Debug, Clone, FromRow)]
 struct AuthUserRecord {
     id: String,
+    app_id: String,
     is_active: bool,
     is_admin: bool,
 }
@@ -75,9 +76,19 @@ pub async fn authenticate_bearer_principal(
         .ok_or_else(|| json_error(StatusCode::UNAUTHORIZED, "missing bearer token"))?;
 
     if let Ok(token_claims) = verify_jwt(token, state.auth.jwt_secret.as_str()) {
-        let claims = validate_user_claims(state, &token_claims.sub, token_claims.exp).await?;
+        let claims = validate_user_claims(
+            state,
+            &token_claims.app_id,
+            &token_claims.sub,
+            token_claims.exp,
+        )
+        .await?;
         return Ok(AuthenticatedPrincipal {
-            principal: Principal::user(claims.sub.clone(), claims.is_admin),
+            principal: Principal::user_for_app(
+                claims.sub.clone(),
+                claims.app_id.clone(),
+                claims.is_admin,
+            ),
             claims,
         });
     }
@@ -90,12 +101,14 @@ pub async fn authenticate_bearer_principal(
 
 async fn validate_user_claims(
     state: &crate::AppState,
+    app_id: &str,
     user_id: &str,
     exp: i64,
 ) -> Result<Claims, Response> {
     let user = sqlx::query_as::<_, AuthUserRecord>(
-        "SELECT id, is_active, is_admin FROM users WHERE id = ?",
+        "SELECT id, app_id, is_active, is_admin FROM users WHERE app_id = ? AND id = ?",
     )
+    .bind(app_id)
     .bind(user_id)
     .fetch_optional(&state.pool)
     .await
@@ -113,6 +126,7 @@ async fn validate_user_claims(
 
     Ok(crate::auth::jwt::Claims {
         sub: user.id,
+        app_id: user.app_id,
         exp,
         is_admin: user.is_admin,
     })
@@ -145,6 +159,7 @@ async fn authenticate_service_token(
 
     let claims = validate_user_claims(
         state,
+        crate::app_context::DEFAULT_APP_ID,
         &stored.user_id,
         (Utc::now() + Duration::days(3650)).timestamp(),
     )
@@ -205,6 +220,7 @@ async fn authenticate_app_key(
 
     let claims = Claims {
         sub: stored.created_by.clone(),
+        app_id: stored.app_id.clone(),
         exp: now_exp,
         is_admin: true,
     };

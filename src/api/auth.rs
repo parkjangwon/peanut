@@ -27,7 +27,10 @@ pub use providers::{
     diagnose_auth_provider_config, get_auth_public_config, list_auth_provider_configs,
     oauth_callback, oauth_start, upsert_auth_provider_config,
 };
-pub use public::{login, logout, refresh_session, register};
+pub use public::{
+    login, login_for_app, logout, logout_for_app, refresh_session, refresh_session_for_app,
+    register, register_for_app,
+};
 pub use sessions::{list_sessions, me, revoke_all_sessions, revoke_session};
 
 const ACCESS_TOKEN_TTL_MINUTES: i64 = 15;
@@ -38,6 +41,7 @@ const MIN_PASSWORD_LENGTH: usize = 8;
 #[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
 pub struct UserSummary {
     pub id: String,
+    pub app_id: String,
     pub email: String,
     pub is_active: bool,
     pub is_admin: bool,
@@ -121,6 +125,7 @@ pub struct SessionsResponse {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AuthEvent {
     pub id: String,
+    pub app_id: String,
     pub user_id: String,
     pub actor_user_id: Option<String>,
     pub action: String,
@@ -171,16 +176,18 @@ fn validate_password(password: &str) -> Result<(), String> {
 
 async fn issue_login_response(
     state: &crate::AppState,
+    app_id: &str,
     user: UserSummary,
 ) -> Result<LoginResponse, String> {
     let expires_at = Utc::now() + Duration::minutes(ACCESS_TOKEN_TTL_MINUTES);
-    let access_token = crate::auth::jwt::create_jwt(
+    let access_token = crate::auth::jwt::create_app_jwt(
+        app_id,
         &user.id,
         user.is_admin,
         state.auth.jwt_secret.as_str(),
         expires_at,
     );
-    let refresh_token = issue_refresh_token(&state.pool, &user.id, None).await?;
+    let refresh_token = issue_refresh_token(&state.pool, app_id, &user.id, None).await?;
 
     Ok(LoginResponse {
         access_token,
@@ -193,6 +200,7 @@ async fn issue_login_response(
 
 async fn issue_refresh_token(
     pool: &sqlx::SqlitePool,
+    app_id: &str,
     user_id: &str,
     session_id: Option<&str>,
 ) -> Result<String, String> {
@@ -202,9 +210,10 @@ async fn issue_refresh_token(
     let expires_at = sqlite_timestamp(Utc::now() + Duration::days(REFRESH_TOKEN_TTL_DAYS));
 
     sqlx::query(
-        "INSERT INTO refresh_tokens (token, user_id, expires_at, created_at, session_id, revoked_at, replaced_by_token) VALUES (?, ?, ?, CURRENT_TIMESTAMP, ?, NULL, NULL)",
+        "INSERT INTO refresh_tokens (token, app_id, user_id, expires_at, created_at, session_id, revoked_at, replaced_by_token) VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP, ?, NULL, NULL)",
     )
     .bind(&token_hash)
+    .bind(app_id)
     .bind(user_id)
     .bind(expires_at)
     .bind(session_id)
@@ -224,9 +233,10 @@ async fn rotate_refresh_token(
     let expires_at = sqlite_timestamp(Utc::now() + Duration::days(REFRESH_TOKEN_TTL_DAYS));
 
     sqlx::query(
-        "INSERT INTO refresh_tokens (token, user_id, expires_at, created_at, session_id, revoked_at, replaced_by_token) VALUES (?, ?, ?, CURRENT_TIMESTAMP, ?, NULL, NULL)",
+        "INSERT INTO refresh_tokens (token, app_id, user_id, expires_at, created_at, session_id, revoked_at, replaced_by_token) VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP, ?, NULL, NULL)",
     )
     .bind(&next_hash)
+    .bind(&stored_token.app_id)
     .bind(&stored_token.user_id)
     .bind(expires_at)
     .bind(&stored_token.session_id)
@@ -264,11 +274,13 @@ async fn revoke_refresh_token_hash(
 
 async fn revoke_all_refresh_tokens_for_user(
     pool: &sqlx::SqlitePool,
+    app_id: &str,
     user_id: &str,
 ) -> Result<(), sqlx::Error> {
     sqlx::query(
-        "UPDATE refresh_tokens SET revoked_at = CURRENT_TIMESTAMP WHERE user_id = ? AND revoked_at IS NULL",
+        "UPDATE refresh_tokens SET revoked_at = CURRENT_TIMESTAMP WHERE app_id = ? AND user_id = ? AND revoked_at IS NULL",
     )
+    .bind(app_id)
     .bind(user_id)
     .execute(pool)
     .await?;
@@ -277,12 +289,14 @@ async fn revoke_all_refresh_tokens_for_user(
 
 async fn revoke_session_for_user(
     pool: &sqlx::SqlitePool,
+    app_id: &str,
     user_id: &str,
     session_id: &str,
 ) -> Result<u64, sqlx::Error> {
     let result = sqlx::query(
-        "UPDATE refresh_tokens SET revoked_at = CURRENT_TIMESTAMP WHERE user_id = ? AND session_id = ? AND revoked_at IS NULL",
+        "UPDATE refresh_tokens SET revoked_at = CURRENT_TIMESTAMP WHERE app_id = ? AND user_id = ? AND session_id = ? AND revoked_at IS NULL",
     )
+    .bind(app_id)
     .bind(user_id)
     .bind(session_id)
     .execute(pool)
@@ -292,6 +306,7 @@ async fn revoke_session_for_user(
 
 async fn load_sessions_for_user(
     pool: &sqlx::SqlitePool,
+    app_id: &str,
     user_id: &str,
 ) -> Result<Vec<AuthSessionSummary>, sqlx::Error> {
     sqlx::query_as::<_, AuthSessionSummary>(
@@ -303,11 +318,12 @@ async fn load_sessions_for_user(
             MAX(expires_at) AS expires_at,
             MAX(CASE WHEN revoked_at IS NULL AND expires_at > CURRENT_TIMESTAMP THEN 1 ELSE 0 END) AS is_active
         FROM refresh_tokens
-        WHERE user_id = ?
+        WHERE app_id = ? AND user_id = ?
         GROUP BY session_id
         ORDER BY MAX(created_at) DESC
         "#,
     )
+    .bind(app_id)
     .bind(user_id)
     .fetch_all(pool)
     .await
@@ -315,6 +331,7 @@ async fn load_sessions_for_user(
 
 pub(crate) async fn record_auth_event(
     pool: &sqlx::SqlitePool,
+    app_id: &str,
     user_id: &str,
     actor_user_id: Option<&str>,
     action: &str,
@@ -322,9 +339,10 @@ pub(crate) async fn record_auth_event(
 ) -> Result<(), sqlx::Error> {
     let metadata_json = metadata.map(|value| value.to_string());
     sqlx::query(
-        "INSERT INTO auth_events (id, user_id, actor_user_id, action, metadata_json, created_at) VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)",
+        "INSERT INTO auth_events (id, app_id, user_id, actor_user_id, action, metadata_json, created_at) VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)",
     )
     .bind(Uuid::new_v4().to_string())
+    .bind(app_id)
     .bind(user_id)
     .bind(actor_user_id)
     .bind(action)
@@ -336,17 +354,19 @@ pub(crate) async fn record_auth_event(
 
 async fn load_auth_events_for_user(
     pool: &sqlx::SqlitePool,
+    app_id: &str,
     user_id: &str,
 ) -> Result<Vec<AuthEvent>, sqlx::Error> {
     let rows = sqlx::query_as::<_, StoredAuthEvent>(
         r#"
-        SELECT id, user_id, actor_user_id, action, metadata_json, created_at
+        SELECT id, app_id, user_id, actor_user_id, action, metadata_json, created_at
         FROM auth_events
-        WHERE user_id = ?
+        WHERE app_id = ? AND user_id = ?
         ORDER BY created_at DESC, id DESC
         LIMIT 100
         "#,
     )
+    .bind(app_id)
     .bind(user_id)
     .fetch_all(pool)
     .await?;
@@ -355,6 +375,7 @@ async fn load_auth_events_for_user(
         .into_iter()
         .map(|row| AuthEvent {
             id: row.id,
+            app_id: row.app_id,
             user_id: row.user_id,
             actor_user_id: row.actor_user_id,
             action: row.action,
@@ -393,6 +414,7 @@ fn deliver_password_reset_token(
 
 async fn issue_password_reset_token(
     pool: &sqlx::SqlitePool,
+    app_id: &str,
     user_id: &str,
 ) -> Result<String, String> {
     let raw_token = generate_opaque_token();
@@ -400,16 +422,18 @@ async fn issue_password_reset_token(
     let expires_at =
         sqlite_timestamp(Utc::now() + Duration::minutes(PASSWORD_RESET_TOKEN_TTL_MINUTES));
 
-    sqlx::query("UPDATE password_reset_tokens SET consumed_at = CURRENT_TIMESTAMP WHERE user_id = ? AND consumed_at IS NULL")
+    sqlx::query("UPDATE password_reset_tokens SET consumed_at = CURRENT_TIMESTAMP WHERE app_id = ? AND user_id = ? AND consumed_at IS NULL")
+        .bind(app_id)
         .bind(user_id)
         .execute(pool)
         .await
         .map_err(|_| "failed to clear previous reset tokens".to_string())?;
 
     sqlx::query(
-        "INSERT INTO password_reset_tokens (token, user_id, expires_at, created_at, consumed_at) VALUES (?, ?, ?, CURRENT_TIMESTAMP, NULL)",
+        "INSERT INTO password_reset_tokens (token, app_id, user_id, expires_at, created_at, consumed_at) VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP, NULL)",
     )
     .bind(&token_hash)
+    .bind(app_id)
     .bind(user_id)
     .bind(expires_at)
     .execute(pool)
@@ -432,37 +456,43 @@ async fn consume_password_reset_token_hash(
 
 async fn load_active_refresh_token(
     pool: &sqlx::SqlitePool,
+    app_id: &str,
     raw_token: &str,
 ) -> Result<Option<StoredRefreshToken>, sqlx::Error> {
     let token_hash = hash_opaque_token(raw_token);
     sqlx::query_as::<_, StoredRefreshToken>(
-        "SELECT token, user_id, expires_at, session_id, revoked_at, replaced_by_token FROM refresh_tokens WHERE token = ? AND revoked_at IS NULL AND expires_at > CURRENT_TIMESTAMP",
+        "SELECT token, app_id, user_id, expires_at, session_id, revoked_at, replaced_by_token FROM refresh_tokens WHERE token = ? AND app_id = ? AND revoked_at IS NULL AND expires_at > CURRENT_TIMESTAMP",
     )
     .bind(token_hash)
+    .bind(app_id)
     .fetch_optional(pool)
     .await
 }
 
 async fn load_active_password_reset_token(
     pool: &sqlx::SqlitePool,
+    app_id: &str,
     raw_token: &str,
 ) -> Result<Option<StoredPasswordResetToken>, sqlx::Error> {
     let token_hash = hash_opaque_token(raw_token);
     sqlx::query_as::<_, StoredPasswordResetToken>(
-        "SELECT token, user_id, expires_at, consumed_at FROM password_reset_tokens WHERE token = ? AND consumed_at IS NULL AND expires_at > CURRENT_TIMESTAMP",
+        "SELECT token, app_id, user_id, expires_at, consumed_at FROM password_reset_tokens WHERE token = ? AND app_id = ? AND consumed_at IS NULL AND expires_at > CURRENT_TIMESTAMP",
     )
     .bind(token_hash)
+    .bind(app_id)
     .fetch_optional(pool)
     .await
 }
 
 async fn load_user_summary_by_id(
     pool: &sqlx::SqlitePool,
+    app_id: &str,
     user_id: &str,
 ) -> Result<Option<UserSummary>, sqlx::Error> {
     sqlx::query_as::<_, UserSummary>(
-        "SELECT id, email, is_active, is_admin FROM users WHERE id = ?",
+        "SELECT id, app_id, email, is_active, is_admin FROM users WHERE app_id = ? AND id = ?",
     )
+    .bind(app_id)
     .bind(user_id)
     .fetch_optional(pool)
     .await
@@ -470,11 +500,13 @@ async fn load_user_summary_by_id(
 
 async fn load_user_summary_by_email(
     pool: &sqlx::SqlitePool,
+    app_id: &str,
     email: &str,
 ) -> Result<Option<UserSummary>, sqlx::Error> {
     sqlx::query_as::<_, UserSummary>(
-        "SELECT id, email, is_active, is_admin FROM users WHERE email = ?",
+        "SELECT id, app_id, email, is_active, is_admin FROM users WHERE app_id = ? AND email = ?",
     )
+    .bind(app_id)
     .bind(email.trim().to_lowercase())
     .fetch_optional(pool)
     .await
@@ -482,11 +514,13 @@ async fn load_user_summary_by_email(
 
 async fn load_user_with_password_by_email(
     pool: &sqlx::SqlitePool,
+    app_id: &str,
     email: &str,
 ) -> Result<Option<UserWithPassword>, sqlx::Error> {
     sqlx::query_as(
-        "SELECT id, email, password_hash, is_active, is_admin FROM users WHERE email = ?",
+        "SELECT id, app_id, email, password_hash, is_active, is_admin FROM users WHERE app_id = ? AND email = ?",
     )
+    .bind(app_id)
     .bind(email.trim().to_lowercase())
     .fetch_optional(pool)
     .await
@@ -494,9 +528,11 @@ async fn load_user_with_password_by_email(
 
 async fn load_user_with_password_by_id(
     pool: &sqlx::SqlitePool,
+    app_id: &str,
     user_id: &str,
 ) -> Result<Option<UserWithPassword>, sqlx::Error> {
-    sqlx::query_as("SELECT id, email, password_hash, is_active, is_admin FROM users WHERE id = ?")
+    sqlx::query_as("SELECT id, app_id, email, password_hash, is_active, is_admin FROM users WHERE app_id = ? AND id = ?")
+        .bind(app_id)
         .bind(user_id)
         .fetch_optional(pool)
         .await
@@ -522,6 +558,7 @@ fn sqlite_timestamp(datetime: DateTime<Utc>) -> String {
 #[derive(Debug, Clone, FromRow)]
 struct UserWithPassword {
     id: String,
+    app_id: String,
     email: String,
     password_hash: String,
     is_active: bool,
@@ -532,6 +569,7 @@ impl UserWithPassword {
     fn summary(&self) -> UserSummary {
         UserSummary {
             id: self.id.clone(),
+            app_id: self.app_id.clone(),
             email: self.email.clone(),
             is_active: self.is_active,
             is_admin: self.is_admin,
@@ -542,6 +580,7 @@ impl UserWithPassword {
 #[derive(Debug, Clone, FromRow)]
 struct StoredRefreshToken {
     token: String,
+    app_id: String,
     user_id: String,
     session_id: String,
 }
@@ -549,12 +588,14 @@ struct StoredRefreshToken {
 #[derive(Debug, Clone, FromRow)]
 struct StoredPasswordResetToken {
     token: String,
+    app_id: String,
     user_id: String,
 }
 
 #[derive(Debug, Clone, FromRow)]
 struct StoredAuthEvent {
     id: String,
+    app_id: String,
     user_id: String,
     actor_user_id: Option<String>,
     action: String,
@@ -715,6 +756,7 @@ mod tests {
             State(state.clone()),
             Extension(crate::auth::jwt::Claims {
                 sub: register_body.user.id.clone(),
+                app_id: crate::app_context::DEFAULT_APP_ID.to_string(),
                 exp: 9999999999,
                 is_admin: true,
             }),
@@ -879,6 +921,7 @@ mod tests {
 
         let claims = crate::auth::jwt::Claims {
             sub: register_body.user.id.clone(),
+            app_id: crate::app_context::DEFAULT_APP_ID.to_string(),
             exp: 9999999999,
             is_admin: true,
         };
@@ -940,6 +983,7 @@ mod tests {
             State(state.clone()),
             Extension(crate::auth::jwt::Claims {
                 sub: register_body.user.id,
+                app_id: crate::app_context::DEFAULT_APP_ID.to_string(),
                 exp: 9999999999,
                 is_admin: true,
             }),
@@ -980,6 +1024,7 @@ mod tests {
             State(state.clone()),
             Extension(crate::auth::jwt::Claims {
                 sub: admin_body.user.id.clone(),
+                app_id: crate::app_context::DEFAULT_APP_ID.to_string(),
                 exp: 9999999999,
                 is_admin: true,
             }),
@@ -1022,6 +1067,7 @@ mod tests {
             State(state.clone()),
             Extension(crate::auth::jwt::Claims {
                 sub: admin_body.user.id.clone(),
+                app_id: crate::app_context::DEFAULT_APP_ID.to_string(),
                 exp: 9999999999,
                 is_admin: true,
             }),
@@ -1034,6 +1080,7 @@ mod tests {
             State(state),
             Extension(crate::auth::jwt::Claims {
                 sub: member_body.user.id,
+                app_id: crate::app_context::DEFAULT_APP_ID.to_string(),
                 exp: 9999999999,
                 is_admin: false,
             }),
@@ -1143,6 +1190,7 @@ mod tests {
             State(state.clone()),
             Extension(crate::auth::jwt::Claims {
                 sub: register_body.user.id.clone(),
+                app_id: crate::app_context::DEFAULT_APP_ID.to_string(),
                 exp: 9999999999,
                 is_admin: true,
             }),
@@ -1176,6 +1224,44 @@ mod tests {
         assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
         let body: crate::api::common::ApiError = test_support::response_json(response).await;
         assert_eq!(body.error, "user is not active");
+    }
+
+    #[tokio::test]
+    async fn test_same_email_can_register_in_different_apps() {
+        let (state, _dir) = test_support::make_test_state().await;
+
+        let first = register_for_app(
+            &state,
+            "app_a",
+            RegisterRequest {
+                email: "shared@example.com".to_string(),
+                password: "secret123".to_string(),
+            },
+        )
+        .await;
+        assert_eq!(first.status(), StatusCode::CREATED);
+
+        let second = register_for_app(
+            &state,
+            "app_b",
+            RegisterRequest {
+                email: "shared@example.com".to_string(),
+                password: "secret123".to_string(),
+            },
+        )
+        .await;
+        assert_eq!(second.status(), StatusCode::CREATED);
+
+        let duplicate = register_for_app(
+            &state,
+            "app_a",
+            RegisterRequest {
+                email: "shared@example.com".to_string(),
+                password: "secret123".to_string(),
+            },
+        )
+        .await;
+        assert_eq!(duplicate.status(), StatusCode::CONFLICT);
     }
 
     #[test]

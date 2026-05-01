@@ -9,8 +9,9 @@ pub async fn list_functions(
     }
 
     match sqlx::query_as::<_, FunctionSummary>(
-        "SELECT id, name, display_name, endpoint_slug, runtime, invoke_policy, rate_limit_per_minute, CASE WHEN api_key_hash IS NULL OR api_key_hash = '' THEN 0 ELSE 1 END AS api_key_present, timeout_ms, enabled, active_version_number, secret_key_count, updated_at FROM functions ORDER BY updated_at DESC, name ASC",
+        "SELECT id, name, display_name, endpoint_slug, runtime, invoke_policy, rate_limit_per_minute, CASE WHEN api_key_hash IS NULL OR api_key_hash = '' THEN 0 ELSE 1 END AS api_key_present, timeout_ms, enabled, active_version_number, secret_key_count, updated_at FROM functions WHERE app_id = ? ORDER BY updated_at DESC, name ASC",
     )
+    .bind(&claims.app_id)
     .fetch_all(&state.pool)
     .await
     {
@@ -47,11 +48,12 @@ pub async fn create_function(
     let result = sqlx::query(
         r#"
         INSERT INTO functions (
-            id, name, display_name, endpoint_slug, runtime, source_code, invoke_policy, env_json, api_key_hash, allowed_origins_json, rate_limit_per_minute, timeout_ms, enabled, active_version_number, active_version_id, secret_key_count, created_by, updated_by
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, '', 0, ?, ?)
+            id, app_id, name, display_name, endpoint_slug, runtime, source_code, invoke_policy, env_json, api_key_hash, allowed_origins_json, rate_limit_per_minute, timeout_ms, enabled, active_version_number, active_version_id, secret_key_count, created_by, updated_by
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, '', 0, ?, ?)
         "#,
     )
     .bind(&function_id)
+    .bind(&claims.app_id)
     .bind(&validated.name)
     .bind(&validated.display_name)
     .bind(&validated.endpoint_slug)
@@ -80,6 +82,7 @@ pub async fn create_function(
         &mut tx,
         &state.function_secrets_key,
         &function_id,
+        &claims.app_id,
         1,
         &validated,
         &claims.sub,
@@ -112,11 +115,11 @@ pub async fn create_function(
         );
     }
 
-    match load_function_by_name(&state.pool, &validated.name).await {
+    match load_function_by_name(&state.pool, &claims.app_id, &validated.name).await {
         Ok(function) => {
             let _ = crate::api::audit::record_audit_log(
                 &state.pool,
-                Some(crate::app_context::DEFAULT_APP_ID),
+                Some(&claims.app_id),
                 &claims,
                 "function.created",
                 "function",
@@ -146,7 +149,7 @@ pub async fn get_function(
         return response;
     }
 
-    match load_function_by_name(&state.pool, &name).await {
+    match load_function_by_name(&state.pool, &claims.app_id, &name).await {
         Ok(function) => (StatusCode::OK, Json(FunctionResponse { function })).into_response(),
         Err(LoadFunctionError::NotFound) => json_error(StatusCode::NOT_FOUND, "function not found"),
         Err(LoadFunctionError::QueryFailed) => {
@@ -165,7 +168,7 @@ pub async fn update_function(
         return response;
     }
 
-    let existing = match load_function_by_name(&state.pool, &name).await {
+    let existing = match load_function_by_name(&state.pool, &claims.app_id, &name).await {
         Ok(function) => function,
         Err(LoadFunctionError::NotFound) => {
             return json_error(StatusCode::NOT_FOUND, "function not found")
@@ -212,6 +215,7 @@ pub async fn update_function(
         &mut tx,
         &state.function_secrets_key,
         &validated.id,
+        &claims.app_id,
         next_version_number,
         &validated,
         &claims.sub,
@@ -244,11 +248,11 @@ pub async fn update_function(
         );
     }
 
-    match load_function_by_name(&state.pool, &validated.name).await {
+    match load_function_by_name(&state.pool, &claims.app_id, &validated.name).await {
         Ok(function) => {
             let _ = crate::api::audit::record_audit_log(
                 &state.pool,
-                Some(crate::app_context::DEFAULT_APP_ID),
+                Some(&claims.app_id),
                 &claims,
                 "function.updated",
                 "function",
@@ -278,7 +282,7 @@ pub async fn delete_function(
         return response;
     }
 
-    let existing = match load_function_by_name(&state.pool, &name).await {
+    let existing = match load_function_by_name(&state.pool, &claims.app_id, &name).await {
         Ok(function) => function,
         Err(LoadFunctionError::NotFound) => {
             return json_error(StatusCode::NOT_FOUND, "function not found")
@@ -288,7 +292,8 @@ pub async fn delete_function(
         }
     };
 
-    match sqlx::query("DELETE FROM functions WHERE id = ?")
+    match sqlx::query("DELETE FROM functions WHERE app_id = ? AND id = ?")
+        .bind(&claims.app_id)
         .bind(&existing.id)
         .execute(&state.pool)
         .await
@@ -299,7 +304,7 @@ pub async fn delete_function(
         Ok(_) => {
             let _ = crate::api::audit::record_audit_log(
                 &state.pool,
-                Some(crate::app_context::DEFAULT_APP_ID),
+                Some(&claims.app_id),
                 &claims,
                 "function.deleted",
                 "function",

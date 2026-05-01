@@ -72,6 +72,14 @@ pub async fn sdk_auth_middleware(
         ),
         None => None,
     };
+    if let Some(user) = user.as_ref() {
+        if user.app_id != path_app_id {
+            return Err(json_error(
+                StatusCode::FORBIDDEN,
+                "user bearer token does not belong to this app",
+            ));
+        }
+    }
 
     req.extensions_mut().insert(SdkAuthContext {
         principal: principal.clone(),
@@ -133,6 +141,7 @@ async fn authenticate_sdk_app_key(
     let key_id = stored.id.clone();
     let actor = Claims {
         sub: stored.created_by.clone(),
+        app_id: stored.app_id.clone(),
         exp: i64::MAX,
         is_admin: stored.created_by_is_admin || is_admin,
     };

@@ -10,7 +10,7 @@ pub async fn list_function_invocations(
         return response;
     }
 
-    let function = match load_function_by_name(&state.pool, &name).await {
+    let function = match load_function_by_name(&state.pool, &claims.app_id, &name).await {
         Ok(function) => function,
         Err(LoadFunctionError::NotFound) => {
             return json_error(StatusCode::NOT_FOUND, "function not found")
@@ -41,7 +41,7 @@ pub async fn get_function_invocation(
         return response;
     }
 
-    let function = match load_function_by_name(&state.pool, &name).await {
+    let function = match load_function_by_name(&state.pool, &claims.app_id, &name).await {
         Ok(function) => function,
         Err(LoadFunctionError::NotFound) => {
             return json_error(StatusCode::NOT_FOUND, "function not found")
@@ -76,7 +76,7 @@ pub async fn list_function_invocation_attempts(
         return response;
     }
 
-    let function = match load_function_by_name(&state.pool, &name).await {
+    let function = match load_function_by_name(&state.pool, &claims.app_id, &name).await {
         Ok(function) => function,
         Err(LoadFunctionError::NotFound) => {
             return json_error(StatusCode::NOT_FOUND, "function not found")
@@ -140,7 +140,7 @@ pub async fn retry_function_invocation(
         return response;
     }
 
-    let function = match load_function_by_name(&state.pool, &name).await {
+    let function = match load_function_by_name(&state.pool, &claims.app_id, &name).await {
         Ok(function) => function,
         Err(LoadFunctionError::NotFound) => {
             return json_error(StatusCode::NOT_FOUND, "function not found")
@@ -191,10 +191,10 @@ pub async fn retry_function_invocation(
         &state,
         &function,
         function_version,
-        Some(claims),
+        Some(claims.clone()),
         input,
         false,
-        crate::app_context::DEFAULT_APP_ID,
+        &claims.app_id,
         invocation.retry_count + 1,
         Some(invocation.id),
     )

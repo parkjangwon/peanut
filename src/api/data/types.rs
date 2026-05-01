@@ -66,6 +66,7 @@ pub struct DataRowResponse {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DataRowRealtimeEvent {
     pub id: i64,
+    pub app_id: String,
     pub event: String,
     pub table_name: String,
     pub row_id: String,
@@ -224,6 +225,7 @@ pub struct ListRowEventsParams {
 #[derive(Debug, Clone, FromRow)]
 pub(crate) struct DataTableRecord {
     pub(crate) id: String,
+    pub(crate) app_id: String,
     pub(crate) name: String,
     pub(crate) display_name: String,
     pub(crate) schema_json: String,

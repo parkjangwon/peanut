@@ -9,7 +9,9 @@ pub async fn stream_function_events(
         return response;
     }
 
-    if let Err(LoadFunctionError::NotFound) = load_function_by_name(&state.pool, &name).await {
+    if let Err(LoadFunctionError::NotFound) =
+        load_function_by_name(&state.pool, &claims.app_id, &name).await
+    {
         return json_error(StatusCode::NOT_FOUND, "function not found");
     }
 

@@ -9,7 +9,7 @@ pub async fn change_password(
         return json_error(StatusCode::BAD_REQUEST, message);
     }
 
-    let user = match load_user_with_password_by_id(&state.pool, &claims.sub).await {
+    let user = match load_user_with_password_by_id(&state.pool, &claims.app_id, &claims.sub).await {
         Ok(Some(user)) => user,
         Ok(None) => return json_error(StatusCode::NOT_FOUND, "user not found"),
         Err(_) => return json_error(StatusCode::INTERNAL_SERVER_ERROR, "failed to load user"),
@@ -37,9 +37,10 @@ pub async fn change_password(
         );
     }
 
-    let _ = revoke_all_refresh_tokens_for_user(&state.pool, &user.id).await;
+    let _ = revoke_all_refresh_tokens_for_user(&state.pool, &claims.app_id, &user.id).await;
     let _ = record_auth_event(
         &state.pool,
+        &claims.app_id,
         &user.id,
         Some(&user.id),
         "password_changed",
@@ -54,7 +55,13 @@ pub async fn forgot_password(
     Json(payload): Json<ForgotPasswordRequest>,
 ) -> Response {
     let message = "if the user exists, a reset token was created";
-    let user = match load_user_summary_by_email(&state.pool, payload.email.trim()).await {
+    let user = match load_user_summary_by_email(
+        &state.pool,
+        crate::app_context::DEFAULT_APP_ID,
+        payload.email.trim(),
+    )
+    .await
+    {
         Ok(user) => user,
         Err(_) => return json_error(StatusCode::INTERNAL_SERVER_ERROR, "failed to query user"),
     };
@@ -72,7 +79,9 @@ pub async fn forgot_password(
             .into_response();
     };
 
-    match issue_password_reset_token(&state.pool, &user.id).await {
+    match issue_password_reset_token(&state.pool, crate::app_context::DEFAULT_APP_ID, &user.id)
+        .await
+    {
         Ok(reset_token) => {
             let response_token = deliver_password_reset_token(
                 &state.auth.password_reset_delivery,
@@ -81,6 +90,7 @@ pub async fn forgot_password(
             );
             let _ = record_auth_event(
                 &state.pool,
+                crate::app_context::DEFAULT_APP_ID,
                 &user.id,
                 Some(&user.id),
                 "password_reset_requested",
@@ -112,10 +122,13 @@ pub async fn reset_password(
         return json_error(StatusCode::BAD_REQUEST, message);
     }
 
-    let Some(reset_record) = load_active_password_reset_token(&state.pool, &payload.reset_token)
-        .await
-        .unwrap_or(None)
-    else {
+    let Some(reset_record) = load_active_password_reset_token(
+        &state.pool,
+        crate::app_context::DEFAULT_APP_ID,
+        &payload.reset_token,
+    )
+    .await
+    .unwrap_or(None) else {
         return json_error(StatusCode::UNAUTHORIZED, "valid reset token is required");
     };
 
@@ -138,9 +151,15 @@ pub async fn reset_password(
     }
 
     let _ = consume_password_reset_token_hash(&state.pool, &reset_record.token).await;
-    let _ = revoke_all_refresh_tokens_for_user(&state.pool, &reset_record.user_id).await;
+    let _ = revoke_all_refresh_tokens_for_user(
+        &state.pool,
+        &reset_record.app_id,
+        &reset_record.user_id,
+    )
+    .await;
     let _ = record_auth_event(
         &state.pool,
+        &reset_record.app_id,
         &reset_record.user_id,
         Some(&reset_record.user_id),
         "password_reset_completed",
