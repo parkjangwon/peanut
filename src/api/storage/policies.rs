@@ -136,7 +136,22 @@ pub async fn create_storage_bucket(
 
     match result {
         Ok(_) => match fetch_bucket(&state.pool, &app_id, &bucket).await {
-            Ok(Some(bucket)) => (StatusCode::CREATED, Json(bucket)).into_response(),
+            Ok(Some(bucket)) => {
+                let _ = crate::api::audit::record_audit_log(
+                    &state.pool,
+                    Some(&app_id),
+                    &claims,
+                    "storage.bucket.created",
+                    "storage_bucket",
+                    &bucket.name,
+                    serde_json::json!({
+                        "public_read": bucket.public_read,
+                        "allow_client_uploads": bucket.allow_client_uploads
+                    }),
+                )
+                .await;
+                (StatusCode::CREATED, Json(bucket)).into_response()
+            }
             _ => json_error(
                 StatusCode::INTERNAL_SERVER_ERROR,
                 "failed to load storage bucket",
@@ -193,7 +208,22 @@ pub async fn update_storage_bucket(
             json_error(StatusCode::NOT_FOUND, "storage bucket not found")
         }
         Ok(_) => match fetch_bucket(&state.pool, &app_id, &bucket).await {
-            Ok(Some(bucket)) => (StatusCode::OK, Json(bucket)).into_response(),
+            Ok(Some(bucket)) => {
+                let _ = crate::api::audit::record_audit_log(
+                    &state.pool,
+                    Some(&app_id),
+                    &claims,
+                    "storage.bucket.updated",
+                    "storage_bucket",
+                    &bucket.name,
+                    serde_json::json!({
+                        "public_read": bucket.public_read,
+                        "allow_client_uploads": bucket.allow_client_uploads
+                    }),
+                )
+                .await;
+                (StatusCode::OK, Json(bucket)).into_response()
+            }
             _ => json_error(
                 StatusCode::INTERNAL_SERVER_ERROR,
                 "failed to load storage bucket",
@@ -229,7 +259,19 @@ pub async fn delete_storage_bucket(
         Ok(result) if result.rows_affected() == 0 => {
             json_error(StatusCode::NOT_FOUND, "storage bucket not found")
         }
-        Ok(_) => StatusCode::NO_CONTENT.into_response(),
+        Ok(_) => {
+            let _ = crate::api::audit::record_audit_log(
+                &state.pool,
+                Some(&app_id),
+                &claims,
+                "storage.bucket.deleted",
+                "storage_bucket",
+                &bucket,
+                serde_json::json!({}),
+            )
+            .await;
+            StatusCode::NO_CONTENT.into_response()
+        }
         Err(_) => json_error(
             StatusCode::INTERNAL_SERVER_ERROR,
             "failed to delete storage bucket",

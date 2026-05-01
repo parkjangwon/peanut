@@ -151,6 +151,10 @@ fn build_protected_routes(
             "/apps/:app_id/storage/buckets/:bucket",
             delete(crate::api::storage::delete_storage_bucket),
         )
+        .route(
+            "/apps/:app_id/activity",
+            get(crate::api::audit::list_app_activity),
+        )
         .route("/admin/backups", get(crate::api::backups::list_backups))
         .route("/admin/backups", post(crate::api::backups::create_backup))
         .route(

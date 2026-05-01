@@ -154,11 +154,23 @@ pub async fn create_app_key(
     .await;
 
     match result {
-        Ok(_) => (
-            StatusCode::CREATED,
-            Json(CreateAppKeyResponse { app_key, key }),
-        )
-            .into_response(),
+        Ok(_) => {
+            let _ = crate::api::audit::record_audit_log(
+                &state.pool,
+                Some(&app_key.app_id),
+                &claims,
+                "app_key.created",
+                "app_key",
+                &app_key.id,
+                serde_json::json!({ "key_type": app_key.key_type, "name": app_key.name }),
+            )
+            .await;
+            (
+                StatusCode::CREATED,
+                Json(CreateAppKeyResponse { app_key, key }),
+            )
+                .into_response()
+        }
         Err(_) => json_error(
             StatusCode::INTERNAL_SERVER_ERROR,
             "failed to create app key",
@@ -190,7 +202,19 @@ pub async fn revoke_app_key(
         Ok(result) if result.rows_affected() == 0 => {
             json_error(StatusCode::NOT_FOUND, "app key not found")
         }
-        Ok(_) => StatusCode::NO_CONTENT.into_response(),
+        Ok(_) => {
+            let _ = crate::api::audit::record_audit_log(
+                &state.pool,
+                Some(&app_id),
+                &claims,
+                "app_key.revoked",
+                "app_key",
+                &key_id,
+                serde_json::json!({}),
+            )
+            .await;
+            StatusCode::NO_CONTENT.into_response()
+        }
         Err(_) => json_error(
             StatusCode::INTERNAL_SERVER_ERROR,
             "failed to revoke app key",

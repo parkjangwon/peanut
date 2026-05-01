@@ -113,7 +113,19 @@ pub async fn create_app(
     .await;
 
     match result {
-        Ok(_) => (StatusCode::CREATED, Json(AppResponse { app })).into_response(),
+        Ok(_) => {
+            let _ = crate::api::audit::record_audit_log(
+                &state.pool,
+                Some(&app.id),
+                &claims,
+                "app.created",
+                "app",
+                &app.id,
+                serde_json::json!({ "name": app.name }),
+            )
+            .await;
+            (StatusCode::CREATED, Json(AppResponse { app })).into_response()
+        }
         Err(error) if is_unique_violation(&error) => {
             json_error(StatusCode::CONFLICT, "app name already exists")
         }
@@ -176,7 +188,19 @@ pub async fn update_app(
             json_error(StatusCode::NOT_FOUND, "app not found")
         }
         Ok(_) => match load_app(&state.pool, &app_id).await {
-            Ok(Some(app)) => (StatusCode::OK, Json(AppResponse { app })).into_response(),
+            Ok(Some(app)) => {
+                let _ = crate::api::audit::record_audit_log(
+                    &state.pool,
+                    Some(&app_id),
+                    &claims,
+                    "app.updated",
+                    "app",
+                    &app_id,
+                    serde_json::json!({ "display_name": app.display_name }),
+                )
+                .await;
+                (StatusCode::OK, Json(AppResponse { app })).into_response()
+            }
             Ok(None) => json_error(StatusCode::NOT_FOUND, "app not found"),
             Err(_) => json_error(StatusCode::INTERNAL_SERVER_ERROR, "failed to load app"),
         },
@@ -206,7 +230,19 @@ pub async fn delete_app(
         Ok(result) if result.rows_affected() == 0 => {
             json_error(StatusCode::NOT_FOUND, "app not found")
         }
-        Ok(_) => StatusCode::NO_CONTENT.into_response(),
+        Ok(_) => {
+            let _ = crate::api::audit::record_audit_log(
+                &state.pool,
+                Some(&app_id),
+                &claims,
+                "app.deleted",
+                "app",
+                &app_id,
+                serde_json::json!({}),
+            )
+            .await;
+            StatusCode::NO_CONTENT.into_response()
+        }
         Err(_) => json_error(StatusCode::INTERNAL_SERVER_ERROR, "failed to delete app"),
     }
 }

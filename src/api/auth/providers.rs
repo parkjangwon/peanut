@@ -191,7 +191,19 @@ pub async fn upsert_auth_provider_config(
     }
 
     match fetch_provider_row(&state.pool, &app_id, &provider).await {
-        Ok(Some(row)) => (StatusCode::OK, Json(provider_from_row(row))).into_response(),
+        Ok(Some(row)) => {
+            let _ = crate::api::audit::record_audit_log(
+                &state.pool,
+                Some(&app_id),
+                &claims,
+                "auth.provider.updated",
+                "auth_provider",
+                &provider,
+                serde_json::json!({ "enabled": row.enabled }),
+            )
+            .await;
+            (StatusCode::OK, Json(provider_from_row(row))).into_response()
+        }
         Ok(None) => json_error(StatusCode::NOT_FOUND, "auth provider not found"),
         Err(_) => json_error(
             StatusCode::INTERNAL_SERVER_ERROR,
