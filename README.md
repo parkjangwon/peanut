@@ -1,5 +1,7 @@
 # Peanut
 
+<img width="1376" height="768" alt="image" src="https://github.com/user-attachments/assets/ae31aa2a-4793-4465-b58c-e19b3bebf2db" />
+
 Peanut is a self-hosted BaaS packaged as a Rust single binary. It serves the
 backend API and the embedded admin console from the same process, using SQLite
 and local filesystem storage by default.
