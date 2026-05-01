@@ -1,5 +1,7 @@
 # Peanut
 
+<img width="1376" height="768" alt="image" src="https://github.com/user-attachments/assets/3e934040-791d-4552-8385-66e7e4ffaf30" />
+
 Peanut은 Rust 단일 바이너리로 배포되는 self-hosted BaaS입니다. 기본값으로
 SQLite와 로컬 파일시스템 스토리지를 사용하며, 백엔드 API와 내장 admin console을
 같은 프로세스에서 서빙합니다.
