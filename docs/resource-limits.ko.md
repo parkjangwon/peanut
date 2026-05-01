@@ -16,19 +16,26 @@
 
 ## 적용 방식
 
-쓰기 계열 작업에서 제한을 검사합니다. 현재 첫 번째 가드는 앱 생성입니다.
-workspace의 `apps` 제한을 넘으면 Peanut은 다음 응답을 반환합니다.
+쓰기 계열 작업과 SDK app key 요청에서 제한을 검사합니다. 현재 Peanut은
+앱 생성, 앱 사용자 등록, 데이터 row 생성, 스토리지 쓰기, Function 호출,
+Push 발송, 월 SDK API 요청을 제한합니다. workspace 제한을 넘으면 Peanut은
+다음 응답을 반환합니다.
 
 ```json
 {
   "code": "resource_limit_exceeded",
   "resource_key": "apps",
   "used": 3,
-  "limit": 3
+  "limit": 3,
+  "period_start": "all",
+  "reset_at": null,
+  "source": "count"
 }
 ```
 
-읽기 작업은 열어두어 운영자가 상태를 확인하고 복구할 수 있게 합니다.
+월간 리소스는 달력 월 기준 `period_start`와 `reset_at`을 제공합니다. API
+요청 제한 자체가 소진된 경우를 제외하면 읽기 작업은 열어두어 운영자가 상태를
+확인하고 복구할 수 있게 합니다.
 
 ## 조정
 

@@ -113,5 +113,5 @@ Good fits:
 
 Not a good fit yet:
 - customer-facing third-party app auth
-- multi-tenant app client management
+- workspace-scoped app client management
 - fine-grained per-route permission control

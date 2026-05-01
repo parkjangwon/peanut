@@ -4,7 +4,7 @@ use axum::{
     response::{IntoResponse, Response},
     Extension, Json,
 };
-use chrono::{Duration, Utc};
+use chrono::{Datelike, Duration, TimeZone, Utc};
 use serde::{Deserialize, Serialize};
 use sqlx::FromRow;
 use uuid::Uuid;
@@ -112,7 +112,9 @@ pub struct ResourceLimitSummary {
     pub resource_key: String,
     pub used: i64,
     pub limit: i64,
+    pub period_start: String,
     pub reset_at: Option<String>,
+    pub source: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -721,16 +723,18 @@ pub async fn record_usage(
     resource_key: &str,
     amount: i64,
 ) -> Result<(), sqlx::Error> {
+    let period_start = usage_period_start(resource_key);
     sqlx::query(
         r#"
         INSERT INTO usage_counters (workspace_id, resource_key, period_start, used)
-        VALUES (?, ?, 'all', ?)
+        VALUES (?, ?, ?, ?)
         ON CONFLICT(workspace_id, resource_key, period_start)
         DO UPDATE SET used = used + excluded.used, updated_at = CURRENT_TIMESTAMP
         "#,
     )
     .bind(workspace_id)
     .bind(resource_key)
+    .bind(&period_start)
     .bind(amount)
     .execute(pool)
     .await?;
@@ -790,6 +794,12 @@ async fn resource_limit_summary(
     workspace_id: &str,
     resource_key: &str,
 ) -> Result<ResourceLimitSummary, sqlx::Error> {
+    let period_start = usage_period_start(resource_key);
+    let source = if matches!(resource_key, "apps" | "app_users" | "data_rows") {
+        "count"
+    } else {
+        "counter"
+    };
     let used = match resource_key {
         "apps" => sqlx::query_as::<_, (i64,)>(
             "SELECT COUNT(*) FROM apps WHERE workspace_id = ? AND deleted_at IS NULL",
@@ -823,10 +833,11 @@ async fn resource_limit_summary(
         .await?
         .0,
         _ => sqlx::query_as::<_, (Option<i64>,)>(
-            "SELECT used FROM usage_counters WHERE workspace_id = ? AND resource_key = ? AND period_start = 'all'",
+            "SELECT used FROM usage_counters WHERE workspace_id = ? AND resource_key = ? AND period_start = ?",
         )
         .bind(workspace_id)
         .bind(resource_key)
+        .bind(&period_start)
         .fetch_optional(pool)
         .await?
         .and_then(|row| row.0)
@@ -844,7 +855,9 @@ async fn resource_limit_summary(
         resource_key: resource_key.to_string(),
         used,
         limit: override_limit.unwrap_or_else(|| default_resource_limit(resource_key)),
-        reset_at: None,
+        period_start,
+        reset_at: usage_reset_at(resource_key),
+        source: source.to_string(),
     })
 }
 
@@ -880,7 +893,9 @@ fn resource_limit_exceeded_response(resource_limit: ResourceLimitSummary) -> Res
             "resource_key": resource_limit.resource_key,
             "used": resource_limit.used,
             "limit": resource_limit.limit,
+            "period_start": resource_limit.period_start,
             "reset_at": resource_limit.reset_at,
+            "source": resource_limit.source,
             "request_id": uuid::Uuid::new_v4().to_string(),
         })),
     )
@@ -1012,6 +1027,40 @@ fn default_resource_limit(resource_key: &str) -> i64 {
         "api_requests_month" => 1_000_000,
         _ => 0,
     }
+}
+
+fn usage_period_start(resource_key: &str) -> String {
+    if !is_monthly_resource(resource_key) {
+        return "all".to_string();
+    }
+    let now = Utc::now();
+    let start = Utc
+        .with_ymd_and_hms(now.year(), now.month(), 1, 0, 0, 0)
+        .single()
+        .unwrap_or(now);
+    start.format("%Y-%m-%dT%H:%M:%SZ").to_string()
+}
+
+fn usage_reset_at(resource_key: &str) -> Option<String> {
+    if !is_monthly_resource(resource_key) {
+        return None;
+    }
+    let now = Utc::now();
+    let (year, month) = if now.month() == 12 {
+        (now.year() + 1, 1)
+    } else {
+        (now.year(), now.month() + 1)
+    };
+    Utc.with_ymd_and_hms(year, month, 1, 0, 0, 0)
+        .single()
+        .map(|value| value.format("%Y-%m-%dT%H:%M:%SZ").to_string())
+}
+
+fn is_monthly_resource(resource_key: &str) -> bool {
+    matches!(
+        resource_key,
+        "function_invocations_month" | "push_sends_month" | "api_requests_month"
+    )
 }
 
 fn is_supported_resource_key(value: &str) -> bool {

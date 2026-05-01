@@ -102,6 +102,21 @@ pub async fn sdk_auth_middleware(
             "app key does not belong to this app",
         ));
     }
+    let workspace_id = crate::api::workspaces::require_app_resource_available(
+        &state.pool,
+        &path_app_id,
+        "api_requests_month",
+        1,
+    )
+    .await?;
+    let _ = crate::api::workspaces::record_usage(
+        &state.pool,
+        &workspace_id,
+        Some(&path_app_id),
+        "api_requests_month",
+        1,
+    )
+    .await;
 
     let user = match req
         .headers()

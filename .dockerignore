@@ -7,6 +7,9 @@ data
 ci-data
 release-ci
 peanut-console
+console/node_modules
+console/.next
+console/out
 .DS_Store
 *.log
 *.pid

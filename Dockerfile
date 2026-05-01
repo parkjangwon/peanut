@@ -1,8 +1,16 @@
+FROM node:22-bookworm-slim AS console-builder
+WORKDIR /app/console
+COPY console/package*.json ./
+RUN npm ci
+COPY console/ ./
+RUN npm run build
+
 FROM rust:1-slim-bookworm AS builder
 WORKDIR /app
 
 RUN apt-get update && apt-get install -y pkg-config libssl-dev libsqlite3-dev build-essential && rm -rf /var/lib/apt/lists/*
 COPY . .
+COPY --from=console-builder /app/console/out ./console/out
 RUN cargo build --release
 
 FROM debian:bookworm-slim

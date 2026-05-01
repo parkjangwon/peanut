@@ -45,7 +45,9 @@ export type ResourceLimitSummary = {
   resource_key: string;
   used: number;
   limit: number;
+  period_start: string;
   reset_at?: string | null;
+  source: "count" | "counter";
 };
 
 export type UsageSummary = {

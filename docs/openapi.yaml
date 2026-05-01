@@ -1173,7 +1173,7 @@ components:
           nullable: true
     ResourceLimitSummary:
       type: object
-      required: [resource_key, used, limit]
+      required: [resource_key, used, limit, period_start, source]
       properties:
         resource_key:
           type: string
@@ -1181,9 +1181,14 @@ components:
           type: integer
         limit:
           type: integer
+        period_start:
+          type: string
         reset_at:
           type: string
           nullable: true
+        source:
+          type: string
+          enum: [count, counter]
     CreateAppRequest:
       type: object
       required: [name, display_name]

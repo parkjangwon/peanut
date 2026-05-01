@@ -62,10 +62,11 @@ inside one Peanut instance:
 
 Apps carry `workspace_id`, `disabled_at`, and `disabled_reason`. `POST /api/apps`
 accepts an optional `workspace_id`; when omitted, Peanut uses the default
-workspace. App creation is blocked with `code: "resource_limit_exceeded"` when
-the workspace's `apps` resource limit is exhausted. SDK requests are blocked
-with `workspace_disabled` or `app_disabled` when the corresponding boundary is
-disabled.
+workspace. App creation, app-user registration, data row creation, storage
+writes, Function invocations, Push sends, and monthly SDK API requests are
+blocked with `code: "resource_limit_exceeded"` when their workspace resource
+limit is exhausted. SDK requests are blocked with `workspace_disabled` or
+`app_disabled` when the corresponding boundary is disabled.
 
 ## Readiness
 

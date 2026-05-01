@@ -6,10 +6,14 @@ const authState = {
 };
 
 let baseUrl = 'http://127.0.0.1:3000';
+let appId = 'default';
+let apiKey = '';
 let clientId = 'peanut-web-dev';
 
 const els = {
   baseUrl: document.querySelector('#baseUrl'),
+  appId: document.querySelector('#appId'),
+  apiKey: document.querySelector('#apiKey'),
   clientId: document.querySelector('#clientId'),
   email: document.querySelector('#email'),
   password: document.querySelector('#password'),
@@ -21,6 +25,7 @@ const els = {
   accessState: document.querySelector('#accessState'),
   refreshState: document.querySelector('#refreshState'),
   clientIdState: document.querySelector('#clientIdState'),
+  appIdState: document.querySelector('#appIdState'),
 };
 
 function setOutput(value) {
@@ -31,9 +36,12 @@ function renderState() {
   els.accessState.textContent = authState.accessToken ? 'present' : 'empty';
   els.refreshState.textContent = authState.refreshToken ? 'present' : 'empty';
   els.clientIdState.textContent = clientId || 'empty';
+  els.appIdState.textContent = appId || 'empty';
   els.stateOutput.textContent = JSON.stringify(
     {
       baseUrl,
+      appId,
+      apiKeyPreview: apiKey ? `${apiKey.slice(0, 12)}...` : null,
       clientId: clientId || null,
       user: authState.user,
       sessions: authState.sessions,
@@ -77,6 +85,9 @@ async function rawRequest(path, init = {}) {
   if (clientId) {
     headers.set('x-peanut-client-id', clientId);
   }
+  if (apiKey) {
+    headers.set('x-peanut-api-key', apiKey);
+  }
   if (authState.accessToken) {
     headers.set('Authorization', `Bearer ${authState.accessToken}`);
   }
@@ -90,11 +101,15 @@ async function rawRequest(path, init = {}) {
   return { response, data };
 }
 
+function appPath(path) {
+  return `/api/apps/${encodeURIComponent(appId)}${path}`;
+}
+
 async function refreshSession() {
   if (!authState.refreshToken) {
     throw new Error('No refresh token available');
   }
-  const { response, data } = await rawRequest('/api/auth/refresh', {
+  const { response, data } = await rawRequest(appPath('/auth/refresh'), {
     method: 'POST',
     body: JSON.stringify({ refresh_token: authState.refreshToken }),
   });
@@ -126,7 +141,7 @@ async function run(label, fn) {
 }
 
 async function register() {
-  const { response, data } = await rawRequest('/api/register', {
+  const { response, data } = await rawRequest(appPath('/auth/register'), {
     method: 'POST',
     body: JSON.stringify({
       email: els.email.value,
@@ -140,7 +155,7 @@ async function register() {
 }
 
 async function login() {
-  const { response, data } = await rawRequest('/api/login', {
+  const { response, data } = await rawRequest(appPath('/auth/login'), {
     method: 'POST',
     body: JSON.stringify({
       email: els.email.value,
@@ -155,7 +170,7 @@ async function login() {
 }
 
 async function loadMe() {
-  const { response, data } = await api('/api/me');
+  const { response, data } = await api(appPath('/auth/me'));
   if (!response.ok) {
     throw new Error(data?.error || 'load me failed');
   }
@@ -167,7 +182,7 @@ async function logout() {
   if (!authState.refreshToken) {
     throw new Error('No refresh token available');
   }
-  const { response, data } = await rawRequest('/api/auth/logout', {
+  const { response, data } = await rawRequest(appPath('/auth/logout'), {
     method: 'POST',
     body: JSON.stringify({ refresh_token: authState.refreshToken }),
   });
@@ -179,7 +194,7 @@ async function logout() {
 }
 
 async function listSessions() {
-  const { response, data } = await api('/api/auth/sessions');
+  const { response, data } = await api(appPath('/auth/sessions'));
   if (!response.ok) {
     throw new Error(data?.error || 'list sessions failed');
   }
@@ -192,7 +207,7 @@ async function revokeFirstSession() {
     throw new Error('Load sessions first');
   }
   const first = authState.sessions[0];
-  const { response, data } = await api(`/api/auth/sessions/${encodeURIComponent(first.session_id)}`, {
+  const { response, data } = await api(appPath(`/auth/sessions/${encodeURIComponent(first.session_id)}`), {
     method: 'DELETE',
   });
   if (!response.ok) {
@@ -203,7 +218,7 @@ async function revokeFirstSession() {
 }
 
 async function revokeAllSessions() {
-  const { response, data } = await api('/api/auth/sessions/revoke-all', {
+  const { response, data } = await api(appPath('/auth/sessions/revoke-all'), {
     method: 'POST',
   });
   if (!response.ok) {
@@ -214,7 +229,7 @@ async function revokeAllSessions() {
 }
 
 async function changePassword() {
-  const { response, data } = await api('/api/auth/change-password', {
+  const { response, data } = await api(appPath('/auth/change-password'), {
     method: 'POST',
     body: JSON.stringify({
       current_password: els.currentPassword.value,
@@ -232,7 +247,7 @@ async function changePassword() {
 }
 
 async function forgotPassword() {
-  const { response, data } = await rawRequest('/api/auth/forgot-password', {
+  const { response, data } = await rawRequest(appPath('/auth/forgot-password'), {
     method: 'POST',
     body: JSON.stringify({ email: els.email.value }),
   });
@@ -246,7 +261,7 @@ async function forgotPassword() {
 }
 
 async function resetPassword() {
-  const { response, data } = await rawRequest('/api/auth/reset-password', {
+  const { response, data } = await rawRequest(appPath('/auth/reset-password'), {
     method: 'POST',
     body: JSON.stringify({
       reset_token: els.resetToken.value,
@@ -262,9 +277,11 @@ async function resetPassword() {
 
 function saveBaseUrl() {
   baseUrl = (els.baseUrl.value || '').trim().replace(/\/$/, '');
+  appId = (els.appId.value || 'default').trim();
+  apiKey = (els.apiKey.value || '').trim();
   clientId = (els.clientId.value || '').trim();
   renderState();
-  setOutput({ ok: true, baseUrl, clientId: clientId || null });
+  setOutput({ ok: true, baseUrl, appId, apiKeyPresent: Boolean(apiKey), clientId: clientId || null });
 }
 
 document.querySelector('#saveBaseUrl').addEventListener('click', () => run('saveBaseUrl', saveBaseUrl));
@@ -282,7 +299,7 @@ document.querySelector('#resetPassword').addEventListener('click', () => run('re
 
 renderState();
 setOutput({
-  message: 'Ready. Set the Peanut base URL, then register or login.',
+  message: 'Ready. Set the Peanut base URL, app id, and a client/server app key, then register or login.',
   auth_client_policy_hint: 'If AUTH_ALLOWED_CLIENT_IDS is enabled on the server, keep the client id field filled so the example sends x-peanut-client-id.',
   production_note: 'This example stores tokens in memory only. Prefer a BFF or secure cookie strategy for production refresh tokens.',
 });

@@ -334,8 +334,41 @@ async fn platform_checks(state: &crate::AppState) -> Vec<Value> {
         }));
     }
 
+    let password_reset_inline = matches!(
+        state.auth.password_reset_delivery,
+        crate::config::PasswordResetDelivery::Inline
+    );
+    checks.push(json!({
+        "name": "password_reset_delivery",
+        "ok": true,
+        "severity": if password_reset_inline { "warning" } else { "info" },
+        "delivery": if password_reset_inline { "inline" } else { "log" },
+        "message": if password_reset_inline {
+            "inline password reset delivery should not be used for production traffic"
+        } else {
+            "password reset delivery is not returned inline"
+        },
+    }));
+
+    let allow_any_origin = state.auth.allowed_origins.is_empty();
+    checks.push(json!({
+        "name": "cors_origin_policy",
+        "ok": true,
+        "severity": if allow_any_origin { "warning" } else { "info" },
+        "allow_any_origin": allow_any_origin,
+        "allowed_origin_count": state.auth.allowed_origins.len(),
+        "message": if allow_any_origin {
+            "auth CORS origins are not restricted"
+        } else {
+            "auth CORS origins are restricted"
+        },
+    }));
+
     for check in checks.iter_mut() {
         if let Some(object) = check.as_object_mut() {
+            if object.contains_key("severity") {
+                continue;
+            }
             let ok = object.get("ok").and_then(Value::as_bool).unwrap_or(false);
             object.insert(
                 "severity".to_string(),

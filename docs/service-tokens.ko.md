@@ -113,5 +113,5 @@ cron/systemd/CI 스타일 운영 자동화 예시는 `docs/automation-runbook.ko
 
 아직 잘 맞지 않는 용도:
 - 고객용 third-party app auth
-- multi-tenant app client 관리
+- workspace 단위 app client 관리
 - route별 세밀한 권한 제어

@@ -161,11 +161,21 @@ pub async fn put_sdk_object(
     if !mime_allowed(&policy, content_type) {
         return json_error(StatusCode::BAD_REQUEST, "content type is not allowed");
     }
+    let previous_size = match state
+        .storage
+        .head_object(&sdk_bucket(&app_id, &bucket), &key)
+        .await
+    {
+        Ok(metadata) => metadata.content_length as i64,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => 0,
+        Err(_) => 0,
+    };
+    let requested_delta = (body.len() as i64 - previous_size).max(0);
     let workspace_id = match crate::api::workspaces::require_app_resource_available(
         &state.pool,
         &app_id,
         "storage_bytes",
-        body.len() as i64,
+        requested_delta,
     )
     .await
     {
@@ -189,7 +199,7 @@ pub async fn put_sdk_object(
                 &workspace_id,
                 Some(&app_id),
                 "storage_bytes",
-                metadata.content_length as i64,
+                metadata.content_length as i64 - previous_size,
             )
             .await;
             let fallback_claims = crate::auth::jwt::Claims {
@@ -235,6 +245,20 @@ pub async fn delete_sdk_object(
     if !can_delete(&auth, &policy) {
         return json_error(StatusCode::FORBIDDEN, "storage delete scope required");
     }
+    let previous_size = match state
+        .storage
+        .head_object(&sdk_bucket(&app_id, &bucket), &key)
+        .await
+    {
+        Ok(metadata) => metadata.content_length as i64,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+            return json_error(StatusCode::NOT_FOUND, "object not found")
+        }
+        Err(err) if err.kind() == std::io::ErrorKind::InvalidInput => {
+            return json_error(StatusCode::BAD_REQUEST, err.to_string())
+        }
+        Err(_) => return json_error(StatusCode::INTERNAL_SERVER_ERROR, "failed to load object"),
+    };
 
     match state
         .storage
@@ -242,6 +266,18 @@ pub async fn delete_sdk_object(
         .await
     {
         Ok(()) => {
+            if let Ok(Some(workspace_id)) =
+                crate::api::workspaces::app_workspace_id(&state.pool, &app_id).await
+            {
+                let _ = crate::api::workspaces::record_usage(
+                    &state.pool,
+                    &workspace_id,
+                    Some(&app_id),
+                    "storage_bytes",
+                    -previous_size,
+                )
+                .await;
+            }
             let fallback_claims = crate::auth::jwt::Claims {
                 sub: auth.principal.actor_id.clone(),
                 app_id: app_id.clone(),
@@ -427,6 +463,74 @@ mod tests {
         )
         .await;
         assert_eq!(get.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn test_sdk_storage_usage_tracks_overwrite_and_delete_delta() {
+        let (state, _dir) = crate::test_support::make_test_state().await;
+        insert_bucket(&state, "quota", true, true, None, r#"["text/plain"]"#).await;
+
+        let first = put_sdk_object(
+            State(state.clone()),
+            Extension(sdk_auth(vec!["storage:write"], Some(user_claims()))),
+            Path((
+                crate::app_context::DEFAULT_APP_ID.to_string(),
+                "quota".to_string(),
+                "item.txt".to_string(),
+            )),
+            HeaderMap::from_iter([(
+                header::CONTENT_TYPE,
+                axum::http::HeaderValue::from_static("text/plain"),
+            )]),
+            Bytes::from_static(b"hello"),
+        )
+        .await;
+        assert_eq!(first.status(), StatusCode::CREATED);
+
+        let overwrite = put_sdk_object(
+            State(state.clone()),
+            Extension(sdk_auth(vec!["storage:write"], Some(user_claims()))),
+            Path((
+                crate::app_context::DEFAULT_APP_ID.to_string(),
+                "quota".to_string(),
+                "item.txt".to_string(),
+            )),
+            HeaderMap::from_iter([(
+                header::CONTENT_TYPE,
+                axum::http::HeaderValue::from_static("text/plain"),
+            )]),
+            Bytes::from_static(b"hi"),
+        )
+        .await;
+        assert_eq!(overwrite.status(), StatusCode::CREATED);
+
+        let used_after_overwrite = sqlx::query_scalar::<_, i64>(
+            "SELECT used FROM usage_counters WHERE workspace_id = 'default' AND resource_key = 'storage_bytes' AND period_start = 'all'",
+        )
+        .fetch_one(&state.pool)
+        .await
+        .unwrap();
+        assert_eq!(used_after_overwrite, 2);
+
+        let delete = delete_sdk_object(
+            State(state.clone()),
+            Extension(sdk_auth(vec!["storage:write"], Some(user_claims()))),
+            Path((
+                crate::app_context::DEFAULT_APP_ID.to_string(),
+                "quota".to_string(),
+                "item.txt".to_string(),
+            )),
+        )
+        .await;
+        assert_eq!(delete.status(), StatusCode::NO_CONTENT);
+
+        let used_after_delete = sqlx::query_scalar::<_, i64>(
+            "SELECT used FROM usage_counters WHERE workspace_id = 'default' AND resource_key = 'storage_bytes' AND period_start = 'all'",
+        )
+        .fetch_one(&state.pool)
+        .await
+        .unwrap();
+        assert_eq!(used_after_delete, 0);
     }
 
     #[tokio::test]

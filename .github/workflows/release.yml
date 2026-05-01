@@ -30,6 +30,15 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y jq curl
       - name: Preflight tests
         run: cargo test -- --test-threads=1
+      - name: Console install
+        working-directory: console
+        run: npm ci
+      - name: Console lint
+        working-directory: console
+        run: npm run lint
+      - name: Console build
+        working-directory: console
+        run: npm run build
       - name: OpenAPI lint
         env:
           NPM_CONFIG_CACHE: ${{ runner.temp }}/npm-cache
@@ -71,6 +80,13 @@ jobs:
             $IMAGE_NAME:$VERSION
           for attempt in $(seq 1 30); do
             if curl -fsS http://127.0.0.1:3000/api/ready | jq -e '.status == "ready"' >/dev/null; then
+              admin_json=$(curl -fsS -X POST http://127.0.0.1:3000/api/bootstrap/admin \
+                -H 'content-type: application/json' \
+                -d '{"email":"release-smoke@example.com","password":"secret123"}')
+              admin_token=$(echo "$admin_json" | jq -r '.access_token')
+              curl -fsS http://127.0.0.1:3000/api/admin/ops/diagnostics \
+                -H "authorization: Bearer ${admin_token}" \
+                | jq -e '.ok == true and (.checks | type == "array")' >/dev/null
               docker stop peanut-release-smoke
               exit 0
             fi

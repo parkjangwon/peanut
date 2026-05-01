@@ -102,7 +102,7 @@ mod tests {
         state.auth.allowed_origins = Arc::new(vec!["https://app.example.com".to_string()]);
 
         let app = Router::new()
-            .route("/api/login", post(ok_handler))
+            .route("/api/apps/default/auth/login", post(ok_handler))
             .layer(from_fn_with_state(
                 state.clone(),
                 auth_client_policy_middleware,
@@ -113,7 +113,7 @@ mod tests {
             .oneshot(
                 Request::builder()
                     .method("POST")
-                    .uri("/api/login")
+                    .uri("/api/apps/default/auth/login")
                     .header("origin", "https://evil.example.com")
                     .body(Body::empty())
                     .unwrap(),
@@ -132,7 +132,7 @@ mod tests {
         state.auth.allowed_client_ids = Arc::new(vec!["web-app".to_string()]);
 
         let app = Router::new()
-            .route("/api/login", post(ok_handler))
+            .route("/api/apps/default/auth/login", post(ok_handler))
             .layer(from_fn_with_state(
                 state.clone(),
                 auth_client_policy_middleware,
@@ -143,7 +143,7 @@ mod tests {
             .oneshot(
                 Request::builder()
                     .method("POST")
-                    .uri("/api/login")
+                    .uri("/api/apps/default/auth/login")
                     .body(Body::empty())
                     .unwrap(),
             )
@@ -165,7 +165,7 @@ mod tests {
         state.auth.allowed_client_ids = Arc::new(vec!["web-app".to_string()]);
 
         let app = Router::new()
-            .route("/api/login", post(ok_handler))
+            .route("/api/apps/default/auth/login", post(ok_handler))
             .layer(from_fn_with_state(
                 state.clone(),
                 auth_client_policy_middleware,
@@ -176,7 +176,7 @@ mod tests {
             .oneshot(
                 Request::builder()
                     .method("POST")
-                    .uri("/api/login")
+                    .uri("/api/apps/default/auth/login")
                     .header("origin", "https://app.example.com")
                     .header("x-peanut-client-id", "web-app")
                     .body(Body::empty())

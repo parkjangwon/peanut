@@ -15,19 +15,26 @@ default. These limits are guardrails for one Peanut instance, not billing plans.
 
 ## Enforcement
 
-Write-style operations are the enforcement point. The first implemented guard is
-app creation. If a workspace exceeds the `apps` resource limit, Peanut returns:
+Write-style operations and SDK app-key requests are the enforcement points.
+Peanut currently guards app creation, app-user registration, data row creation,
+storage writes, Function invocations, Push sends, and monthly SDK API requests.
+If a workspace exceeds a resource limit, Peanut returns:
 
 ```json
 {
   "code": "resource_limit_exceeded",
   "resource_key": "apps",
   "used": 3,
-  "limit": 3
+  "limit": 3,
+  "period_start": "all",
+  "reset_at": null,
+  "source": "count"
 }
 ```
 
-Read operations remain available so operators can inspect and recover.
+Monthly resources use a calendar-month `period_start` and expose `reset_at`.
+Read operations remain available unless the API request quota itself is
+exhausted, so operators can inspect and recover through admin routes.
 
 ## Overrides
 

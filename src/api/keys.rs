@@ -52,12 +52,8 @@ pub async fn list_app_keys(
     Extension(claims): Extension<Claims>,
     Path(app_id): Path<String>,
 ) -> Response {
-    if let Some(response) = require_admin_role(&state.pool, &claims, "operator").await {
+    if let Err(response) = require_app_role(&state.pool, &claims, &app_id, "viewer").await {
         return response;
-    }
-
-    if !app_exists(&state.pool, &app_id).await {
-        return json_error(StatusCode::NOT_FOUND, "app not found");
     }
 
     match sqlx::query_as::<_, AppKeySummary>(
@@ -83,12 +79,8 @@ pub async fn create_app_key(
     Path(app_id): Path<String>,
     Json(payload): Json<CreateAppKeyRequest>,
 ) -> Response {
-    if let Some(response) = require_admin_role(&state.pool, &claims, "owner").await {
+    if let Err(response) = require_app_role(&state.pool, &claims, &app_id, "owner").await {
         return response;
-    }
-
-    if !app_exists(&state.pool, &app_id).await {
-        return json_error(StatusCode::NOT_FOUND, "app not found");
     }
 
     let name = match normalize_name(&payload.name) {
@@ -202,7 +194,7 @@ pub async fn revoke_app_key(
     Extension(claims): Extension<Claims>,
     Path((app_id, key_id)): Path<(String, String)>,
 ) -> Response {
-    if let Some(response) = require_admin_role(&state.pool, &claims, "owner").await {
+    if let Err(response) = require_app_role(&state.pool, &claims, &app_id, "owner").await {
         return response;
     }
 
@@ -246,7 +238,7 @@ pub async fn rotate_app_key(
     Extension(claims): Extension<Claims>,
     Path((app_id, key_id)): Path<(String, String)>,
 ) -> Response {
-    if let Some(response) = require_admin_role(&state.pool, &claims, "owner").await {
+    if let Err(response) = require_app_role(&state.pool, &claims, &app_id, "owner").await {
         return response;
     }
 
@@ -328,15 +320,6 @@ pub async fn rotate_app_key(
             "failed to rotate app key",
         ),
     }
-}
-
-async fn app_exists(pool: &sqlx::SqlitePool, app_id: &str) -> bool {
-    sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM apps WHERE id = ? AND deleted_at IS NULL")
-        .bind(app_id)
-        .fetch_one(pool)
-        .await
-        .map(|count| count > 0)
-        .unwrap_or(false)
 }
 
 fn normalize_name(value: &str) -> Result<String, &'static str> {
@@ -423,42 +406,17 @@ fn sqlite_timestamp(time: chrono::DateTime<Utc>) -> String {
     time.format("%Y-%m-%d %H:%M:%S").to_string()
 }
 
-async fn require_admin_role(
+async fn require_app_role(
     pool: &sqlx::SqlitePool,
     claims: &Claims,
-    minimum_role: &str,
-) -> Option<Response> {
-    if !claims.is_admin {
-        return Some(json_error(StatusCode::FORBIDDEN, "admin access required"));
-    }
-    match sqlx::query_as::<_, (String,)>(
-        "SELECT admin_role FROM users WHERE id = ? AND is_admin = TRUE",
-    )
-    .bind(&claims.sub)
-    .fetch_optional(pool)
-    .await
-    {
-        Ok(Some((role,))) if role_rank(&role) >= role_rank(minimum_role) => None,
-        Ok(Some(_)) => Some(json_error(
-            StatusCode::FORBIDDEN,
-            "admin role does not have required access",
-        )),
-        Ok(None) => Some(json_error(StatusCode::UNAUTHORIZED, "admin user not found")),
-        Err(_) => Some(json_error(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "failed to validate admin role",
-        )),
-    }
-}
-
-fn role_rank(role: &str) -> i32 {
-    match role {
-        "owner" => 4,
-        "developer" => 3,
-        "operator" => 2,
-        "viewer" => 1,
-        _ => 0,
-    }
+    app_id: &str,
+    required_role: &str,
+) -> Result<(), Response> {
+    let workspace_id = crate::api::workspaces::app_workspace_id(pool, app_id)
+        .await
+        .map_err(|_| json_error(StatusCode::INTERNAL_SERVER_ERROR, "failed to load app"))?
+        .ok_or_else(|| json_error(StatusCode::NOT_FOUND, "app not found"))?;
+    crate::api::workspaces::require_workspace_role(pool, claims, &workspace_id, required_role).await
 }
 
 #[cfg(test)]

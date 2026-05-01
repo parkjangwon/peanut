@@ -21,13 +21,36 @@ fn claims_for_app(mut claims: Claims, app_id: String) -> Result<Claims, Response
     Ok(claims)
 }
 
+async fn claims_for_app_with_role(
+    pool: &sqlx::SqlitePool,
+    mut claims: Claims,
+    app_id: String,
+    required_role: &str,
+) -> Result<Claims, Response> {
+    if claims.app_id != app_id && claims.app_id != crate::app_context::DEFAULT_APP_ID {
+        return Err(json_error(
+            StatusCode::FORBIDDEN,
+            "bearer token does not belong to this app",
+        ));
+    }
+    let workspace_id = crate::api::workspaces::app_workspace_id(pool, &app_id)
+        .await
+        .map_err(|_| json_error(StatusCode::INTERNAL_SERVER_ERROR, "failed to load app"))?
+        .ok_or_else(|| json_error(StatusCode::NOT_FOUND, "app not found"))?;
+    crate::api::workspaces::require_workspace_role(pool, &claims, &workspace_id, required_role)
+        .await?;
+    claims.app_id = app_id;
+    claims.is_admin = true;
+    Ok(claims)
+}
+
 pub async fn create_data_table(
     State(state): State<crate::AppState>,
     Extension(claims): Extension<Claims>,
     Path(app_id): Path<String>,
     Json(payload): Json<crate::api::data::CreateTableRequest>,
 ) -> Response {
-    let claims = match claims_for_app(claims, app_id) {
+    let claims = match claims_for_app_with_role(&state.pool, claims, app_id, "developer").await {
         Ok(claims) => claims,
         Err(response) => return response,
     };
@@ -40,7 +63,7 @@ pub async fn update_data_table(
     Path((app_id, table)): Path<(String, String)>,
     Json(payload): Json<crate::api::data::UpdateTableRequest>,
 ) -> Response {
-    let claims = match claims_for_app(claims, app_id) {
+    let claims = match claims_for_app_with_role(&state.pool, claims, app_id, "developer").await {
         Ok(claims) => claims,
         Err(response) => return response,
     };
@@ -53,7 +76,7 @@ pub async fn delete_data_table(
     Extension(claims): Extension<Claims>,
     Path((app_id, table)): Path<(String, String)>,
 ) -> Response {
-    let claims = match claims_for_app(claims, app_id) {
+    let claims = match claims_for_app_with_role(&state.pool, claims, app_id, "developer").await {
         Ok(claims) => claims,
         Err(response) => return response,
     };
@@ -65,7 +88,7 @@ pub async fn export_data_table(
     Extension(claims): Extension<Claims>,
     Path((app_id, table)): Path<(String, String)>,
 ) -> Response {
-    let claims = match claims_for_app(claims, app_id) {
+    let claims = match claims_for_app_with_role(&state.pool, claims, app_id, "developer").await {
         Ok(claims) => claims,
         Err(response) => return response,
     };
@@ -78,7 +101,7 @@ pub async fn import_data_rows(
     Path((app_id, table)): Path<(String, String)>,
     Json(payload): Json<crate::api::data::TableImportRequest>,
 ) -> Response {
-    let claims = match claims_for_app(claims, app_id) {
+    let claims = match claims_for_app_with_role(&state.pool, claims, app_id, "developer").await {
         Ok(claims) => claims,
         Err(response) => return response,
     };
@@ -91,7 +114,7 @@ pub async fn list_data_events(
     Path((app_id, table)): Path<(String, String)>,
     Query(params): Query<crate::api::data::ListRowEventsParams>,
 ) -> Response {
-    let claims = match claims_for_app(claims, app_id) {
+    let claims = match claims_for_app_with_role(&state.pool, claims, app_id, "developer").await {
         Ok(claims) => claims,
         Err(response) => return response,
     };
@@ -104,7 +127,7 @@ pub async fn get_data_event_checkpoint(
     Extension(claims): Extension<Claims>,
     Path((app_id, table)): Path<(String, String)>,
 ) -> Response {
-    let claims = match claims_for_app(claims, app_id) {
+    let claims = match claims_for_app_with_role(&state.pool, claims, app_id, "developer").await {
         Ok(claims) => claims,
         Err(response) => return response,
     };
@@ -116,7 +139,7 @@ pub async fn stream_data_events(
     Extension(claims): Extension<Claims>,
     Path((app_id, table)): Path<(String, String)>,
 ) -> Response {
-    let claims = match claims_for_app(claims, app_id) {
+    let claims = match claims_for_app_with_role(&state.pool, claims, app_id, "developer").await {
         Ok(claims) => claims,
         Err(response) => return response,
     };
@@ -128,7 +151,7 @@ pub async fn list_query_presets(
     Extension(claims): Extension<Claims>,
     Path((app_id, table)): Path<(String, String)>,
 ) -> Response {
-    let claims = match claims_for_app(claims, app_id) {
+    let claims = match claims_for_app_with_role(&state.pool, claims, app_id, "developer").await {
         Ok(claims) => claims,
         Err(response) => return response,
     };
@@ -141,7 +164,7 @@ pub async fn create_query_preset(
     Path((app_id, table)): Path<(String, String)>,
     Json(payload): Json<crate::api::data::UpsertQueryPresetRequest>,
 ) -> Response {
-    let claims = match claims_for_app(claims, app_id) {
+    let claims = match claims_for_app_with_role(&state.pool, claims, app_id, "developer").await {
         Ok(claims) => claims,
         Err(response) => return response,
     };
@@ -159,7 +182,7 @@ pub async fn run_query_preset(
     Extension(claims): Extension<Claims>,
     Path((app_id, table, preset_id)): Path<(String, String, String)>,
 ) -> Response {
-    let claims = match claims_for_app(claims, app_id) {
+    let claims = match claims_for_app_with_role(&state.pool, claims, app_id, "developer").await {
         Ok(claims) => claims,
         Err(response) => return response,
     };
@@ -173,7 +196,7 @@ pub async fn update_query_preset(
     Path((app_id, table, preset_id)): Path<(String, String, String)>,
     Json(payload): Json<crate::api::data::UpsertQueryPresetRequest>,
 ) -> Response {
-    let claims = match claims_for_app(claims, app_id) {
+    let claims = match claims_for_app_with_role(&state.pool, claims, app_id, "developer").await {
         Ok(claims) => claims,
         Err(response) => return response,
     };
@@ -191,7 +214,7 @@ pub async fn delete_query_preset(
     Extension(claims): Extension<Claims>,
     Path((app_id, table, preset_id)): Path<(String, String, String)>,
 ) -> Response {
-    let claims = match claims_for_app(claims, app_id) {
+    let claims = match claims_for_app_with_role(&state.pool, claims, app_id, "developer").await {
         Ok(claims) => claims,
         Err(response) => return response,
     };
@@ -204,7 +227,7 @@ pub async fn list_functions(
     Extension(claims): Extension<Claims>,
     Path(app_id): Path<String>,
 ) -> Response {
-    let claims = match claims_for_app(claims, app_id) {
+    let claims = match claims_for_app_with_role(&state.pool, claims, app_id, "developer").await {
         Ok(claims) => claims,
         Err(response) => return response,
     };
@@ -217,7 +240,7 @@ pub async fn create_function(
     Path(app_id): Path<String>,
     Json(payload): Json<crate::api::functions::UpsertFunctionRequest>,
 ) -> Response {
-    let claims = match claims_for_app(claims, app_id) {
+    let claims = match claims_for_app_with_role(&state.pool, claims, app_id, "developer").await {
         Ok(claims) => claims,
         Err(response) => return response,
     };
@@ -229,7 +252,7 @@ pub async fn get_function(
     Extension(claims): Extension<Claims>,
     Path((app_id, name)): Path<(String, String)>,
 ) -> Response {
-    let claims = match claims_for_app(claims, app_id) {
+    let claims = match claims_for_app_with_role(&state.pool, claims, app_id, "developer").await {
         Ok(claims) => claims,
         Err(response) => return response,
     };
@@ -242,7 +265,7 @@ pub async fn update_function(
     Path((app_id, name)): Path<(String, String)>,
     Json(payload): Json<crate::api::functions::UpdateFunctionRequest>,
 ) -> Response {
-    let claims = match claims_for_app(claims, app_id) {
+    let claims = match claims_for_app_with_role(&state.pool, claims, app_id, "developer").await {
         Ok(claims) => claims,
         Err(response) => return response,
     };
@@ -260,7 +283,7 @@ pub async fn delete_function(
     Extension(claims): Extension<Claims>,
     Path((app_id, name)): Path<(String, String)>,
 ) -> Response {
-    let claims = match claims_for_app(claims, app_id) {
+    let claims = match claims_for_app_with_role(&state.pool, claims, app_id, "developer").await {
         Ok(claims) => claims,
         Err(response) => return response,
     };
@@ -272,7 +295,7 @@ pub async fn list_function_versions(
     Extension(claims): Extension<Claims>,
     Path((app_id, name)): Path<(String, String)>,
 ) -> Response {
-    let claims = match claims_for_app(claims, app_id) {
+    let claims = match claims_for_app_with_role(&state.pool, claims, app_id, "developer").await {
         Ok(claims) => claims,
         Err(response) => return response,
     };
@@ -284,7 +307,7 @@ pub async fn rollback_function_version(
     Extension(claims): Extension<Claims>,
     Path((app_id, name, version_number)): Path<(String, String, i64)>,
 ) -> Response {
-    let claims = match claims_for_app(claims, app_id) {
+    let claims = match claims_for_app_with_role(&state.pool, claims, app_id, "developer").await {
         Ok(claims) => claims,
         Err(response) => return response,
     };
@@ -301,7 +324,7 @@ pub async fn list_function_invocations(
     Extension(claims): Extension<Claims>,
     Path((app_id, name)): Path<(String, String)>,
 ) -> Response {
-    let claims = match claims_for_app(claims, app_id) {
+    let claims = match claims_for_app_with_role(&state.pool, claims, app_id, "developer").await {
         Ok(claims) => claims,
         Err(response) => return response,
     };
@@ -314,7 +337,7 @@ pub async fn get_function_invocation(
     Extension(claims): Extension<Claims>,
     Path((app_id, name, invocation_id)): Path<(String, String, String)>,
 ) -> Response {
-    let claims = match claims_for_app(claims, app_id) {
+    let claims = match claims_for_app_with_role(&state.pool, claims, app_id, "developer").await {
         Ok(claims) => claims,
         Err(response) => return response,
     };
@@ -331,7 +354,7 @@ pub async fn list_function_invocation_attempts(
     Extension(claims): Extension<Claims>,
     Path((app_id, name, invocation_id)): Path<(String, String, String)>,
 ) -> Response {
-    let claims = match claims_for_app(claims, app_id) {
+    let claims = match claims_for_app_with_role(&state.pool, claims, app_id, "developer").await {
         Ok(claims) => claims,
         Err(response) => return response,
     };
@@ -348,7 +371,7 @@ pub async fn retry_function_invocation(
     Extension(claims): Extension<Claims>,
     Path((app_id, name, invocation_id)): Path<(String, String, String)>,
 ) -> Response {
-    let claims = match claims_for_app(claims, app_id) {
+    let claims = match claims_for_app_with_role(&state.pool, claims, app_id, "developer").await {
         Ok(claims) => claims,
         Err(response) => return response,
     };
@@ -365,7 +388,7 @@ pub async fn stream_function_events(
     Extension(claims): Extension<Claims>,
     Path((app_id, name)): Path<(String, String)>,
 ) -> Response {
-    let claims = match claims_for_app(claims, app_id) {
+    let claims = match claims_for_app_with_role(&state.pool, claims, app_id, "developer").await {
         Ok(claims) => claims,
         Err(response) => return response,
     };
@@ -378,7 +401,7 @@ pub async fn lint_function_source(
     Path(app_id): Path<String>,
     Json(payload): Json<crate::api::functions::FunctionEditorRequest>,
 ) -> Response {
-    let claims = match claims_for_app(claims, app_id) {
+    let claims = match claims_for_app_with_role(&state.pool, claims, app_id, "developer").await {
         Ok(claims) => claims,
         Err(response) => return response,
     };
@@ -392,7 +415,7 @@ pub async fn dry_run_function_source(
     Path(app_id): Path<String>,
     Json(payload): Json<crate::api::functions::FunctionEditorRequest>,
 ) -> Response {
-    let claims = match claims_for_app(claims, app_id) {
+    let claims = match claims_for_app_with_role(&state.pool, claims, app_id, "developer").await {
         Ok(claims) => claims,
         Err(response) => return response,
     };
@@ -406,7 +429,7 @@ pub async fn test_function_source(
     Path(app_id): Path<String>,
     Json(payload): Json<crate::api::functions::FunctionEditorRequest>,
 ) -> Response {
-    let claims = match claims_for_app(claims, app_id) {
+    let claims = match claims_for_app_with_role(&state.pool, claims, app_id, "developer").await {
         Ok(claims) => claims,
         Err(response) => return response,
     };
@@ -443,7 +466,7 @@ pub async fn list_push_subscriptions(
     Extension(claims): Extension<Claims>,
     Path(app_id): Path<String>,
 ) -> Response {
-    let claims = match claims_for_app(claims, app_id) {
+    let claims = match claims_for_app_with_role(&state.pool, claims, app_id, "developer").await {
         Ok(claims) => claims,
         Err(response) => return response,
     };
@@ -456,7 +479,7 @@ pub async fn create_push_subscription(
     Path(app_id): Path<String>,
     Json(payload): Json<crate::api::push::CreateSubscriptionRequest>,
 ) -> Response {
-    let claims = match claims_for_app(claims, app_id) {
+    let claims = match claims_for_app_with_role(&state.pool, claims, app_id, "developer").await {
         Ok(claims) => claims,
         Err(response) => return response,
     };
@@ -468,7 +491,7 @@ pub async fn delete_push_subscription(
     Extension(claims): Extension<Claims>,
     Path((app_id, subscription_id)): Path<(String, i64)>,
 ) -> Response {
-    let claims = match claims_for_app(claims, app_id) {
+    let claims = match claims_for_app_with_role(&state.pool, claims, app_id, "developer").await {
         Ok(claims) => claims,
         Err(response) => return response,
     };
@@ -482,7 +505,7 @@ pub async fn enqueue_push_message(
     Path(app_id): Path<String>,
     Json(payload): Json<crate::api::push::EnqueuePushRequest>,
 ) -> Response {
-    let claims = match claims_for_app(claims, app_id) {
+    let claims = match claims_for_app_with_role(&state.pool, claims, app_id, "developer").await {
         Ok(claims) => claims,
         Err(response) => return response,
     };
@@ -494,7 +517,7 @@ pub async fn get_push_diagnostics(
     Extension(claims): Extension<Claims>,
     Path(app_id): Path<String>,
 ) -> Response {
-    let claims = match claims_for_app(claims, app_id) {
+    let claims = match claims_for_app_with_role(&state.pool, claims, app_id, "developer").await {
         Ok(claims) => claims,
         Err(response) => return response,
     };
@@ -506,7 +529,7 @@ pub async fn list_push_queue(
     Extension(claims): Extension<Claims>,
     Path(app_id): Path<String>,
 ) -> Response {
-    let claims = match claims_for_app(claims, app_id) {
+    let claims = match claims_for_app_with_role(&state.pool, claims, app_id, "developer").await {
         Ok(claims) => claims,
         Err(response) => return response,
     };
@@ -519,7 +542,7 @@ pub async fn list_push_queue_stats(
     Path(app_id): Path<String>,
     Query(params): Query<crate::api::push::PushQueueStatsParams>,
 ) -> Response {
-    let claims = match claims_for_app(claims, app_id) {
+    let claims = match claims_for_app_with_role(&state.pool, claims, app_id, "developer").await {
         Ok(claims) => claims,
         Err(response) => return response,
     };
@@ -532,7 +555,7 @@ pub async fn enqueue_push_test_message(
     Path(app_id): Path<String>,
     Json(payload): Json<crate::api::push::EnqueuePushRequest>,
 ) -> Response {
-    let claims = match claims_for_app(claims, app_id) {
+    let claims = match claims_for_app_with_role(&state.pool, claims, app_id, "developer").await {
         Ok(claims) => claims,
         Err(response) => return response,
     };

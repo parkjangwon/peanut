@@ -34,8 +34,8 @@ Application calls require `X-Peanut-Api-Key`. User-protected calls also require
 `Authorization: Bearer <access_token>`. The JWT contains `app_id`, and Peanut
 rejects bearer tokens used against a different app path.
 
-Legacy global paths such as `/api/register`, `/api/login`, `/api/data`,
-`/api/storage`, `/api/s3`, `/api/push`, and `/api/functions` are not mounted.
+Peanut exposes the app-scoped API surface only; global compatibility routes are
+not mounted.
 
 ## Quick Start
 

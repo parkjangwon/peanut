@@ -31,7 +31,7 @@ See also:
 ## What not to automate with this yet
 
 - third-party customer app auth
-- per-tenant delegation
+- workspace delegation
 - broad user impersonation
 - unbounded SQL-style database access
 

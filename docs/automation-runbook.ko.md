@@ -31,7 +31,7 @@
 ## 아직 여기에 쓰지 않는 것이 좋은 것
 
 - third-party 고객 앱 auth
-- tenant 단위 delegation
+- workspace 단위 delegation
 - 광범위한 user impersonation
 - unbounded SQL 스타일 DB 접근
 

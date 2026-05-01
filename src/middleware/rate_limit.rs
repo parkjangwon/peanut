@@ -214,7 +214,7 @@ mod tests {
     async fn test_auth_rate_limit_middleware_returns_429_on_eleventh_request() {
         let (state, _dir) = crate::test_support::make_test_state().await;
         let app = Router::new()
-            .route("/api/login", post(ok_handler))
+            .route("/api/apps/default/auth/login", post(ok_handler))
             .layer(from_fn_with_state(
                 state.clone(),
                 auth_rate_limit_middleware,
@@ -225,14 +225,22 @@ mod tests {
         for _ in 0..10 {
             let response = app
                 .clone()
-                .oneshot(request_with_connect_info("POST", "/api/login", addr))
+                .oneshot(request_with_connect_info(
+                    "POST",
+                    "/api/apps/default/auth/login",
+                    addr,
+                ))
                 .await
                 .unwrap();
             assert_eq!(response.status(), StatusCode::OK);
         }
 
         let response = app
-            .oneshot(request_with_connect_info("POST", "/api/login", addr))
+            .oneshot(request_with_connect_info(
+                "POST",
+                "/api/apps/default/auth/login",
+                addr,
+            ))
             .await
             .unwrap();
 

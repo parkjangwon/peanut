@@ -50,3 +50,38 @@ async fn platform_diagnostics_include_self_hosted_workspace_checks() {
         .and_then(|value| value.as_str())
         .is_some()));
 }
+
+#[tokio::test]
+async fn platform_diagnostics_warn_about_insecure_self_hosted_defaults() {
+    let (app, _dir) = common::make_app_without_seeded_key().await;
+    let admin = common::post_json(
+        &app,
+        "/api/bootstrap/admin",
+        serde_json::json!({
+            "email": "owner@example.com",
+            "password": "secret123"
+        }),
+    )
+    .await;
+    assert_eq!(admin.status(), StatusCode::CREATED);
+    let admin_body: serde_json::Value = common::response_json(admin).await;
+    let token = admin_body["access_token"].as_str().unwrap();
+
+    let response = common::get_authed(&app, "/api/admin/ops/diagnostics", token).await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let body: serde_json::Value = common::response_json(response).await;
+    let checks = body["checks"].as_array().unwrap();
+    let password_reset = checks
+        .iter()
+        .find(|check| check["name"] == "password_reset_delivery")
+        .unwrap();
+    assert_eq!(password_reset["severity"], "warning");
+    assert_eq!(password_reset["delivery"], "inline");
+
+    let cors = checks
+        .iter()
+        .find(|check| check["name"] == "cors_origin_policy")
+        .unwrap();
+    assert_eq!(cors["severity"], "warning");
+    assert_eq!(cors["allow_any_origin"], true);
+}

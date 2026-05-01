@@ -48,6 +48,8 @@ Peanut은 셀프호스팅 전용입니다. workspace는 하나의 Peanut 인스�
 
 앱에는 `workspace_id`, `disabled_at`, `disabled_reason`이 포함됩니다.
 `POST /api/apps`는 선택적으로 `workspace_id`를 받으며, 생략하면 default
-workspace를 사용합니다. workspace의 `apps` 리소스 제한을 초과하면
-`code: "resource_limit_exceeded"`로 거절합니다. workspace 또는 앱이 disabled
-상태이면 SDK 요청은 `workspace_disabled` 또는 `app_disabled` 코드로 거절됩니다.
+workspace를 사용합니다. 앱 생성, 앱 사용자 등록, 데이터 row 생성, 스토리지 쓰기,
+Function 호출, Push 발송, 월 SDK API 요청은 해당 workspace 리소스 제한을
+초과하면 `code: "resource_limit_exceeded"`로 거절합니다. workspace 또는 앱이
+disabled 상태이면 SDK 요청은 `workspace_disabled` 또는 `app_disabled` 코드로
+거절됩니다.
