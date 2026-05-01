@@ -14,6 +14,7 @@ use crate::api::common::{json_error, json_message};
 use crate::auth::jwt::Claims;
 
 mod basic;
+mod policies;
 mod s3_copy;
 mod s3_delete;
 mod s3_error;
@@ -34,6 +35,10 @@ use basic::StorageListResponse;
 use s3_list::S3ListQuery;
 
 pub use basic::{delete_object, get_object, list_objects, put_object};
+pub use policies::{
+    create_storage_bucket, delete_storage_bucket, get_storage_bucket, list_storage_buckets,
+    update_storage_bucket,
+};
 pub use s3_delete::delete_bucket_object;
 pub use s3_get::get_bucket_object;
 pub use s3_head::head_bucket_object;

@@ -131,6 +131,26 @@ fn build_protected_routes(
             "/apps/:app_id/auth/providers/:provider",
             put(crate::api::auth::upsert_auth_provider_config),
         )
+        .route(
+            "/apps/:app_id/storage/buckets",
+            get(crate::api::storage::list_storage_buckets),
+        )
+        .route(
+            "/apps/:app_id/storage/buckets",
+            post(crate::api::storage::create_storage_bucket),
+        )
+        .route(
+            "/apps/:app_id/storage/buckets/:bucket",
+            get(crate::api::storage::get_storage_bucket),
+        )
+        .route(
+            "/apps/:app_id/storage/buckets/:bucket",
+            patch(crate::api::storage::update_storage_bucket),
+        )
+        .route(
+            "/apps/:app_id/storage/buckets/:bucket",
+            delete(crate::api::storage::delete_storage_bucket),
+        )
         .route("/admin/backups", get(crate::api::backups::list_backups))
         .route("/admin/backups", post(crate::api::backups::create_backup))
         .route(

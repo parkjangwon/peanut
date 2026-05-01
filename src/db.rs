@@ -192,6 +192,7 @@ mod tests {
             "apps",
             "app_keys",
             "auth_provider_configs",
+            "storage_buckets",
             "service_tokens",
             "function_versions",
             "function_version_secrets",
