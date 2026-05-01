@@ -270,6 +270,18 @@ fn build_function_routes(state: crate::AppState) -> Router<crate::AppState> {
     Router::new()
         .route("/functions", get(crate::api::functions::list_functions))
         .route("/functions", post(crate::api::functions::create_function))
+        .route(
+            "/functions/editor/lint",
+            post(crate::api::functions::lint_function_source),
+        )
+        .route(
+            "/functions/editor/test",
+            post(crate::api::functions::test_function_source),
+        )
+        .route(
+            "/functions/editor/dry-run",
+            post(crate::api::functions::dry_run_function_source),
+        )
         .route("/functions/:name", get(crate::api::functions::get_function))
         .route(
             "/functions/:name",

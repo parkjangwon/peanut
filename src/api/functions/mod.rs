@@ -22,6 +22,7 @@ use crate::functions::{execute_in_sandbox, SandboxExecutionRequest};
 use crate::secrets::{decrypt_secret, encrypt_secret};
 
 mod admin;
+mod editor;
 mod events;
 mod invocations;
 mod invoke;
@@ -29,6 +30,7 @@ mod types;
 mod versions;
 
 pub use admin::{create_function, delete_function, get_function, list_functions, update_function};
+pub use editor::{dry_run_function_source, lint_function_source, test_function_source};
 pub use events::stream_function_events;
 pub use invocations::{
     get_function_invocation, list_function_invocation_attempts, list_function_invocations,
