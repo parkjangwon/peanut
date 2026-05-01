@@ -54,6 +54,22 @@ pub struct AuthPublicConfigResponse {
     pub providers: Vec<AuthPublicProviderConfig>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AuthProviderDiagnosticsResponse {
+    pub app_id: String,
+    pub provider: String,
+    pub ok: bool,
+    pub live: bool,
+    pub checks: Vec<AuthProviderDiagnosticCheck>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AuthProviderDiagnosticCheck {
+    pub name: String,
+    pub ok: bool,
+    pub message: String,
+}
+
 #[derive(Debug, Clone, FromRow)]
 struct AuthProviderConfigRow {
     app_id: String,
@@ -76,6 +92,11 @@ pub struct OAuthStartQuery {
 pub struct OAuthCallbackQuery {
     pub code: String,
     pub state: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct AuthProviderDiagnosticsQuery {
+    pub live: Option<bool>,
 }
 
 #[derive(Debug, Clone, FromRow)]
@@ -285,6 +306,49 @@ pub async fn get_auth_public_config(
     }
 }
 
+pub async fn diagnose_auth_provider_config(
+    State(state): State<crate::AppState>,
+    Extension(claims): Extension<Claims>,
+    Path((app_id, provider)): Path<(String, String)>,
+    Query(query): Query<AuthProviderDiagnosticsQuery>,
+) -> Response {
+    if !claims.is_admin {
+        return json_error(StatusCode::FORBIDDEN, "admin access required");
+    }
+    if !app_exists(&state.pool, &app_id).await {
+        return json_error(StatusCode::NOT_FOUND, "app not found");
+    }
+    let provider = match normalize_provider(&provider) {
+        Ok(provider) => provider,
+        Err(error) => return json_error(StatusCode::BAD_REQUEST, error),
+    };
+    let row = match fetch_provider_row(&state.pool, &app_id, &provider).await {
+        Ok(Some(row)) => row,
+        Ok(None) => return json_error(StatusCode::NOT_FOUND, "auth provider not found"),
+        Err(_) => {
+            return json_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "failed to load auth provider",
+            )
+        }
+    };
+
+    let live = query.live.unwrap_or(false);
+    let checks = build_provider_diagnostic_checks(&state, &row, live).await;
+    let ok = checks.iter().all(|check| check.ok);
+    (
+        StatusCode::OK,
+        Json(AuthProviderDiagnosticsResponse {
+            app_id,
+            provider,
+            ok,
+            live,
+            checks,
+        }),
+    )
+        .into_response()
+}
+
 pub async fn oauth_start(
     State(state): State<crate::AppState>,
     Path((app_id, provider)): Path<(String, String)>,
@@ -343,6 +407,173 @@ pub async fn oauth_start(
         url_encode(&oauth_state)
     );
     redirect_response(&redirect_url)
+}
+
+async fn build_provider_diagnostic_checks(
+    state: &crate::AppState,
+    row: &AuthProviderConfigRow,
+    live: bool,
+) -> Vec<AuthProviderDiagnosticCheck> {
+    let mut checks = Vec::new();
+    push_check(
+        &mut checks,
+        "enabled",
+        row.enabled,
+        if row.enabled {
+            "provider is enabled"
+        } else {
+            "provider is disabled"
+        },
+    );
+    push_check(
+        &mut checks,
+        "client_id",
+        row.client_id
+            .as_deref()
+            .map(str::trim)
+            .is_some_and(|value| !value.is_empty()),
+        "client_id is configured",
+    );
+    push_check(
+        &mut checks,
+        "client_secret",
+        row.client_secret_ciphertext.is_some(),
+        "client_secret is configured",
+    );
+    push_check(
+        &mut checks,
+        "redirect_uri",
+        row.redirect_uri
+            .as_deref()
+            .map(str::trim)
+            .is_some_and(|value| value.starts_with("https://") || value.starts_with("http://")),
+        "redirect_uri is configured with an HTTP(S) URL",
+    );
+
+    let runtime = oidc_runtime_config(state, row);
+    match runtime.as_ref() {
+        Ok(config) => {
+            push_endpoint_check(
+                &mut checks,
+                "authorization_endpoint",
+                &config.authorization_endpoint,
+            );
+            push_endpoint_check(&mut checks, "token_endpoint", &config.token_endpoint);
+            push_endpoint_check(&mut checks, "userinfo_endpoint", &config.userinfo_endpoint);
+            push_check(
+                &mut checks,
+                "scopes",
+                config.scopes.iter().any(|scope| scope == "openid")
+                    && config.scopes.iter().any(|scope| scope == "email"),
+                "scopes include openid and email",
+            );
+        }
+        Err(error) => push_check(&mut checks, "runtime_config", false, *error),
+    }
+
+    if live {
+        let config = parse_config_json(&row.config_json);
+        let discovery_url = discovery_url_for_provider(row, &config);
+        match discovery_url {
+            Some(url) => checks.push(fetch_discovery_check(&url).await),
+            None => push_check(
+                &mut checks,
+                "openid_discovery",
+                false,
+                "issuer is required for live OIDC discovery checks",
+            ),
+        }
+    }
+
+    checks
+}
+
+fn push_check(
+    checks: &mut Vec<AuthProviderDiagnosticCheck>,
+    name: &str,
+    ok: bool,
+    message: impl Into<String>,
+) {
+    checks.push(AuthProviderDiagnosticCheck {
+        name: name.to_string(),
+        ok,
+        message: message.into(),
+    });
+}
+
+fn push_endpoint_check(checks: &mut Vec<AuthProviderDiagnosticCheck>, name: &str, endpoint: &str) {
+    push_check(
+        checks,
+        name,
+        endpoint.starts_with("https://") || endpoint.starts_with("http://"),
+        format!("{name} is configured with an HTTP(S) URL"),
+    );
+}
+
+fn discovery_url_for_provider(row: &AuthProviderConfigRow, config: &Value) -> Option<String> {
+    if row.provider == "google" {
+        return Some("https://accounts.google.com/.well-known/openid-configuration".to_string());
+    }
+    config
+        .get("issuer")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(|issuer| {
+            format!(
+                "{}/.well-known/openid-configuration",
+                issuer.trim_end_matches('/')
+            )
+        })
+}
+
+async fn fetch_discovery_check(url: &str) -> AuthProviderDiagnosticCheck {
+    let client = match reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(5))
+        .build()
+    {
+        Ok(client) => client,
+        Err(_) => {
+            return AuthProviderDiagnosticCheck {
+                name: "openid_discovery".to_string(),
+                ok: false,
+                message: "failed to initialize HTTP client".to_string(),
+            }
+        }
+    };
+    match client.get(url).send().await {
+        Ok(response) if response.status().is_success() => match response.json::<Value>().await {
+            Ok(body) => {
+                let has_required = body.get("authorization_endpoint").is_some()
+                    && body.get("token_endpoint").is_some()
+                    && body.get("userinfo_endpoint").is_some();
+                AuthProviderDiagnosticCheck {
+                    name: "openid_discovery".to_string(),
+                    ok: has_required,
+                    message: if has_required {
+                        "OpenID discovery document is reachable".to_string()
+                    } else {
+                        "OpenID discovery document is missing required endpoints".to_string()
+                    },
+                }
+            }
+            Err(_) => AuthProviderDiagnosticCheck {
+                name: "openid_discovery".to_string(),
+                ok: false,
+                message: "OpenID discovery response is not valid JSON".to_string(),
+            },
+        },
+        Ok(response) => AuthProviderDiagnosticCheck {
+            name: "openid_discovery".to_string(),
+            ok: false,
+            message: format!("OpenID discovery returned HTTP {}", response.status()),
+        },
+        Err(_) => AuthProviderDiagnosticCheck {
+            name: "openid_discovery".to_string(),
+            ok: false,
+            message: "OpenID discovery request failed".to_string(),
+        },
+    }
 }
 
 pub async fn oauth_callback(
@@ -904,5 +1135,55 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(count, 1);
+    }
+
+    #[tokio::test]
+    async fn test_auth_provider_diagnostics_reports_config_readiness() {
+        let (state, _dir) = test_support::make_test_state().await;
+        let admin = register_admin(state.clone()).await;
+
+        let upsert = upsert_auth_provider_config(
+            State(state.clone()),
+            Extension(claims(&admin.user.id, true)),
+            Path((
+                crate::app_context::DEFAULT_APP_ID.to_string(),
+                "oidc".to_string(),
+            )),
+            Json(UpsertAuthProviderConfigRequest {
+                enabled: true,
+                client_id: Some("client-id".to_string()),
+                client_secret: Some("client-secret".to_string()),
+                clear_client_secret: None,
+                redirect_uri: Some("https://peanut.test/callback".to_string()),
+                config: Some(serde_json::json!({
+                    "issuer": "https://issuer.test",
+                    "authorization_endpoint": "https://issuer.test/auth",
+                    "token_endpoint": "https://issuer.test/token",
+                    "userinfo_endpoint": "https://issuer.test/userinfo",
+                    "scopes": ["openid", "email"]
+                })),
+            }),
+        )
+        .await;
+        assert_eq!(upsert.status(), StatusCode::OK);
+
+        let response = diagnose_auth_provider_config(
+            State(state),
+            Extension(claims(&admin.user.id, true)),
+            Path((
+                crate::app_context::DEFAULT_APP_ID.to_string(),
+                "oidc".to_string(),
+            )),
+            Query(AuthProviderDiagnosticsQuery { live: Some(false) }),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let body: AuthProviderDiagnosticsResponse = test_support::response_json(response).await;
+        assert!(body.ok);
+        assert!(!body.live);
+        assert!(body
+            .checks
+            .iter()
+            .any(|check| check.name == "authorization_endpoint" && check.ok));
     }
 }

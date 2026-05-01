@@ -146,6 +146,10 @@ fn build_protected_routes(
             put(crate::api::auth::upsert_auth_provider_config),
         )
         .route(
+            "/apps/:app_id/auth/providers/:provider/diagnostics",
+            get(crate::api::auth::diagnose_auth_provider_config),
+        )
+        .route(
             "/apps/:app_id/storage/buckets",
             get(crate::api::storage::list_storage_buckets),
         )
