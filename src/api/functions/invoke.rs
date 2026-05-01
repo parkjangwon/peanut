@@ -1,12 +1,64 @@
 use super::*;
+use axum::{body::Bytes, extract::Query, http::Method};
+use std::collections::BTreeMap;
+
+struct ParsedInvokeRequest {
+    payload: InvokeFunctionRequest,
+    body: Value,
+}
+
+fn parse_invoke_request(body: Bytes) -> Result<ParsedInvokeRequest, &'static str> {
+    if body.is_empty() {
+        return Ok(ParsedInvokeRequest {
+            payload: InvokeFunctionRequest {
+                input: Value::Null,
+                api_key: None,
+                async_invoke: None,
+            },
+            body: Value::Null,
+        });
+    }
+
+    let body_value: Value =
+        serde_json::from_slice(&body).map_err(|_| "request body must be valid JSON")?;
+    let payload = if body_value
+        .as_object()
+        .map(|object| {
+            object.contains_key("input")
+                || object.contains_key("api_key")
+                || object.contains_key("async_invoke")
+        })
+        .unwrap_or(false)
+    {
+        serde_json::from_value(body_value.clone()).map_err(|_| "invalid function request body")?
+    } else {
+        InvokeFunctionRequest {
+            input: body_value.clone(),
+            api_key: None,
+            async_invoke: None,
+        }
+    };
+
+    Ok(ParsedInvokeRequest {
+        payload,
+        body: body_value,
+    })
+}
 
 pub async fn invoke_function(
     State(state): State<crate::AppState>,
     claims: Option<Extension<Claims>>,
     headers: HeaderMap,
     Path(endpoint_slug): Path<String>,
-    Json(payload): Json<InvokeFunctionRequest>,
+    method: Method,
+    Query(query): Query<BTreeMap<String, String>>,
+    body: Bytes,
 ) -> Response {
+    let parsed_request = match parse_invoke_request(body) {
+        Ok(parsed_request) => parsed_request,
+        Err(error) => return json_error(StatusCode::BAD_REQUEST, error),
+    };
+    let payload = parsed_request.payload;
     let function = match load_function_by_endpoint(&state.pool, &endpoint_slug).await {
         Ok(function) => function,
         Err(LoadFunctionError::NotFound) => {
@@ -50,6 +102,9 @@ pub async fn invoke_function(
         function_version,
         auth_claims,
         payload.input,
+        method.as_str(),
+        serde_json::json!(query),
+        parsed_request.body,
         payload.async_invoke.unwrap_or(false),
         crate::app_context::DEFAULT_APP_ID,
         0,
@@ -63,8 +118,15 @@ pub async fn invoke_app_function(
     claims: Option<Extension<Claims>>,
     headers: HeaderMap,
     Path((app_id, endpoint_slug)): Path<(String, String)>,
-    Json(payload): Json<InvokeFunctionRequest>,
+    method: Method,
+    Query(query): Query<BTreeMap<String, String>>,
+    body: Bytes,
 ) -> Response {
+    let parsed_request = match parse_invoke_request(body) {
+        Ok(parsed_request) => parsed_request,
+        Err(error) => return json_error(StatusCode::BAD_REQUEST, error),
+    };
+    let payload = parsed_request.payload;
     let function = match load_function_by_app_endpoint(&state.pool, &app_id, &endpoint_slug).await {
         Ok(function) => function,
         Err(LoadFunctionError::NotFound) => {
@@ -108,6 +170,9 @@ pub async fn invoke_app_function(
         function_version,
         auth_claims,
         payload.input,
+        method.as_str(),
+        serde_json::json!(query),
+        parsed_request.body,
         payload.async_invoke.unwrap_or(false),
         &app_id,
         0,
@@ -139,6 +204,9 @@ pub(crate) async fn run_function_invocation_with_version(
     function_version: LoadedFunctionVersion,
     claims: Option<Claims>,
     input: Value,
+    request_method: &str,
+    request_query: Value,
+    request_body: Value,
     async_invoke: bool,
     app_id: &str,
     retry_count: i64,
@@ -216,6 +284,9 @@ pub(crate) async fn run_function_invocation_with_version(
         let claims = claims.clone();
         let invocation_for_task = invocation.clone();
         let input_for_task = input.clone();
+        let request_method = request_method.to_string();
+        let request_query = request_query.clone();
+        let request_body = request_body.clone();
         tokio::spawn(async move {
             let _ = sqlx::query("UPDATE function_invocations SET status = 'running' WHERE id = ?")
                 .bind(&invocation_for_task.invocation_id)
@@ -228,6 +299,9 @@ pub(crate) async fn run_function_invocation_with_version(
                 invocation_for_task,
                 claims,
                 input_for_task,
+                &request_method,
+                request_query,
+                request_body,
             )
             .await;
         });
@@ -244,7 +318,18 @@ pub(crate) async fn run_function_invocation_with_version(
             .into_response();
     }
 
-    match execute_and_finalize_invocation(state, &function.name, invocation, claims, input).await {
+    match execute_and_finalize_invocation(
+        state,
+        &function.name,
+        invocation,
+        claims,
+        input,
+        request_method,
+        request_query,
+        request_body,
+    )
+    .await
+    {
         Ok((response, duration_ms)) => (
             StatusCode::OK,
             Json(InvokeFunctionResponse {
@@ -265,6 +350,9 @@ async fn execute_and_finalize_invocation(
     invocation: InvocationContext,
     claims: Option<Claims>,
     input: Value,
+    request_method: &str,
+    request_query: Value,
+    request_body: Value,
 ) -> Result<(Value, i64), String> {
     let _permit = state
         .functions
@@ -296,7 +384,10 @@ async fn execute_and_finalize_invocation(
             runtime: &invocation.function_version.runtime,
             source_code: &invocation.function_version.source_code,
             function_name,
+            request_method,
             request_payload: input,
+            request_query,
+            request_body,
             auth_payload,
             env_payload,
             timeout_ms: invocation.function_version.timeout_ms,

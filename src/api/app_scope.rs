@@ -1,9 +1,11 @@
 use axum::{
+    body::Bytes,
     extract::{Path, Query, State},
-    http::{HeaderMap, StatusCode},
+    http::{HeaderMap, Method, StatusCode},
     response::Response,
     Extension, Json,
 };
+use std::collections::BTreeMap;
 
 use crate::{api::common::json_error, auth::jwt::Claims};
 
@@ -442,7 +444,9 @@ pub async fn invoke_function(
     claims: Option<Extension<Claims>>,
     headers: HeaderMap,
     Path((app_id, endpoint_slug)): Path<(String, String)>,
-    Json(payload): Json<crate::api::functions::InvokeFunctionRequest>,
+    method: Method,
+    query: Query<BTreeMap<String, String>>,
+    body: Bytes,
 ) -> Response {
     let claims = match claims {
         Some(Extension(claims)) => match claims_for_app(claims, app_id.clone()) {
@@ -456,7 +460,9 @@ pub async fn invoke_function(
         claims,
         headers,
         Path((app_id, endpoint_slug)),
-        Json(payload),
+        method,
+        query,
+        body,
     )
     .await
 }

@@ -1,7 +1,7 @@
 use axum::{
     extract::DefaultBodyLimit,
     http::{header, HeaderName, HeaderValue, Method},
-    routing::{delete, get, patch, post, put},
+    routing::{any, delete, get, patch, post, put},
     Router,
 };
 use tower_http::cors::{Any, CorsLayer};
@@ -168,8 +168,16 @@ fn build_protected_routes(
             get(crate::api::auth::list_admin_users),
         )
         .route(
+            "/apps/:app_id/auth/users",
+            post(crate::api::auth::create_admin_user),
+        )
+        .route(
             "/apps/:app_id/auth/users/:user_id",
             get(crate::api::auth::get_admin_user),
+        )
+        .route(
+            "/apps/:app_id/auth/users/:user_id",
+            delete(crate::api::auth::delete_admin_user),
         )
         .route(
             "/apps/:app_id/auth/users/:user_id/activate",
@@ -355,7 +363,7 @@ fn build_sdk_routes(state: crate::AppState, max_upload_bytes: usize) -> Router<c
         )
         .route(
             "/apps/:app_id/function-endpoints/:endpoint_slug",
-            post(crate::api::sdk::invoke_function),
+            any(crate::api::sdk::invoke_function),
         )
         .route(
             "/apps/:app_id/storage/buckets/:bucket/objects",

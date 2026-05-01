@@ -155,7 +155,10 @@ pub struct SandboxExecutionRequest<'a> {
     pub runtime: &'a str,
     pub source_code: &'a str,
     pub function_name: &'a str,
+    pub request_method: &'a str,
     pub request_payload: Value,
+    pub request_query: Value,
+    pub request_body: Value,
     pub auth_payload: Value,
     pub env_payload: Value,
     pub timeout_ms: i64,
@@ -218,7 +221,10 @@ pub async fn execute_in_sandbox(
 
     let payload = serde_json::json!({
         "request": {
+            "method": request.request_method,
             "input": request.request_payload,
+            "query": request.request_query,
+            "body": request.request_body,
         },
         "auth": request.auth_payload,
         "env": request.env_payload,

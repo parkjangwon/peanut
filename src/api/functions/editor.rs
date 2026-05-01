@@ -20,13 +20,23 @@ pub struct FunctionEditorRequest {
     pub runtime: String,
     pub source_code: String,
     pub function_name: Option<String>,
+    #[serde(default = "default_request_method")]
+    pub method: String,
     #[serde(default)]
     pub input: Value,
+    #[serde(default)]
+    pub query: Value,
+    #[serde(default)]
+    pub body: Value,
     #[serde(default)]
     pub auth: Value,
     #[serde(default)]
     pub env: Value,
     pub timeout_ms: Option<i64>,
+}
+
+fn default_request_method() -> String {
+    "POST".to_string()
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -95,7 +105,10 @@ async fn run_editor_function(
         runtime: payload.runtime.trim(),
         source_code: &payload.source_code,
         function_name: payload.function_name.as_deref().unwrap_or("editor"),
+        request_method: payload.method.trim(),
         request_payload: payload.input,
+        request_query: payload.query,
+        request_body: payload.body,
         auth_payload: payload.auth,
         env_payload: payload.env,
         timeout_ms: payload.timeout_ms.unwrap_or(3000),

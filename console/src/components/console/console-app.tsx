@@ -9,6 +9,7 @@ import {
   CircleAlert,
   Cloud,
   Code2,
+  Copy,
   Database,
   Download,
   FlaskConical,
@@ -17,8 +18,11 @@ import {
   LayoutDashboard,
   LogOut,
   Menu,
+  Pencil,
   Play,
   Plus,
+  Power,
+  PowerOff,
   RotateCcw,
   Save,
   ShieldCheck,
@@ -27,7 +31,7 @@ import {
   Wrench,
 } from "lucide-react";
 import type React from "react";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTranslations } from "next-intl";
 import { toast } from "sonner";
@@ -64,7 +68,15 @@ import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+  DialogTrigger,
+} from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Separator } from "@/components/ui/separator";
@@ -152,7 +164,6 @@ export function ConsoleApp() {
         bootstrapping={bootstrapping}
         onModeChange={setBootstrapping}
         onAuthenticated={(session) => {
-          storeSession(session);
           setUser(session.user);
             queryClient.invalidateQueries();
         }}
@@ -209,12 +220,14 @@ function AuthScreen({
   const t = useTranslations("auth");
   const [email, setEmail] = useState("admin@peanut.local");
   const [password, setPassword] = useState("");
+  const [rememberMe, setRememberMe] = useState(true);
 
   const mutation = useMutation({
     mutationFn: () =>
       bootstrapping ? bootstrapAdmin(email, password) : loginAdmin(email, password),
     onSuccess: (session) => {
       toast.success(bootstrapping ? t("adminCreated") : t("signedIn"));
+      storeSession(session, rememberMe);
       onAuthenticated(session);
     },
     onError: (error: Error & { status?: number }) => {
@@ -249,6 +262,14 @@ function AuthScreen({
             <Signal icon={ShieldCheck} label={t("signalIsolation")} />
             <Signal icon={Database} label={t("signalData")} />
             <Signal icon={Cloud} label={t("signalOps")} />
+          </div>
+          <div className="grid max-w-2xl grid-cols-1 gap-3 sm:grid-cols-2">
+            <FeatureSignal icon={Users} title={t("featureAuth")} description={t("featureAuthDescription")} />
+            <FeatureSignal icon={Database} title={t("featureData")} description={t("featureDataDescription")} />
+            <FeatureSignal icon={Archive} title={t("featureStorage")} description={t("featureStorageDescription")} />
+            <FeatureSignal icon={Code2} title={t("featureFunctions")} description={t("featureFunctionsDescription")} />
+            <FeatureSignal icon={Bell} title={t("featurePush")} description={t("featurePushDescription")} />
+            <FeatureSignal icon={Wrench} title={t("featureOps")} description={t("featureOpsDescription")} />
           </div>
         </section>
         <section className="rounded-lg border bg-card p-6 shadow-sm">
@@ -286,6 +307,20 @@ function AuthScreen({
               placeholder={t("passwordPlaceholder")}
               autoComplete={bootstrapping ? "new-password" : "current-password"}
             />
+            {!bootstrapping ? (
+              <label className="flex cursor-pointer items-center justify-between gap-3 rounded-md border bg-muted/20 px-3 py-2 text-sm">
+                <span>
+                  <span className="block font-medium">{t("rememberMe")}</span>
+                  <span className="block text-xs text-muted-foreground">{t("rememberMeHelp")}</span>
+                </span>
+                <input
+                  type="checkbox"
+                  checked={rememberMe}
+                  onChange={(event) => setRememberMe(event.target.checked)}
+                  className="h-4 w-4 accent-primary"
+                />
+              </label>
+            ) : null}
             <Button className="w-full" disabled={mutation.isPending}>
               {mutation.isPending ? t("working") : bootstrapping ? t("createAdmin") : t("signIn")}
             </Button>
@@ -300,6 +335,26 @@ function AuthScreen({
           </Button>
         </section>
       </div>
+    </div>
+  );
+}
+
+function FeatureSignal({
+  icon: Icon,
+  title,
+  description,
+}: {
+  icon: React.ComponentType<{ className?: string }>;
+  title: string;
+  description: string;
+}) {
+  return (
+    <div className="rounded-lg border bg-card/70 p-4">
+      <div className="mb-3 flex h-9 w-9 items-center justify-center rounded-md bg-primary/10 text-primary">
+        <Icon className="h-5 w-5" />
+      </div>
+      <div className="font-medium">{title}</div>
+      <div className="mt-1 text-sm leading-6 text-muted-foreground">{description}</div>
     </div>
   );
 }
@@ -535,10 +590,95 @@ function AppsView({ apps }: { apps: AppSummary[] }) {
       }
     >
       <DataTableView
-        columns={[t("columnsDisplay"), t("columnsName"), t("columnsId"), t("columnsCreated")]}
-        rows={apps.map((app) => [app.display_name, app.name, app.id, app.created_at])}
+        columns={[
+          t("columnsDisplay"),
+          t("columnsName"),
+          t("columnsId"),
+          t("columnsUpdated"),
+          t("columnsActions"),
+        ]}
+        rows={apps.map((app) => [
+          app.display_name,
+          app.name,
+          app.id,
+          app.updated_at,
+          <AppRowActions key={app.id} app={app} />,
+        ])}
       />
     </Section>
+  );
+}
+
+function AppRowActions({ app }: { app: AppSummary }) {
+  const t = useTranslations("apps");
+  const common = useTranslations("common");
+  const queryClient = useQueryClient();
+  const [open, setOpen] = useState(false);
+  const [displayName, setDisplayName] = useState(app.display_name);
+  const updateApp = useMutation({
+    mutationFn: () =>
+      apiFetch<{ app: AppSummary }>(`/api/apps/${app.id}`, {
+        method: "PATCH",
+        body: JSON.stringify({ display_name: displayName }),
+      }),
+    onSuccess: () => {
+      toast.success(t("updated"));
+      setOpen(false);
+      queryClient.invalidateQueries({ queryKey: ["apps"] });
+    },
+    onError: (error: Error) => toast.error(error.message),
+  });
+  const deleteApp = useMutation({
+    mutationFn: () => apiFetch(`/api/apps/${app.id}`, { method: "DELETE" }),
+    onSuccess: () => {
+      toast.success(t("deleted"));
+      queryClient.invalidateQueries({ queryKey: ["apps"] });
+    },
+    onError: (error: Error) => toast.error(error.message),
+  });
+
+  return (
+    <div className="flex justify-end gap-1">
+      <Dialog open={open} onOpenChange={setOpen}>
+        <DialogTrigger asChild>
+          <Button variant="outline" size="sm">
+            <Pencil className="h-4 w-4" /> {common("edit")}
+          </Button>
+        </DialogTrigger>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>{t("editTitle")}</DialogTitle>
+            <DialogDescription>{t("editDescription")}</DialogDescription>
+          </DialogHeader>
+          <div className="space-y-3">
+            <Input value={app.name} disabled />
+            <Input
+              value={displayName}
+              onChange={(event) => setDisplayName(event.target.value)}
+              placeholder={t("displayNamePlaceholder")}
+            />
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setOpen(false)}>{common("cancel")}</Button>
+            <Button onClick={() => updateApp.mutate()} disabled={updateApp.isPending}>
+              <Save className="h-4 w-4" /> {common("save")}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+      <Button
+        variant="destructive"
+        size="sm"
+        onClick={() => {
+          if (window.confirm(t("confirmDelete", { name: app.display_name }))) {
+            deleteApp.mutate();
+          }
+        }}
+        disabled={app.id === "default" || deleteApp.isPending}
+      >
+        <Trash2 className="h-4 w-4" /> {common("delete")}
+      </Button>
+    </div>
   );
 }
 
@@ -552,6 +692,7 @@ function KeysView({ app }: { app: AppSummary }) {
   });
   const [keyType, setKeyType] = useState("server");
   const [name, setName] = useState(t("serverKey"));
+  const [visibleKey, setVisibleKey] = useState<{ name: string; key: string } | null>(null);
   const createKey = useMutation({
     mutationFn: () =>
       apiFetch<{ key: string }>(`/api/apps/${app.id}/keys`, {
@@ -559,7 +700,8 @@ function KeysView({ app }: { app: AppSummary }) {
         body: JSON.stringify({ name, key_type: keyType }),
     }),
     onSuccess: (response) => {
-      toast.success(t("created", { prefix: response.key.slice(0, 18) }));
+      setVisibleKey({ name, key: response.key });
+      toast.success(t("created"));
       queryClient.invalidateQueries({ queryKey: ["keys", app.id] });
     },
     onError: (error: Error) => toast.error(error.message),
@@ -581,22 +723,135 @@ function KeysView({ app }: { app: AppSummary }) {
           <Button onClick={() => createKey.mutate()} disabled={createKey.isPending}>{common("create")}</Button>
         </div>
       </Panel>
+      {visibleKey ? (
+        <Panel title={t("newKeyTitle")}>
+          <div className="space-y-3">
+            <div className="text-sm font-medium">{visibleKey.name}</div>
+            <p className="text-sm text-muted-foreground">{t("newKeyHelp")}</p>
+            <div className="grid gap-2 md:grid-cols-[1fr_auto]">
+              <div className="flex min-h-10 items-center rounded-md border border-input bg-muted/40 px-3 font-mono text-xs text-muted-foreground">
+                <span className="sr-only">{t("fullKey")}</span>
+                <span aria-hidden="true">********************</span>
+              </div>
+              <Button
+                variant="outline"
+                onClick={() => {
+                  navigator.clipboard
+                    .writeText(visibleKey.key)
+                    .then(() => toast.success(common("copied")))
+                    .catch((error: Error) => toast.error(error.message));
+                }}
+              >
+                <Copy className="h-4 w-4" /> {common("copy")}
+              </Button>
+            </div>
+          </div>
+        </Panel>
+      ) : null}
       <DataTableView
         loading={keys.isLoading}
-        columns={["Name", "Type", "Prefix", "Last used", "Status"]}
+        columns={[
+          t("columnsName"),
+          t("columnsType"),
+          t("columnsPrefix"),
+          t("columnsLastUsed"),
+          t("columnsStatus"),
+          t("columnsActions"),
+        ]}
         rows={(keys.data ?? []).map((key) => [
           String(key.name ?? ""),
           String(key.key_type ?? ""),
           String(key.key_prefix ?? ""),
           String(key.last_used_at ?? common("never")),
           key.revoked_at ? common("revoked") : common("active"),
+          <KeyRowActions
+            key={String(key.id)}
+            appId={app.id}
+            keyId={String(key.id)}
+            name={String(key.name ?? key.key_prefix ?? "")}
+            revoked={Boolean(key.revoked_at)}
+            onKeyRotated={(rotatedKey) => setVisibleKey(rotatedKey)}
+          />,
         ])}
       />
     </Section>
   );
 }
 
+function KeyRowActions({
+  appId,
+  keyId,
+  name,
+  revoked,
+  onKeyRotated,
+}: {
+  appId: string;
+  keyId: string;
+  name: string;
+  revoked: boolean;
+  onKeyRotated: (rotatedKey: { name: string; key: string }) => void;
+}) {
+  const t = useTranslations("keys");
+  const common = useTranslations("common");
+  const queryClient = useQueryClient();
+  const revokeKey = useMutation({
+    mutationFn: () => apiFetch(`/api/apps/${appId}/keys/${keyId}`, { method: "DELETE" }),
+    onSuccess: () => {
+      toast.success(t("revoked"));
+      queryClient.invalidateQueries({ queryKey: ["keys", appId] });
+    },
+    onError: (error: Error) => toast.error(error.message),
+  });
+  const rotateKey = useMutation({
+    mutationFn: () =>
+      apiFetch<{ key: string }>(`/api/apps/${appId}/keys/${keyId}/rotate`, { method: "POST" }),
+    onSuccess: (response) => {
+      onKeyRotated({ name, key: response.key });
+      toast.success(t("rotated"));
+      queryClient.invalidateQueries({ queryKey: ["keys", appId] });
+    },
+    onError: (error: Error) => toast.error(error.message),
+  });
+
+  return (
+    <div className="flex justify-end gap-1">
+      <Button
+        variant="outline"
+        size="sm"
+        disabled={revoked || rotateKey.isPending}
+        onClick={() => {
+          if (window.confirm(t("confirmRotate", { name }))) {
+            rotateKey.mutate();
+          }
+        }}
+      >
+        <RotateCcw className="h-4 w-4" /> {common("rotate")}
+      </Button>
+      <Button
+        variant="destructive"
+        size="sm"
+        disabled={revoked || revokeKey.isPending}
+        onClick={() => {
+          if (window.confirm(t("confirmRevoke", { name }))) {
+            revokeKey.mutate();
+          }
+        }}
+      >
+        <Trash2 className="h-4 w-4" /> {common("revoke")}
+      </Button>
+    </div>
+  );
+}
+
 function AuthView({ app }: { app: AppSummary }) {
+  const t = useTranslations("authView");
+  const common = useTranslations("common");
+  const [selectedUserId, setSelectedUserId] = useState("");
+  const queryClient = useQueryClient();
+  const [email, setEmail] = useState("user@example.com");
+  const [password, setPassword] = useState("password123");
+  const [isActive, setIsActive] = useState("true");
+  const [isAdmin, setIsAdmin] = useState("false");
   const users = useQuery({
     queryKey: ["auth", "users", app.id],
     queryFn: async () =>
@@ -606,7 +861,7 @@ function AuthView({ app }: { app: AppSummary }) {
     queryKey: ["auth", "providers", app.id],
     queryFn: () => apiFetch<Record<string, unknown>>(`/api/apps/${app.id}/auth/providers`),
   });
-  const firstUserId = users.data?.[0]?.id;
+  const firstUserId = selectedUserId || users.data?.[0]?.id;
   const sessions = useQuery({
     queryKey: ["auth", "sessions", app.id, firstUserId],
     queryFn: async () =>
@@ -617,46 +872,219 @@ function AuthView({ app }: { app: AppSummary }) {
       ).sessions,
     enabled: Boolean(firstUserId),
   });
+  const createUser = useMutation({
+    mutationFn: () =>
+      apiFetch(`/api/apps/${app.id}/auth/users`, {
+        method: "POST",
+        body: JSON.stringify({
+          email,
+          password,
+          is_active: isActive === "true",
+          is_admin: isAdmin === "true",
+          admin_role: isAdmin === "true" ? "developer" : "viewer",
+        }),
+      }),
+    onSuccess: () => {
+      toast.success(t("createdUser"));
+      queryClient.invalidateQueries({ queryKey: ["auth", "users", app.id] });
+    },
+    onError: (error: Error) => toast.error(error.message),
+  });
   return (
-    <Section title="Auth" description="User namespace, sessions, OIDC providers, and security events are app-scoped.">
+    <Section title={t("title")} description={t("description")}>
       <Tabs defaultValue="users">
         <TabsList>
-          <TabsTrigger value="users">Users</TabsTrigger>
-          <TabsTrigger value="sessions">Sessions</TabsTrigger>
-          <TabsTrigger value="providers">Providers</TabsTrigger>
+          <TabsTrigger value="users">{t("users")}</TabsTrigger>
+          <TabsTrigger value="sessions">{t("sessions")}</TabsTrigger>
+          <TabsTrigger value="providers">{t("providers")}</TabsTrigger>
         </TabsList>
-        <TabsContent value="users">
+        <TabsContent value="users" className="space-y-4">
+          <Panel title={t("createUser")}>
+            <div className="grid gap-3 lg:grid-cols-[1fr_180px_140px_140px_auto]">
+              <Input value={email} onChange={(event) => setEmail(event.target.value)} placeholder={t("email")} />
+              <Input value={password} onChange={(event) => setPassword(event.target.value)} placeholder={t("password")} />
+              <Select value={isActive} onValueChange={setIsActive}>
+                <SelectTrigger><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="true">{t("active")}: {common("yes")}</SelectItem>
+                  <SelectItem value="false">{t("active")}: {common("no")}</SelectItem>
+                </SelectContent>
+              </Select>
+              <Select value={isAdmin} onValueChange={setIsAdmin}>
+                <SelectTrigger><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="false">{t("admin")}: {common("no")}</SelectItem>
+                  <SelectItem value="true">{t("admin")}: {common("yes")}</SelectItem>
+                </SelectContent>
+              </Select>
+              <Button onClick={() => createUser.mutate()} disabled={createUser.isPending}>
+                <Plus className="h-4 w-4" /> {common("create")}
+              </Button>
+            </div>
+          </Panel>
           <DataTableView
             loading={users.isLoading}
-            columns={["Email", "User ID", "Active", "Admin"]}
+            columns={[t("email"), t("userId"), t("active"), t("admin"), t("actions")]}
             rows={(users.data ?? []).map((user) => [
               user.email,
               user.id,
-              String(user.is_active),
-              String(user.is_admin),
+              user.is_active ? common("yes") : common("no"),
+              user.is_admin ? common("yes") : common("no"),
+              <AuthUserActions key={user.id} appId={app.id} user={user} onInspect={setSelectedUserId} />,
             ])}
           />
         </TabsContent>
         <TabsContent value="sessions">
+          <div className="mb-3 max-w-xs">
+            <Select value={firstUserId ?? ""} onValueChange={setSelectedUserId}>
+              <SelectTrigger><SelectValue placeholder={t("userId")} /></SelectTrigger>
+              <SelectContent>
+                {(users.data ?? []).map((user) => (
+                  <SelectItem key={user.id} value={user.id}>{user.email}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
           <DataTableView
             loading={sessions.isLoading}
-            columns={["Session", "Active", "Created", "Last seen", "Expires"]}
+            columns={[t("session"), t("active"), t("created"), t("lastSeen"), t("expires"), t("actions")]}
             rows={(sessions.data ?? []).map((session) => [
               String(session.session_id ?? ""),
-              String(session.is_active ?? ""),
+              session.is_active ? common("yes") : common("no"),
               String(session.created_at ?? ""),
               String(session.last_seen_at ?? ""),
               String(session.expires_at ?? ""),
+              <SessionActions
+                key={String(session.session_id)}
+                appId={app.id}
+                userId={firstUserId ?? ""}
+                sessionId={String(session.session_id ?? "")}
+                active={Boolean(session.is_active)}
+              />,
             ])}
           />
         </TabsContent>
-        <TabsContent value="providers"><JsonBlock value={providers.data ?? { status: "loading" }} /></TabsContent>
+        <TabsContent value="providers"><JsonBlock value={providers.data ?? { status: common("loading") }} /></TabsContent>
       </Tabs>
     </Section>
   );
 }
 
+function AuthUserActions({
+  appId,
+  user,
+  onInspect,
+}: {
+  appId: string;
+  user: PeanutUser;
+  onInspect: (userId: string) => void;
+}) {
+  const t = useTranslations("authView");
+  const common = useTranslations("common");
+  const queryClient = useQueryClient();
+  const toggleUser = useMutation({
+    mutationFn: () =>
+      apiFetch(`/api/apps/${appId}/auth/users/${user.id}/${user.is_active ? "deactivate" : "activate"}`, {
+        method: "POST",
+      }),
+    onSuccess: () => {
+      toast.success(user.is_active ? t("userDeactivated") : t("userActivated"));
+      queryClient.invalidateQueries({ queryKey: ["auth", "users", appId] });
+      queryClient.invalidateQueries({ queryKey: ["auth", "sessions", appId, user.id] });
+    },
+    onError: (error: Error) => toast.error(error.message),
+  });
+  const deleteUser = useMutation({
+    mutationFn: () => apiFetch(`/api/apps/${appId}/auth/users/${user.id}`, { method: "DELETE" }),
+    onSuccess: () => {
+      toast.success(t("userDeleted"));
+      queryClient.invalidateQueries({ queryKey: ["auth", "users", appId] });
+      queryClient.invalidateQueries({ queryKey: ["auth", "sessions", appId, user.id] });
+    },
+    onError: (error: Error) => toast.error(error.message),
+  });
+  return (
+    <div className="flex justify-end gap-1">
+      <Button variant="outline" size="sm" onClick={() => onInspect(user.id)}>
+        <History className="h-4 w-4" /> {t("sessions")}
+      </Button>
+      <Button
+        variant={user.is_active ? "destructive" : "outline"}
+        size="sm"
+        disabled={toggleUser.isPending}
+        onClick={() => {
+          const message = user.is_active
+            ? t("confirmDeactivate", { email: user.email })
+            : t("confirmActivate", { email: user.email });
+          if (window.confirm(message)) {
+            toggleUser.mutate();
+          }
+        }}
+      >
+        {user.is_active ? <PowerOff className="h-4 w-4" /> : <Power className="h-4 w-4" />}
+        {user.is_active ? common("deactivate") : common("activate")}
+      </Button>
+      <Button
+        variant="destructive"
+        size="sm"
+        disabled={deleteUser.isPending}
+        onClick={() => {
+          if (window.confirm(t("confirmDeleteUser", { email: user.email }))) {
+            deleteUser.mutate();
+          }
+        }}
+      >
+        <Trash2 className="h-4 w-4" /> {common("delete")}
+      </Button>
+    </div>
+  );
+}
+
+function SessionActions({
+  appId,
+  userId,
+  sessionId,
+  active,
+}: {
+  appId: string;
+  userId: string;
+  sessionId: string;
+  active: boolean;
+}) {
+  const t = useTranslations("authView");
+  const common = useTranslations("common");
+  const queryClient = useQueryClient();
+  const revokeSession = useMutation({
+    mutationFn: () =>
+      apiFetch(`/api/apps/${appId}/auth/users/${userId}/sessions/${sessionId}`, {
+        method: "DELETE",
+      }),
+    onSuccess: () => {
+      toast.success(t("sessionRevoked"));
+      queryClient.invalidateQueries({ queryKey: ["auth", "sessions", appId, userId] });
+    },
+    onError: (error: Error) => toast.error(error.message),
+  });
+
+  return (
+    <Button
+      variant="destructive"
+      size="sm"
+      disabled={!active || !userId || !sessionId || revokeSession.isPending}
+      onClick={() => {
+        if (window.confirm(t("confirmSessionRevoke"))) {
+          revokeSession.mutate();
+        }
+      }}
+    >
+      <Trash2 className="h-4 w-4" /> {common("delete")}
+    </Button>
+  );
+}
+
 function DataView({ app }: { app: AppSummary }) {
+  const t = useTranslations("dataView");
+  const common = useTranslations("common");
   const queryClient = useQueryClient();
   const [selectedTable, setSelectedTable] = useState("");
   const tables = useQuery({
@@ -682,12 +1110,12 @@ function DataView({ app }: { app: AppSummary }) {
         body: JSON.stringify({
           name,
           display_name: name,
-          schema: { fields: [{ name: "title", type: "string", required: true }] },
+          schema: { fields: { title: { type: "string", required: true } } },
           access_policy: { mode: "admin_only" },
         }),
-      }),
+    }),
     onSuccess: () => {
-      toast.success("Table created");
+      toast.success(t("tableCreated"));
       queryClient.invalidateQueries({ queryKey: ["data", "tables", app.id] });
     },
     onError: (error: Error) => toast.error(error.message),
@@ -699,41 +1127,42 @@ function DataView({ app }: { app: AppSummary }) {
         body: JSON.stringify({ data: JSON.parse(rowJson) }),
       }),
     onSuccess: () => {
-      toast.success("Row created");
+      toast.success(t("rowCreated"));
       queryClient.invalidateQueries({ queryKey: ["data", "rows", app.id, activeTable] });
     },
     onError: (error: Error) => toast.error(error.message),
   });
   return (
-    <Section title="Data" description="Create JSON-backed app tables, inspect rows, and manage import/export workflows.">
-      <Panel title="Create table">
+    <Section title={t("title")} description={t("description")}>
+      <Panel title={t("createTable")}>
         <div className="flex gap-3">
           <Input value={name} onChange={(event) => setName(event.target.value)} />
-          <Button onClick={() => createTable.mutate()} disabled={createTable.isPending}>Create</Button>
+          <Button onClick={() => createTable.mutate()} disabled={createTable.isPending}>{common("create")}</Button>
         </div>
       </Panel>
       <Tabs defaultValue="tables">
         <TabsList>
-          <TabsTrigger value="tables">Tables</TabsTrigger>
-          <TabsTrigger value="rows">Rows</TabsTrigger>
+          <TabsTrigger value="tables">{t("tables")}</TabsTrigger>
+          <TabsTrigger value="rows">{t("rows")}</TabsTrigger>
         </TabsList>
         <TabsContent value="tables">
           <DataTableView
             loading={tables.isLoading}
-            columns={["Name", "Display", "Policy", "Created"]}
+            columns={[t("name"), t("display"), t("policy"), t("created"), common("actions")]}
             rows={(tables.data ?? []).map((table) => [
               table.name,
               String((table as unknown as { display_name?: string }).display_name ?? table.name),
               String((table as unknown as { policy_mode?: string }).policy_mode ?? "admin"),
               table.created_at,
+              <DataTableActions key={table.name} appId={app.id} tableName={table.name} />,
             ])}
           />
         </TabsContent>
         <TabsContent value="rows" className="space-y-4">
-          <Panel title="Row editor">
+          <Panel title={t("rowEditor")}>
             <div className="grid gap-3 lg:grid-cols-[220px_1fr_auto]">
               <Select value={activeTable} onValueChange={setSelectedTable}>
-                <SelectTrigger><SelectValue placeholder="Select table" /></SelectTrigger>
+                <SelectTrigger><SelectValue placeholder={t("selectTable")} /></SelectTrigger>
                 <SelectContent>
                   {(tables.data ?? []).map((table) => (
                     <SelectItem key={table.name} value={table.name}>{table.name}</SelectItem>
@@ -741,17 +1170,24 @@ function DataView({ app }: { app: AppSummary }) {
                 </SelectContent>
               </Select>
               <Textarea value={rowJson} onChange={(event) => setRowJson(event.target.value)} className="min-h-28 font-mono text-xs" />
-              <Button onClick={() => createRow.mutate()} disabled={!activeTable || createRow.isPending}>Create row</Button>
+              <Button onClick={() => createRow.mutate()} disabled={!activeTable || createRow.isPending}>{t("createRow")}</Button>
             </div>
           </Panel>
           <DataTableView
             loading={rows.isLoading}
-            columns={["ID", "Data", "Created", "Updated"]}
+            columns={["ID", t("data"), t("created"), t("updated"), common("actions")]}
             rows={(rows.data ?? []).map((row) => [
               String(row.id ?? ""),
               JSON.stringify(row.data ?? {}),
               String(row.created_at ?? ""),
               String(row.updated_at ?? ""),
+              <DataRowActions
+                key={String(row.id)}
+                appId={app.id}
+                tableName={activeTable}
+                rowId={String(row.id ?? "")}
+                data={row.data ?? {}}
+              />,
             ])}
           />
         </TabsContent>
@@ -760,7 +1196,198 @@ function DataView({ app }: { app: AppSummary }) {
   );
 }
 
+function DataTableActions({ appId, tableName }: { appId: string; tableName: string }) {
+  const t = useTranslations("dataView");
+  const common = useTranslations("common");
+  const queryClient = useQueryClient();
+  const [open, setOpen] = useState(false);
+  const [loadingDraft, setLoadingDraft] = useState(false);
+  const [displayName, setDisplayName] = useState(tableName);
+  const [schemaJson, setSchemaJson] = useState("");
+  const [policyMode, setPolicyMode] = useState("admin_only");
+
+  const openEditor = async () => {
+    setOpen(true);
+    setLoadingDraft(true);
+    try {
+      const response = await apiFetch<{ table: Record<string, unknown> }>(
+        `/api/apps/${appId}/data/tables/${tableName}`,
+      );
+      setDisplayName(String(response.table.display_name ?? tableName));
+      setSchemaJson(JSON.stringify(response.table.schema ?? { fields: {} }, null, 2));
+      const policy = response.table.access_policy as { mode?: string } | undefined;
+      setPolicyMode(policy?.mode ?? "admin_only");
+    } catch (error) {
+      toast.error((error as Error).message);
+    } finally {
+      setLoadingDraft(false);
+    }
+  };
+
+  const updateTable = useMutation({
+    mutationFn: () =>
+      apiFetch(`/api/apps/${appId}/data/tables/${tableName}`, {
+        method: "PATCH",
+        body: JSON.stringify({
+          display_name: displayName,
+          schema: parseJsonInput(schemaJson, common("inputJsonInvalid")),
+          access_policy: { mode: policyMode },
+        }),
+      }),
+    onSuccess: () => {
+      toast.success(t("tableUpdated"));
+      setOpen(false);
+      queryClient.invalidateQueries({ queryKey: ["data", "tables", appId] });
+    },
+    onError: (error: Error) => toast.error(error.message),
+  });
+  const deleteTable = useMutation({
+    mutationFn: () => apiFetch(`/api/apps/${appId}/data/tables/${tableName}`, { method: "DELETE" }),
+    onSuccess: () => {
+      toast.success(t("tableDeleted"));
+      queryClient.invalidateQueries({ queryKey: ["data", "tables", appId] });
+    },
+    onError: (error: Error) => toast.error(error.message),
+  });
+  const exportTable = useMutation({
+    mutationFn: () => apiFetch<Record<string, unknown>>(`/api/apps/${appId}/data/tables/${tableName}/export`),
+    onSuccess: (payload) => {
+      const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = `${tableName}.json`;
+      link.click();
+      URL.revokeObjectURL(url);
+    },
+    onError: (error: Error) => toast.error(error.message),
+  });
+
+  return (
+    <div className="flex justify-end gap-1">
+      <Dialog open={open} onOpenChange={setOpen}>
+        <Button variant="outline" size="sm" onClick={openEditor}><Pencil className="h-4 w-4" /> {common("edit")}</Button>
+        <DialogContent className="sm:max-w-2xl">
+          <DialogHeader>
+            <DialogTitle>{t("editTable")}</DialogTitle>
+            <DialogDescription>{tableName}</DialogDescription>
+          </DialogHeader>
+          <div className="grid gap-3">
+            <Input value={displayName} onChange={(event) => setDisplayName(event.target.value)} />
+            <Select value={policyMode} onValueChange={setPolicyMode}>
+              <SelectTrigger><SelectValue /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="admin_only">admin_only</SelectItem>
+                <SelectItem value="owner_private">owner_private</SelectItem>
+                <SelectItem value="authenticated_shared_rw">authenticated_shared_rw</SelectItem>
+              </SelectContent>
+            </Select>
+            <Textarea value={schemaJson} onChange={(event) => setSchemaJson(event.target.value)} className="min-h-56 font-mono text-xs" />
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setOpen(false)}>{common("cancel")}</Button>
+            <Button onClick={() => updateTable.mutate()} disabled={updateTable.isPending || loadingDraft}>
+              <Save className="h-4 w-4" /> {common("save")}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+      <Button variant="outline" size="sm" onClick={() => exportTable.mutate()} disabled={exportTable.isPending}>
+        <Download className="h-4 w-4" /> {t("export")}
+      </Button>
+      <Button
+        variant="destructive"
+        size="sm"
+        disabled={deleteTable.isPending}
+        onClick={() => {
+          if (window.confirm(t("confirmDeleteTable", { name: tableName }))) {
+            deleteTable.mutate();
+          }
+        }}
+      >
+        <Trash2 className="h-4 w-4" /> {common("delete")}
+      </Button>
+    </div>
+  );
+}
+
+function DataRowActions({
+  appId,
+  tableName,
+  rowId,
+  data,
+}: {
+  appId: string;
+  tableName: string;
+  rowId: string;
+  data: unknown;
+}) {
+  const t = useTranslations("dataView");
+  const common = useTranslations("common");
+  const queryClient = useQueryClient();
+  const [open, setOpen] = useState(false);
+  const [rowJson, setRowJson] = useState(JSON.stringify(data, null, 2));
+  const updateRow = useMutation({
+    mutationFn: () =>
+      apiFetch(`/api/apps/${appId}/data/tables/${tableName}/rows/${rowId}`, {
+        method: "PATCH",
+        body: JSON.stringify({ data: parseJsonInput(rowJson, common("inputJsonInvalid")) }),
+      }),
+    onSuccess: () => {
+      toast.success(t("rowUpdated"));
+      setOpen(false);
+      queryClient.invalidateQueries({ queryKey: ["data", "rows", appId, tableName] });
+    },
+    onError: (error: Error) => toast.error(error.message),
+  });
+  const deleteRow = useMutation({
+    mutationFn: () => apiFetch(`/api/apps/${appId}/data/tables/${tableName}/rows/${rowId}`, { method: "DELETE" }),
+    onSuccess: () => {
+      toast.success(t("rowDeleted"));
+      queryClient.invalidateQueries({ queryKey: ["data", "rows", appId, tableName] });
+    },
+    onError: (error: Error) => toast.error(error.message),
+  });
+
+  return (
+    <div className="flex justify-end gap-1">
+      <Dialog open={open} onOpenChange={setOpen}>
+        <DialogTrigger asChild>
+          <Button variant="outline" size="sm"><Pencil className="h-4 w-4" /> {common("edit")}</Button>
+        </DialogTrigger>
+        <DialogContent className="sm:max-w-xl">
+          <DialogHeader>
+            <DialogTitle>{t("editRow")}</DialogTitle>
+            <DialogDescription>{rowId}</DialogDescription>
+          </DialogHeader>
+          <Textarea value={rowJson} onChange={(event) => setRowJson(event.target.value)} className="min-h-72 font-mono text-xs" />
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setOpen(false)}>{common("cancel")}</Button>
+            <Button onClick={() => updateRow.mutate()} disabled={updateRow.isPending}>
+              <Save className="h-4 w-4" /> {common("save")}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+      <Button
+        variant="destructive"
+        size="sm"
+        disabled={deleteRow.isPending}
+        onClick={() => {
+          if (window.confirm(t("confirmDeleteRow"))) {
+            deleteRow.mutate();
+          }
+        }}
+      >
+        <Trash2 className="h-4 w-4" /> {common("delete")}
+      </Button>
+    </div>
+  );
+}
+
 function StorageView({ app }: { app: AppSummary }) {
+  const t = useTranslations("storageView");
+  const common = useTranslations("common");
   const queryClient = useQueryClient();
   const [selectedBucket, setSelectedBucket] = useState("");
   const buckets = useQuery({
@@ -779,6 +1406,7 @@ function StorageView({ app }: { app: AppSummary }) {
   const [name, setName] = useState("assets");
   const [objectKey, setObjectKey] = useState("hello.txt");
   const [objectBody, setObjectBody] = useState("Hello Peanut");
+  const [contentType, setContentType] = useState("text/plain");
   const createBucket = useMutation({
     mutationFn: () =>
       apiFetch(`/api/apps/${app.id}/storage/buckets`, {
@@ -790,9 +1418,9 @@ function StorageView({ app }: { app: AppSummary }) {
           max_object_bytes: null,
           allowed_mime_types: [],
         }),
-      }),
+    }),
     onSuccess: () => {
-      toast.success("Bucket created");
+      toast.success(t("bucketCreated"));
       queryClient.invalidateQueries({ queryKey: ["storage", "buckets", app.id] });
     },
     onError: (error: Error) => toast.error(error.message),
@@ -801,45 +1429,47 @@ function StorageView({ app }: { app: AppSummary }) {
     mutationFn: () =>
       apiFetch(`/api/apps/${app.id}/storage/buckets/${activeBucket}/objects/${objectKey}`, {
         method: "PUT",
-        headers: { "Content-Type": "text/plain" },
+        headers: { "Content-Type": contentType || "text/plain" },
         body: objectBody,
       }),
     onSuccess: () => {
-      toast.success("Object uploaded");
+      toast.success(t("objectUploaded"));
       queryClient.invalidateQueries({ queryKey: ["storage", "objects", app.id, activeBucket] });
     },
     onError: (error: Error) => toast.error(error.message),
   });
   return (
-    <Section title="Storage" description="Bucket policies and object browser entrypoints for app-scoped files.">
-      <Panel title="Create bucket">
+    <Section title={t("title")} description={t("description")}>
+      <Panel title={t("createBucket")}>
         <div className="flex gap-3">
           <Input value={name} onChange={(event) => setName(event.target.value)} />
-          <Button onClick={() => createBucket.mutate()} disabled={createBucket.isPending}>Create</Button>
+          <Button onClick={() => createBucket.mutate()} disabled={createBucket.isPending}>{common("create")}</Button>
         </div>
       </Panel>
       <Tabs defaultValue="buckets">
         <TabsList>
-          <TabsTrigger value="buckets">Buckets</TabsTrigger>
-          <TabsTrigger value="objects">Objects</TabsTrigger>
+          <TabsTrigger value="buckets">{t("buckets")}</TabsTrigger>
+          <TabsTrigger value="objects">{t("objects")}</TabsTrigger>
         </TabsList>
         <TabsContent value="buckets">
           <DataTableView
             loading={buckets.isLoading}
-            columns={["Name", "Public read", "Client uploads", "Updated"]}
+            columns={[t("name"), t("publicRead"), t("clientUploads"), t("maxBytes"), t("updated"), t("columnsActions")]}
             rows={(buckets.data ?? []).map((bucket) => [
               bucket.name,
-              String(bucket.public_read),
-              String((bucket as unknown as { allow_client_uploads?: boolean }).allow_client_uploads),
+              bucket.public_read ? common("yes") : common("no"),
+              bucket.allow_client_uploads ? common("yes") : common("no"),
+              bucket.max_object_bytes ? formatBytes(bucket.max_object_bytes) : common("no"),
               bucket.updated_at,
+              <BucketActions key={bucket.name} appId={app.id} bucket={bucket} />,
             ])}
           />
         </TabsContent>
         <TabsContent value="objects" className="space-y-4">
-          <Panel title="Upload object">
-            <div className="grid gap-3 lg:grid-cols-[220px_220px_1fr_auto]">
+          <Panel title={t("overwriteObject")}>
+            <div className="grid gap-3 lg:grid-cols-[220px_220px_180px_1fr_auto]">
               <Select value={activeBucket} onValueChange={setSelectedBucket}>
-                <SelectTrigger><SelectValue placeholder="Select bucket" /></SelectTrigger>
+                <SelectTrigger><SelectValue placeholder={t("selectBucket")} /></SelectTrigger>
                 <SelectContent>
                   {(buckets.data ?? []).map((bucket) => (
                     <SelectItem key={bucket.name} value={bucket.name}>{bucket.name}</SelectItem>
@@ -847,18 +1477,20 @@ function StorageView({ app }: { app: AppSummary }) {
                 </SelectContent>
               </Select>
               <Input value={objectKey} onChange={(event) => setObjectKey(event.target.value)} />
-              <Input value={objectBody} onChange={(event) => setObjectBody(event.target.value)} />
-              <Button onClick={() => uploadObject.mutate()} disabled={!activeBucket || uploadObject.isPending}>Upload</Button>
+              <Input value={contentType} onChange={(event) => setContentType(event.target.value)} placeholder={t("contentType")} />
+              <Input value={objectBody} onChange={(event) => setObjectBody(event.target.value)} placeholder={t("objectBody")} />
+              <Button onClick={() => uploadObject.mutate()} disabled={!activeBucket || uploadObject.isPending}>{common("upload")}</Button>
             </div>
           </Panel>
           <DataTableView
             loading={objects.isLoading}
-            columns={["Key", "Size", "Content type", "Updated"]}
+            columns={[t("key"), t("size"), t("contentType"), t("updated"), t("columnsActions")]}
             rows={(objects.data ?? []).map((object) => [
               object.key,
               object.size,
               object.content_type ?? "",
               object.updated_at,
+              <ObjectActions key={object.key} appId={app.id} bucket={activeBucket} objectKey={object.key} />,
             ])}
           />
         </TabsContent>
@@ -867,7 +1499,144 @@ function StorageView({ app }: { app: AppSummary }) {
   );
 }
 
+function BucketActions({ appId, bucket }: { appId: string; bucket: StorageBucket }) {
+  const t = useTranslations("storageView");
+  const common = useTranslations("common");
+  const queryClient = useQueryClient();
+  const [open, setOpen] = useState(false);
+  const [publicRead, setPublicRead] = useState(bucket.public_read ? "true" : "false");
+  const [clientUploads, setClientUploads] = useState(bucket.allow_client_uploads ? "true" : "false");
+  const [maxBytes, setMaxBytes] = useState(bucket.max_object_bytes ? String(bucket.max_object_bytes) : "");
+  const [mimeTypes, setMimeTypes] = useState(storageMimeTypes(bucket).join(", "));
+
+  const updateBucket = useMutation({
+    mutationFn: () =>
+      apiFetch(`/api/apps/${appId}/storage/buckets/${bucket.name}`, {
+        method: "PATCH",
+        body: JSON.stringify({
+          public_read: publicRead === "true",
+          allow_client_uploads: clientUploads === "true",
+          max_object_bytes: maxBytes.trim() ? Number(maxBytes) : null,
+          allowed_mime_types: mimeTypes
+            .split(",")
+            .map((value) => value.trim())
+            .filter(Boolean),
+        }),
+      }),
+    onSuccess: () => {
+      toast.success(t("bucketUpdated"));
+      setOpen(false);
+      queryClient.invalidateQueries({ queryKey: ["storage", "buckets", appId] });
+    },
+    onError: (error: Error) => toast.error(error.message),
+  });
+  const deleteBucket = useMutation({
+    mutationFn: () => apiFetch(`/api/apps/${appId}/storage/buckets/${bucket.name}`, { method: "DELETE" }),
+    onSuccess: () => {
+      toast.success(t("bucketDeleted"));
+      queryClient.invalidateQueries({ queryKey: ["storage", "buckets", appId] });
+    },
+    onError: (error: Error) => toast.error(error.message),
+  });
+
+  return (
+    <div className="flex justify-end gap-1">
+      <Dialog open={open} onOpenChange={setOpen}>
+        <DialogTrigger asChild>
+          <Button variant="outline" size="sm">
+            <Pencil className="h-4 w-4" /> {common("edit")}
+          </Button>
+        </DialogTrigger>
+        <DialogContent className="sm:max-w-lg">
+          <DialogHeader>
+            <DialogTitle>{t("editBucket")}</DialogTitle>
+            <DialogDescription>{bucket.name}</DialogDescription>
+          </DialogHeader>
+          <div className="grid gap-3 sm:grid-cols-2">
+            <Select value={publicRead} onValueChange={setPublicRead}>
+              <SelectTrigger><SelectValue /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="false">{t("publicRead")}: {common("no")}</SelectItem>
+                <SelectItem value="true">{t("publicRead")}: {common("yes")}</SelectItem>
+              </SelectContent>
+            </Select>
+            <Select value={clientUploads} onValueChange={setClientUploads}>
+              <SelectTrigger><SelectValue /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="false">{t("clientUploads")}: {common("no")}</SelectItem>
+                <SelectItem value="true">{t("clientUploads")}: {common("yes")}</SelectItem>
+              </SelectContent>
+            </Select>
+            <Input
+              value={maxBytes}
+              onChange={(event) => setMaxBytes(event.target.value)}
+              placeholder={t("emptyNoLimit")}
+            />
+            <Input
+              value={mimeTypes}
+              onChange={(event) => setMimeTypes(event.target.value)}
+              placeholder={t("mimeTypesPlaceholder")}
+            />
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setOpen(false)}>{common("cancel")}</Button>
+            <Button onClick={() => updateBucket.mutate()} disabled={updateBucket.isPending}>
+              <Save className="h-4 w-4" /> {common("save")}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+      <Button
+        variant="destructive"
+        size="sm"
+        disabled={deleteBucket.isPending}
+        onClick={() => {
+          if (window.confirm(t("confirmDeleteBucket", { name: bucket.name }))) {
+            deleteBucket.mutate();
+          }
+        }}
+      >
+        <Trash2 className="h-4 w-4" /> {common("delete")}
+      </Button>
+    </div>
+  );
+}
+
+function ObjectActions({ appId, bucket, objectKey }: { appId: string; bucket: string; objectKey: string }) {
+  const t = useTranslations("storageView");
+  const common = useTranslations("common");
+  const queryClient = useQueryClient();
+  const deleteObject = useMutation({
+    mutationFn: () =>
+      apiFetch(`/api/apps/${appId}/storage/buckets/${bucket}/objects/${objectKey}`, {
+        method: "DELETE",
+      }),
+    onSuccess: () => {
+      toast.success(t("objectDeleted"));
+      queryClient.invalidateQueries({ queryKey: ["storage", "objects", appId, bucket] });
+    },
+    onError: (error: Error) => toast.error(error.message),
+  });
+
+  return (
+    <Button
+      variant="destructive"
+      size="sm"
+      disabled={deleteObject.isPending}
+      onClick={() => {
+        if (window.confirm(t("confirmDeleteObject", { key: objectKey }))) {
+          deleteObject.mutate();
+        }
+      }}
+    >
+      <Trash2 className="h-4 w-4" /> {common("delete")}
+    </Button>
+  );
+}
+
 function FunctionsView({ app }: { app: AppSummary }) {
+  const t = useTranslations("functionsView");
+  const common = useTranslations("common");
   const queryClient = useQueryClient();
   const [selectedName, setSelectedName] = useState("");
   const [name, setName] = useState("hello_console");
@@ -880,8 +1649,11 @@ function FunctionsView({ app }: { app: AppSummary }) {
   const [sourceCode, setSourceCode] = useState(
     "export default function handler(ctx) {\n  return { ok: true, input: ctx.request.input }\n}\n",
   );
-  const [inputJson, setInputJson] = useState('{\n  "message": "Hello Peanut"\n}');
+  const [requestMethod, setRequestMethod] = useState("POST");
+  const [queryJson, setQueryJson] = useState('{\n}');
+  const [inputJson, setInputJson] = useState('{\n  "input": {\n    "message": "Hello Peanut"\n  }\n}');
   const [output, setOutput] = useState<Record<string, unknown> | null>(null);
+  const [browserOrigin] = useState(() => (typeof window === "undefined" ? "" : window.location.origin));
   const functions = useQuery({
     queryKey: ["functions", app.id],
     queryFn: async () => (await apiFetch<{ functions: FunctionSummary[] }>(`/api/apps/${app.id}/functions`)).functions,
@@ -909,6 +1681,9 @@ function FunctionsView({ app }: { app: AppSummary }) {
       )).invocations,
     enabled: Boolean(activeName),
   });
+  const queryString = safeBuildQueryString(queryJson);
+  const endpointPath = `/api/apps/${app.id}/function-endpoints/${endpointSlug || "{endpoint-slug}"}${queryString ? `?${queryString}` : ""}`;
+  const endpointUrl = browserOrigin ? `${browserOrigin}${endpointPath}` : endpointPath;
 
   const applyFunctionDraft = (fn: FunctionDetail) => {
     setName(fn.name);
@@ -944,9 +1719,9 @@ function FunctionsView({ app }: { app: AppSummary }) {
       apiFetch<{ function: FunctionDetail }>(`/api/apps/${app.id}/functions`, {
         method: "POST",
         body: JSON.stringify(functionPayload()),
-      }),
+    }),
     onSuccess: (response) => {
-      toast.success("Function created");
+      toast.success(t("functionCreated"));
       setSelectedName(response.function.name);
       applyFunctionDraft(response.function);
       queryClient.invalidateQueries({ queryKey: ["functions", app.id] });
@@ -966,9 +1741,9 @@ function FunctionsView({ app }: { app: AppSummary }) {
           timeout_ms: Number(timeoutMs),
           enabled: enabled === "true",
         }),
-      }),
+    }),
     onSuccess: (response) => {
-      toast.success("Function saved");
+      toast.success(t("functionSaved"));
       setSelectedName(response.function.name);
       applyFunctionDraft(response.function);
       queryClient.invalidateQueries({ queryKey: ["functions", app.id] });
@@ -983,7 +1758,7 @@ function FunctionsView({ app }: { app: AppSummary }) {
         method: "DELETE",
       }),
     onSuccess: () => {
-      toast.success("Function deleted");
+      toast.success(t("functionDeleted"));
       setSelectedName("");
       queryClient.invalidateQueries({ queryKey: ["functions", app.id] });
     },
@@ -1002,38 +1777,47 @@ function FunctionsView({ app }: { app: AppSummary }) {
       }),
     onSuccess: (response) => {
       setOutput(response);
-      toast.success("Lint finished");
+      toast.success(t("lintFinished"));
     },
     onError: (error: Error) => toast.error(error.message),
   });
   const dryRunFunction = useMutation({
-    mutationFn: () =>
-      apiFetch<Record<string, unknown>>(`/api/apps/${app.id}/functions/editor/dry-run`, {
+    mutationFn: () => {
+      const testPayload = parseFunctionTestPayload(inputJson, common("inputJsonInvalid"));
+      const query = parseJsonInput(queryJson, common("inputJsonInvalid"));
+      return apiFetch<Record<string, unknown>>(`/api/apps/${app.id}/functions/editor/dry-run`, {
         method: "POST",
         body: JSON.stringify({
           runtime,
           source_code: sourceCode,
           function_name: name || activeName || "editor",
-          input: parseJsonInput(inputJson),
+          method: requestMethod,
+          input: testPayload.input,
+          query,
+          body: testPayload.requestBody,
           timeout_ms: Number(timeoutMs),
         }),
-      }),
+      });
+    },
     onSuccess: (response) => {
       setOutput(response);
-      toast.success("Dry-run finished");
+      toast.success(t("dryRunFinished"));
     },
     onError: (error: Error) => toast.error(error.message),
   });
   const invokeFunction = useMutation({
-    mutationFn: () =>
-      apiFetch<Record<string, unknown>>(`/api/apps/${app.id}/function-endpoints/${endpointSlug}`, {
-        method: "POST",
-        body: JSON.stringify({ input: parseJsonInput(inputJson) }),
-      }),
+    mutationFn: () => {
+      const testPayload = parseFunctionTestPayload(inputJson, common("inputJsonInvalid"));
+      const query = buildQueryString(queryJson, common("inputJsonInvalid"));
+      return apiFetch<Record<string, unknown>>(`/api/apps/${app.id}/function-endpoints/${endpointSlug}${query ? `?${query}` : ""}`, {
+        method: requestMethod,
+        body: requestMethod === "GET" || requestMethod === "HEAD" ? undefined : JSON.stringify(testPayload.requestBody),
+      });
+    },
     onSuccess: (response) => {
       setOutput(response);
       queryClient.invalidateQueries({ queryKey: ["functions", "invocations", app.id, activeName] });
-      toast.success("Invocation recorded");
+      toast.success(t("invocationRecorded"));
     },
     onError: (error: Error) => toast.error(error.message),
   });
@@ -1043,7 +1827,7 @@ function FunctionsView({ app }: { app: AppSummary }) {
         method: "POST",
       }),
     onSuccess: () => {
-      toast.success("Version restored");
+      toast.success(t("versionRestored"));
       queryClient.invalidateQueries({ queryKey: ["functions", app.id] });
       queryClient.invalidateQueries({ queryKey: ["functions", "detail", app.id, activeName] });
       queryClient.invalidateQueries({ queryKey: ["functions", "versions", app.id, activeName] });
@@ -1059,16 +1843,16 @@ function FunctionsView({ app }: { app: AppSummary }) {
     onSuccess: (response) => {
       setOutput(response);
       queryClient.invalidateQueries({ queryKey: ["functions", "invocations", app.id, activeName] });
-      toast.success("Invocation retried");
+      toast.success(t("invocationRetried"));
     },
     onError: (error: Error) => toast.error(error.message),
   });
 
   return (
-    <Section title="Functions" description="Create, test, invoke, version, and retry app-scoped functions.">
-      <div className="grid gap-4 xl:grid-cols-[320px_1fr]">
-        <Panel title="Functions">
-          <div className="space-y-3">
+    <Section title={t("title")} description={t("description")}>
+      <div className="grid gap-4 xl:grid-cols-[320px_minmax(0,1fr)]">
+        <Panel title={t("functions")}>
+          <div className="space-y-4">
             <Select
               value={activeName}
               onValueChange={(value) => {
@@ -1076,7 +1860,7 @@ function FunctionsView({ app }: { app: AppSummary }) {
                 loadFunctionDraft(value).catch((error: Error) => toast.error(error.message));
               }}
             >
-              <SelectTrigger><SelectValue placeholder="Select function" /></SelectTrigger>
+              <SelectTrigger><SelectValue placeholder={t("selectFunction")} /></SelectTrigger>
               <SelectContent>
                 {(functions.data ?? []).map((fn) => (
                   <SelectItem key={fn.name} value={fn.name}>{fn.name}</SelectItem>
@@ -1085,118 +1869,241 @@ function FunctionsView({ app }: { app: AppSummary }) {
             </Select>
             <Button
               variant="outline"
+              className="w-full"
               onClick={() => {
                 if (activeName && detail.data) applyFunctionDraft(detail.data);
               }}
               disabled={!detail.data}
             >
-              <Code2 className="h-4 w-4" /> Load
+              <Code2 className="h-4 w-4" /> {t("loadDraft")}
             </Button>
-            <DataTableView
-              loading={functions.isLoading}
-              columns={["Name", "Endpoint", "Version"]}
-              rows={(functions.data ?? []).map((fn) => [
-                fn.name,
-                fn.endpoint_slug,
-                fn.active_version_number,
-              ])}
-            />
+            <p className="text-xs leading-5 text-muted-foreground">{t("leftRailHint")}</p>
+            {functions.isLoading ? (
+              <Skeleton className="h-44 w-full" />
+            ) : (
+              <div className="space-y-2">
+                {(functions.data ?? []).map((fn) => (
+                  <button
+                    key={fn.id}
+                    type="button"
+                    onClick={() => {
+                      setSelectedName(fn.name);
+                      loadFunctionDraft(fn.name).catch((error: Error) => toast.error(error.message));
+                    }}
+                    className={cn(
+                      "w-full rounded-lg border bg-background p-3 text-left transition-colors hover:bg-muted",
+                      activeName === fn.name && "border-primary bg-primary/5",
+                    )}
+                  >
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="truncate font-medium">{fn.display_name || fn.name}</span>
+                      <Badge variant={fn.enabled ? "default" : "secondary"}>
+                        v{fn.active_version_number}
+                      </Badge>
+                    </div>
+                    <div className="mt-1 truncate font-mono text-xs text-muted-foreground">/{fn.endpoint_slug}</div>
+                  </button>
+                ))}
+              </div>
+            )}
           </div>
         </Panel>
 
-        <Panel title="Editor">
-          <div className="grid gap-3 lg:grid-cols-3">
-            <Input value={name} onChange={(event) => setName(event.target.value)} placeholder="name" />
-            <Input value={displayName} onChange={(event) => setDisplayName(event.target.value)} placeholder="display name" />
-            <Input value={endpointSlug} onChange={(event) => setEndpointSlug(event.target.value)} placeholder="endpoint slug" />
-            <Select value={runtime} onValueChange={setRuntime}>
-              <SelectTrigger><SelectValue /></SelectTrigger>
-              <SelectContent>
-                <SelectItem value="javascript">JavaScript</SelectItem>
-                <SelectItem value="typescript">TypeScript</SelectItem>
-              </SelectContent>
-            </Select>
-            <Select value={invokePolicy} onValueChange={setInvokePolicy}>
-              <SelectTrigger><SelectValue /></SelectTrigger>
-              <SelectContent>
-                <SelectItem value="authenticated">Authenticated</SelectItem>
-                <SelectItem value="public">Public</SelectItem>
-                <SelectItem value="api_key">API key</SelectItem>
-              </SelectContent>
-            </Select>
-            <div className="grid grid-cols-[1fr_110px] gap-3">
-              <Input value={timeoutMs} onChange={(event) => setTimeoutMs(event.target.value)} />
-              <Select value={enabled} onValueChange={setEnabled}>
-                <SelectTrigger><SelectValue /></SelectTrigger>
+        <div className="space-y-4">
+          <Panel title={t("endpoint")}>
+            <div className="grid gap-3 xl:grid-cols-[1fr_auto]">
+              <div className="min-w-0">
+                <div className="mb-1 flex items-center gap-2">
+                  <Badge variant={enabled === "true" ? "default" : "secondary"}>
+                    {enabled === "true" ? t("enabled") : t("disabled")}
+                  </Badge>
+                  <span className="text-xs text-muted-foreground">{t("endpointHelp")}</span>
+                </div>
+                <div className="truncate rounded-md border bg-muted/40 px-3 py-2 font-mono text-xs">
+                  {endpointUrl}
+                </div>
+              </div>
+              <Button
+                variant="outline"
+                onClick={() => {
+                  navigator.clipboard
+                    .writeText(endpointUrl)
+                    .then(() => toast.success(common("copied")))
+                    .catch((error: Error) => toast.error(error.message));
+                }}
+              >
+                <Copy className="h-4 w-4" /> {t("copyEndpoint")}
+              </Button>
+            </div>
+          </Panel>
+
+          <Panel title={t("editor")}>
+            <div className="grid gap-4 2xl:grid-cols-[minmax(0,1fr)_340px]">
+              <div className="space-y-4">
+                <div className="grid gap-3 lg:grid-cols-3">
+                  <FunctionField label={t("name")} help={t("nameHelp")}>
+                    <Input value={name} onChange={(event) => setName(event.target.value)} placeholder={t("name")} />
+                  </FunctionField>
+                  <FunctionField label={t("displayName")} help={t("displayNameHelp")}>
+                    <Input value={displayName} onChange={(event) => setDisplayName(event.target.value)} placeholder={t("displayName")} />
+                  </FunctionField>
+                  <FunctionField label={t("endpointSlug")} help={t("endpointSlugHelp")}>
+                    <Input value={endpointSlug} onChange={(event) => setEndpointSlug(event.target.value)} placeholder={t("endpointSlug")} />
+                  </FunctionField>
+                </div>
+                <div className="overflow-hidden rounded-lg border bg-muted/20">
+                  <div className="flex items-center justify-between border-b px-3 py-2">
+                    <div>
+                      <div className="text-sm font-medium">{t("code")}</div>
+                      <div className="text-xs text-muted-foreground">{t("codeHelp")}</div>
+                    </div>
+                    <Badge variant="outline">{runtime}</Badge>
+                  </div>
+                  <CodeEditor value={sourceCode} onChange={setSourceCode} />
+                </div>
+              </div>
+              <div className="space-y-4">
+                <div className="rounded-lg border bg-background p-4">
+                  <div className="mb-4">
+                    <div className="text-sm font-medium">{t("runtimeSettings")}</div>
+                    <div className="text-xs text-muted-foreground">{t("runtimeSettingsHelp")}</div>
+                  </div>
+                  <div className="space-y-4">
+                    <FunctionField label={t("runtime")} help={t("runtimeHelp")}>
+                      <Select value={runtime} onValueChange={setRuntime}>
+                        <SelectTrigger><SelectValue /></SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="javascript">JavaScript</SelectItem>
+                          <SelectItem value="typescript">TypeScript</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </FunctionField>
+                    <FunctionField label={t("invokePolicy")} help={t("invokePolicyHelp")}>
+                      <Select value={invokePolicy} onValueChange={setInvokePolicy}>
+                        <SelectTrigger><SelectValue /></SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="authenticated">{t("authenticated")}</SelectItem>
+                          <SelectItem value="public">{t("public")}</SelectItem>
+                          <SelectItem value="api_key">API key</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </FunctionField>
+                    <FunctionField label={t("timeoutMs")} help={t("timeoutHelp")}>
+                      <Input value={timeoutMs} onChange={(event) => setTimeoutMs(event.target.value)} inputMode="numeric" />
+                    </FunctionField>
+                    <FunctionField label={t("state")} help={t("stateHelp")}>
+                      <Select value={enabled} onValueChange={setEnabled}>
+                        <SelectTrigger><SelectValue /></SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="true">{t("enabled")}</SelectItem>
+                          <SelectItem value="false">{t("disabled")}</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </FunctionField>
+                  </div>
+                </div>
+                <div className="grid gap-2">
+                  <Button onClick={() => createFunction.mutate()} disabled={createFunction.isPending}>
+                    <Plus className="h-4 w-4" /> {t("create")}
+                  </Button>
+                  <Button variant="outline" onClick={() => updateFunction.mutate()} disabled={!activeName || updateFunction.isPending}>
+                    <Save className="h-4 w-4" /> {t("save")}
+                  </Button>
+                  <Button variant="outline" onClick={() => lintFunction.mutate()} disabled={lintFunction.isPending}>
+                    <Code2 className="h-4 w-4" /> {t("lint")}
+                  </Button>
+                  <Button variant="outline" onClick={() => dryRunFunction.mutate()} disabled={dryRunFunction.isPending}>
+                    <FlaskConical className="h-4 w-4" /> {t("dryRun")}
+                  </Button>
+                  <Button variant="outline" onClick={() => invokeFunction.mutate()} disabled={!activeName || invokeFunction.isPending}>
+                    <Play className="h-4 w-4" /> {t("invoke")}
+                  </Button>
+                  <Button
+                    variant="destructive"
+                    onClick={() => {
+                      if (window.confirm(t("confirmDeleteFunction", { name: activeName }))) {
+                        deleteFunction.mutate();
+                      }
+                    }}
+                    disabled={!activeName || deleteFunction.isPending}
+                  >
+                    <Trash2 className="h-4 w-4" /> {t("delete")}
+                  </Button>
+                </div>
+              </div>
+            </div>
+          </Panel>
+        </div>
+      </div>
+
+      <Panel title={t("testConsole")}>
+        <div className="overflow-hidden rounded-lg border bg-background">
+          <div className="grid gap-4 border-b bg-muted/20 p-4 xl:grid-cols-[240px_minmax(0,1fr)]">
+            <div>
+              <div className="mb-2 text-sm font-medium">{t("httpMethod")}</div>
+              <Select value={requestMethod} onValueChange={setRequestMethod}>
+                <SelectTrigger className="bg-background"><SelectValue /></SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="true">Enabled</SelectItem>
-                  <SelectItem value="false">Disabled</SelectItem>
+                  <SelectItem value="GET">GET</SelectItem>
+                  <SelectItem value="POST">POST</SelectItem>
+                  <SelectItem value="PUT">PUT</SelectItem>
+                  <SelectItem value="PATCH">PATCH</SelectItem>
+                  <SelectItem value="DELETE">DELETE</SelectItem>
                 </SelectContent>
               </Select>
+              <p className="mt-2 text-xs leading-5 text-muted-foreground">{t("httpMethodHelp")}</p>
+            </div>
+            <div>
+              <div className="mb-2 text-sm font-medium">{t("runtimeRequest")}</div>
+              <div className="grid gap-2 md:grid-cols-2 2xl:grid-cols-4">
+                {["method", "query", "body", "input"].map((field) => (
+                  <div key={field} className="rounded-md border bg-card px-3 py-2 font-mono text-xs text-muted-foreground">
+                    ctx.request.{field}
+                  </div>
+                ))}
+              </div>
             </div>
           </div>
-          <Textarea
-            value={sourceCode}
-            onChange={(event) => setSourceCode(event.target.value)}
-            className="mt-3 min-h-[360px] resize-y font-mono text-xs"
-          />
-          <div className="mt-3 flex flex-wrap gap-2">
-            <Button onClick={() => createFunction.mutate()} disabled={createFunction.isPending}>
-              <Plus className="h-4 w-4" /> Create
-            </Button>
-            <Button variant="outline" onClick={() => updateFunction.mutate()} disabled={!activeName || updateFunction.isPending}>
-              <Save className="h-4 w-4" /> Save
-            </Button>
-            <Button variant="outline" onClick={() => lintFunction.mutate()} disabled={lintFunction.isPending}>
-              <Code2 className="h-4 w-4" /> Lint
-            </Button>
-            <Button variant="outline" onClick={() => dryRunFunction.mutate()} disabled={dryRunFunction.isPending}>
-              <FlaskConical className="h-4 w-4" /> Dry-run
-            </Button>
-            <Button variant="outline" onClick={() => invokeFunction.mutate()} disabled={!activeName || invokeFunction.isPending}>
-              <Play className="h-4 w-4" /> Invoke
-            </Button>
-            <Button variant="destructive" onClick={() => deleteFunction.mutate()} disabled={!activeName || deleteFunction.isPending}>
-              <Trash2 className="h-4 w-4" /> Delete
-            </Button>
+          <div className="grid gap-0 xl:grid-cols-[minmax(0,0.85fr)_minmax(0,1.15fr)_minmax(0,1.15fr)]">
+            <CodeWorkbenchPane title={t("queryParams")} description={t("queryParamsHelp")}>
+              <CodeEditor value={queryJson} onChange={setQueryJson} minHeight={340} />
+            </CodeWorkbenchPane>
+            <CodeWorkbenchPane title={t("requestBody")} description={t("requestBodyHelp")}>
+              <CodeEditor value={inputJson} onChange={setInputJson} minHeight={340} />
+            </CodeWorkbenchPane>
+            <CodeWorkbenchPane title={t("executionResult")} description={t("executionResultHelp")}>
+              <JsonBlock value={output ?? { status: "idle" }} minHeight={340} />
+            </CodeWorkbenchPane>
           </div>
-        </Panel>
-      </div>
+        </div>
+      </Panel>
 
-      <div className="grid gap-4 xl:grid-cols-2">
-        <Panel title="Input / output">
-          <div className="grid gap-3 lg:grid-cols-2">
-            <Textarea value={inputJson} onChange={(event) => setInputJson(event.target.value)} className="min-h-72 font-mono text-xs" />
-            <JsonBlock value={output ?? { status: "idle" }} />
-          </div>
-        </Panel>
-        <Panel title="Versions">
-          <DataTableView
-            loading={versions.isLoading}
-            columns={["Version", "Runtime", "Active", "Rollback"]}
-            rows={(versions.data ?? []).map((version) => [
-              version.version_number,
-              version.runtime,
-              String(version.is_active),
-              version.is_active ? "" : (
-                <Button
-                  key={version.id}
-                  variant="outline"
-                  size="sm"
-                  onClick={() => rollbackVersion.mutate(version.version_number)}
-                >
-                  <RotateCcw className="h-4 w-4" /> Restore
-                </Button>
-              ),
-            ])}
-          />
-        </Panel>
-      </div>
+      <Panel title={t("versions")}>
+        <DataTableView
+          loading={versions.isLoading}
+          columns={[t("columnsVersion"), t("columnsRuntime"), t("columnsActive"), t("columnsAction")]}
+          rows={(versions.data ?? []).map((version) => [
+            version.version_number,
+            version.runtime,
+            version.is_active ? common("yes") : common("no"),
+            version.is_active ? "" : (
+              <Button
+                key={version.id}
+                variant="outline"
+                size="sm"
+                onClick={() => rollbackVersion.mutate(version.version_number)}
+              >
+                <RotateCcw className="h-4 w-4" /> {t("restore")}
+              </Button>
+            ),
+          ])}
+        />
+      </Panel>
 
-      <Panel title="Invocations">
+      <Panel title={t("invocations")}>
         <DataTableView
           loading={invocations.isLoading}
-          columns={["ID", "Status", "Mode", "Duration", "Retry"]}
+          columns={[t("columnsId"), t("columnsStatus"), t("columnsMode"), t("columnsDuration"), t("columnsRetry")]}
           rows={(invocations.data ?? []).map((invocation) => [
             invocation.id,
             invocation.status,
@@ -1208,7 +2115,7 @@ function FunctionsView({ app }: { app: AppSummary }) {
               size="sm"
               onClick={() => retryInvocation.mutate(invocation.id)}
             >
-              <History className="h-4 w-4" /> Retry
+              <History className="h-4 w-4" /> {t("retry")}
             </Button>,
           ])}
         />
@@ -1217,7 +2124,256 @@ function FunctionsView({ app }: { app: AppSummary }) {
   );
 }
 
+function FunctionField({
+  label,
+  help,
+  children,
+}: {
+  label: string;
+  help: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <div className="space-y-1.5">
+      <span className="text-sm font-medium">{label}</span>
+      {children}
+      <span className="block text-xs leading-5 text-muted-foreground">{help}</span>
+    </div>
+  );
+}
+
+function CodeWorkbenchPane({
+  title,
+  description,
+  children,
+}: {
+  title: string;
+  description: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <div className="min-w-0 border-t p-4 xl:border-l xl:border-t-0 first:xl:border-l-0">
+      <div className="mb-3 min-h-14">
+        <div className="text-sm font-medium">{title}</div>
+        <div className="mt-1 text-xs leading-5 text-muted-foreground">{description}</div>
+      </div>
+      {children}
+    </div>
+  );
+}
+
+function CodeEditor({
+  value,
+  onChange,
+  minHeight = 480,
+  readOnly = false,
+}: {
+  value: string;
+  onChange?: (value: string) => void;
+  minHeight?: number;
+  readOnly?: boolean;
+}) {
+  const textareaRef = useRef<HTMLTextAreaElement | null>(null);
+  const gutterRef = useRef<HTMLDivElement | null>(null);
+  const historyRef = useRef([{ value, selectionStart: 0, selectionEnd: 0 }]);
+  const historyIndexRef = useRef(0);
+  const [currentLine, setCurrentLine] = useState(1);
+  const [scrollTop, setScrollTop] = useState(0);
+  const lineHeight = 20;
+  const lines = Math.max(1, value.split("\n").length);
+
+  useEffect(() => {
+    const currentSnapshot = historyRef.current[historyIndexRef.current];
+    if (currentSnapshot && currentSnapshot.value !== value) {
+      historyRef.current = [{ value, selectionStart: 0, selectionEnd: 0 }];
+      historyIndexRef.current = 0;
+    }
+  }, [value]);
+
+  const syncCursorLine = () => {
+    const textarea = textareaRef.current;
+    if (!textarea) return;
+    setCurrentLine(value.slice(0, textarea.selectionStart).split("\n").length);
+  };
+
+  const pushHistory = (nextValue: string, nextStart: number, nextEnd = nextStart) => {
+    const current = historyRef.current[historyIndexRef.current];
+    if (current?.value === nextValue && current.selectionStart === nextStart && current.selectionEnd === nextEnd) {
+      return;
+    }
+    const nextHistory = historyRef.current.slice(0, historyIndexRef.current + 1);
+    nextHistory.push({ value: nextValue, selectionStart: nextStart, selectionEnd: nextEnd });
+    if (nextHistory.length > 100) {
+      nextHistory.shift();
+    }
+    historyRef.current = nextHistory;
+    historyIndexRef.current = nextHistory.length - 1;
+  };
+
+  const updateValueAndSelection = (nextValue: string, nextStart: number, nextEnd = nextStart) => {
+    if (!onChange || readOnly) return;
+    pushHistory(nextValue, nextStart, nextEnd);
+    onChange(nextValue);
+    requestAnimationFrame(() => {
+      const textarea = textareaRef.current;
+      if (!textarea) return;
+      textarea.selectionStart = nextStart;
+      textarea.selectionEnd = nextEnd;
+      textarea.focus();
+      setCurrentLine(nextValue.slice(0, nextStart).split("\n").length);
+    });
+  };
+
+  const applyHistorySnapshot = (snapshot: { value: string; selectionStart: number; selectionEnd: number }) => {
+    if (!onChange || readOnly) return;
+    onChange(snapshot.value);
+    requestAnimationFrame(() => {
+      const textarea = textareaRef.current;
+      if (!textarea) return;
+      textarea.selectionStart = snapshot.selectionStart;
+      textarea.selectionEnd = snapshot.selectionEnd;
+      textarea.focus();
+      setCurrentLine(snapshot.value.slice(0, snapshot.selectionStart).split("\n").length);
+    });
+  };
+
+  const undo = () => {
+    if (historyIndexRef.current <= 0) return;
+    historyIndexRef.current -= 1;
+    applyHistorySnapshot(historyRef.current[historyIndexRef.current]);
+  };
+
+  const redo = () => {
+    if (historyIndexRef.current >= historyRef.current.length - 1) return;
+    historyIndexRef.current += 1;
+    applyHistorySnapshot(historyRef.current[historyIndexRef.current]);
+  };
+
+  const handleTab = (event: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    if (readOnly) return;
+    const isModifierPressed = event.metaKey || event.ctrlKey;
+    const key = event.key.toLowerCase();
+    if (isModifierPressed && key === "z") {
+      event.preventDefault();
+      if (event.shiftKey) {
+        redo();
+      } else {
+        undo();
+      }
+      return;
+    }
+    if (isModifierPressed && key === "y") {
+      event.preventDefault();
+      redo();
+      return;
+    }
+    if (event.key !== "Tab") return;
+    event.preventDefault();
+
+    const textarea = event.currentTarget;
+    const start = textarea.selectionStart;
+    const end = textarea.selectionEnd;
+    const lineStart = value.lastIndexOf("\n", start - 1) + 1;
+
+    if (event.shiftKey) {
+      const selectedBlock = value.slice(lineStart, end);
+      let removedBeforeStart = 0;
+      let removedTotal = 0;
+      const unindented = selectedBlock.replace(/^( {1,2}|\t)/gm, (match, indent: string, offset: number) => {
+        const removed = indent.length;
+        removedTotal += removed;
+        if (offset < start - lineStart) {
+          removedBeforeStart += removed;
+        }
+        return "";
+      });
+      const nextValue = value.slice(0, lineStart) + unindented + value.slice(end);
+      updateValueAndSelection(
+        nextValue,
+        Math.max(lineStart, start - removedBeforeStart),
+        Math.max(lineStart, end - removedTotal),
+      );
+      return;
+    }
+
+    if (start !== end && value.slice(start, end).includes("\n")) {
+      const selectedBlock = value.slice(lineStart, end);
+      const indented = selectedBlock.replace(/^/gm, "  ");
+      const addedLines = selectedBlock.split("\n").length;
+      const nextValue = value.slice(0, lineStart) + indented + value.slice(end);
+      updateValueAndSelection(nextValue, start + 2, end + addedLines * 2);
+      return;
+    }
+
+    const nextValue = value.slice(0, start) + "  " + value.slice(end);
+    updateValueAndSelection(nextValue, start + 2);
+  };
+
+  return (
+    <div
+      className="relative grid grid-cols-[3.5rem_minmax(0,1fr)] overflow-hidden rounded-lg border bg-background shadow-xs"
+      style={{ minHeight }}
+    >
+      <div
+        ref={gutterRef}
+        className="select-none overflow-hidden border-r bg-muted/40 py-3 text-right font-mono text-xs leading-5 text-muted-foreground"
+        aria-hidden="true"
+      >
+        {Array.from({ length: lines }, (_, index) => (
+          <div
+            key={index + 1}
+            className={cn(
+              "px-3 tabular-nums",
+              currentLine === index + 1 && "font-semibold text-primary",
+            )}
+          >
+            {index + 1}
+          </div>
+        ))}
+      </div>
+      <div className="relative min-w-0">
+        <div
+          className="pointer-events-none absolute left-0 right-0 bg-primary/10"
+          style={{
+            height: lineHeight,
+            top: (currentLine - 1) * lineHeight + 12 - scrollTop,
+          }}
+        />
+        <textarea
+          ref={textareaRef}
+          value={value}
+          readOnly={readOnly}
+          spellCheck={false}
+          onChange={(event) => {
+            if (!onChange || readOnly) return;
+            const nextValue = event.target.value;
+            const nextStart = event.target.selectionStart;
+            const nextEnd = event.target.selectionEnd;
+            pushHistory(nextValue, nextStart, nextEnd);
+            onChange(nextValue);
+            setCurrentLine(nextValue.slice(0, nextStart).split("\n").length);
+          }}
+          onKeyDown={handleTab}
+          onClick={syncCursorLine}
+          onKeyUp={syncCursorLine}
+          onScroll={(event) => {
+            const nextScrollTop = event.currentTarget.scrollTop;
+            setScrollTop(nextScrollTop);
+            if (gutterRef.current) {
+              gutterRef.current.scrollTop = nextScrollTop;
+            }
+          }}
+          className="relative z-10 w-full resize-y bg-transparent px-4 py-3 font-mono text-xs leading-5 text-foreground outline-none selection:bg-primary/20"
+          style={{ minHeight }}
+        />
+      </div>
+    </div>
+  );
+}
+
 function PushView({ app }: { app: AppSummary }) {
+  const t = useTranslations("pushView");
+  const common = useTranslations("common");
   const queryClient = useQueryClient();
   const [title, setTitle] = useState("Console test");
   const [body, setBody] = useState("Push from Peanut Console");
@@ -1251,26 +2407,26 @@ function PushView({ app }: { app: AppSummary }) {
           body,
           user_id: userId || users.data?.[0]?.id,
         }),
-      }),
+    }),
     onSuccess: () => {
-      toast.success("Push test message queued");
+      toast.success(t("queued"));
       queryClient.invalidateQueries({ queryKey: ["push", "queue", app.id] });
     },
     onError: (error: Error) => toast.error(error.message),
   });
   return (
-    <Section title="Push" description="Subscription health, queue pressure, and delivery diagnostics.">
+    <Section title={t("title")} description={t("description")}>
       <Tabs defaultValue="subscriptions">
         <TabsList>
-          <TabsTrigger value="subscriptions">Subscriptions</TabsTrigger>
-          <TabsTrigger value="test">Test message</TabsTrigger>
-          <TabsTrigger value="diagnostics">Diagnostics</TabsTrigger>
-          <TabsTrigger value="queue">Queue</TabsTrigger>
+          <TabsTrigger value="subscriptions">{t("subscriptions")}</TabsTrigger>
+          <TabsTrigger value="test">{t("testMessage")}</TabsTrigger>
+          <TabsTrigger value="diagnostics">{t("diagnostics")}</TabsTrigger>
+          <TabsTrigger value="queue">{t("queue")}</TabsTrigger>
         </TabsList>
         <TabsContent value="subscriptions">
           <DataTableView
             loading={subscriptions.isLoading}
-            columns={["ID", "Kind", "Topic", "Endpoint", "Created"]}
+            columns={[t("columnsId"), t("columnsKind"), t("columnsTopic"), t("columnsEndpoint"), t("columnsCreated")]}
             rows={(subscriptions.data ?? []).map((subscription) => [
               String(subscription.id ?? ""),
               String(subscription.kind ?? ""),
@@ -1281,27 +2437,27 @@ function PushView({ app }: { app: AppSummary }) {
           />
         </TabsContent>
         <TabsContent value="test">
-          <Panel title="Queue a test push">
+          <Panel title={t("queueTestPush")}>
             <div className="grid gap-3 lg:grid-cols-[1fr_1fr_220px_auto]">
               <Input value={title} onChange={(event) => setTitle(event.target.value)} />
               <Input value={body} onChange={(event) => setBody(event.target.value)} />
               <Select value={userId || users.data?.[0]?.id || ""} onValueChange={setUserId}>
-                <SelectTrigger><SelectValue placeholder="Target user" /></SelectTrigger>
+                <SelectTrigger><SelectValue placeholder={t("targetUser")} /></SelectTrigger>
                 <SelectContent>
                   {(users.data ?? []).map((user) => (
                     <SelectItem key={user.id} value={user.id}>{user.email}</SelectItem>
                   ))}
                 </SelectContent>
               </Select>
-              <Button onClick={() => sendTest.mutate()} disabled={sendTest.isPending || !users.data?.length}>Send</Button>
+              <Button onClick={() => sendTest.mutate()} disabled={sendTest.isPending || !users.data?.length}>{common("send")}</Button>
             </div>
           </Panel>
         </TabsContent>
         <TabsContent value="diagnostics">
-          <Panel title="Diagnostics"><JsonBlock value={diagnostics.data ?? { status: "loading" }} /></Panel>
+          <Panel title={t("diagnostics")}><JsonBlock value={diagnostics.data ?? { status: common("loading") }} /></Panel>
         </TabsContent>
         <TabsContent value="queue">
-          <Panel title="Queue"><JsonBlock value={queue.data ?? { status: "loading" }} /></Panel>
+          <Panel title={t("queue")}><JsonBlock value={queue.data ?? { status: common("loading") }} /></Panel>
         </TabsContent>
       </Tabs>
     </Section>
@@ -1309,6 +2465,7 @@ function PushView({ app }: { app: AppSummary }) {
 }
 
 function ActivityView({ app }: { app: AppSummary }) {
+  const t = useTranslations("activityView");
   const activity = useQuery({
     queryKey: ["activity", app.id],
     queryFn: async () => {
@@ -1319,13 +2476,15 @@ function ActivityView({ app }: { app: AppSummary }) {
     },
   });
   return (
-    <Section title="Activity" description="A single feed for app mutations across auth, data, storage, functions, push, and keys.">
+    <Section title={t("title")} description={t("description")}>
       <ActivityList events={activity.data ?? []} loading={activity.isLoading} />
     </Section>
   );
 }
 
 function OpsView() {
+  const t = useTranslations("opsView");
+  const common = useTranslations("common");
   const queryClient = useQueryClient();
   const ready = useQuery({
     queryKey: ["ready"],
@@ -1358,7 +2517,7 @@ function OpsView() {
   const createBackup = useMutation({
     mutationFn: () => apiFetch("/api/admin/backups", { method: "POST", body: JSON.stringify({}) }),
     onSuccess: () => {
-      toast.success("Backup created");
+      toast.success(t("backupCreated"));
       queryClient.invalidateQueries({ queryKey: ["ops", "backups"] });
       queryClient.invalidateQueries({ queryKey: ["ops", "metrics"] });
     },
@@ -1374,7 +2533,7 @@ function OpsView() {
         }),
       }),
     onSuccess: () => {
-      toast.success("Restore scheduled");
+      toast.success(t("restoreScheduled"));
       queryClient.invalidateQueries({ queryKey: ["ops", "backups"] });
       queryClient.invalidateQueries({ queryKey: ["ops", "metrics"] });
     },
@@ -1383,7 +2542,7 @@ function OpsView() {
   const clearRestore = useMutation({
     mutationFn: () => apiFetch("/api/admin/backups/restore-pending", { method: "DELETE" }),
     onSuccess: () => {
-      toast.success("Restore cleared");
+      toast.success(t("restoreCleared"));
       queryClient.invalidateQueries({ queryKey: ["ops", "backups"] });
       queryClient.invalidateQueries({ queryKey: ["ops", "metrics"] });
     },
@@ -1398,7 +2557,7 @@ function OpsView() {
       link.download = name;
       link.click();
       URL.revokeObjectURL(url);
-      toast.success(`${name} downloaded`);
+      toast.success(t("downloaded", { name }));
     },
     onError: (error: Error) => toast.error(error.message),
   });
@@ -1417,58 +2576,58 @@ function OpsView() {
       ]),
     ) ?? [];
   return (
-    <Section title="Operations" description="Single-node production checks, backup posture, schema invariants, and service health.">
+    <Section title={t("title")} description={t("description")}>
       <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-        <Metric label="Ready" value={String(ready.data?.status ?? "checking")} icon={CheckCircle2} />
-        <Metric label="Warnings" value={warningChecks} icon={CircleAlert} />
-        <Metric label="Failures" value={failedChecks} icon={Wrench} />
-        <Metric label="DB size" value={formatBytes(metrics.data?.database.size_bytes ?? 0)} icon={Database} />
+        <Metric label={t("ready")} value={String(ready.data?.status ?? common("checking"))} icon={CheckCircle2} />
+        <Metric label={t("warnings")} value={warningChecks} icon={CircleAlert} />
+        <Metric label={t("failures")} value={failedChecks} icon={Wrench} />
+        <Metric label={t("dbSize")} value={formatBytes(metrics.data?.database.size_bytes ?? 0)} icon={Database} />
       </div>
       <div className="grid gap-4 xl:grid-cols-[1fr_1.2fr]">
-        <Panel title="Platform checks">
+        <Panel title={t("platformChecks")}>
           <div className="space-y-2">
             {platformChecks.map((check) => (
               <div key={check.name} className="flex items-center justify-between gap-3 rounded-md border px-3 py-2">
                 <div className="min-w-0">
                   <div className="flex items-center gap-2 font-medium">
                     {check.name}
-                    {check.severity === "warning" && <Badge variant="secondary">warning</Badge>}
+                    {check.severity === "warning" && <Badge variant="secondary">{common("warning")}</Badge>}
                   </div>
                   <div className="truncate text-xs text-muted-foreground">{check.message ?? ""}</div>
                 </div>
-                <Badge variant={check.ok ? "default" : "destructive"}>{check.ok ? "OK" : "Fail"}</Badge>
+                <Badge variant={check.ok ? "default" : "destructive"}>{check.ok ? common("ok") : common("fail")}</Badge>
               </div>
             ))}
             {!platform?.checks?.length && <Skeleton className="h-40 w-full" />}
           </div>
         </Panel>
-        <Panel title="Runtime">
+        <Panel title={t("runtime")}>
           <DataTableView
             loading={metrics.isLoading}
-            columns={["Area", "Value", "State"]}
+            columns={[t("columnsArea"), t("columnsValue"), t("columnsState")]}
             rows={[
-              ["Storage", metrics.data?.storage.root ?? "", metrics.data?.storage.ok ? "writable" : metrics.data?.storage.error ?? ""],
-              ["Backups", metrics.data?.database.backup_count ?? 0, metrics.data?.database.restore_pending ? "restore pending" : "clear"],
-              ["Functions", metrics.data?.functions.work_dir ?? "", metrics.data?.functions.enabled ? "enabled" : "disabled"],
-              ["Push queue", metrics.data?.push.queued ?? 0, `${metrics.data?.push.failed_recent ?? 0} failed / 24h`],
-              ["Version", metrics.data?.system.version ?? "", `${metrics.data?.system.uptime_seconds ?? 0}s uptime`],
+              [t("storage"), metrics.data?.storage.root ?? "", metrics.data?.storage.ok ? t("writable") : metrics.data?.storage.error ?? ""],
+              [t("backups"), metrics.data?.database.backup_count ?? 0, metrics.data?.database.restore_pending ? t("restorePendingState") : t("clearState")],
+              [t("functions"), metrics.data?.functions.work_dir ?? "", metrics.data?.functions.enabled ? common("enabled") : common("disabled")],
+              [t("pushQueue"), metrics.data?.push.queued ?? 0, t("failed24h", { count: metrics.data?.push.failed_recent ?? 0 })],
+              [t("version"), metrics.data?.system.version ?? "", t("uptime", { seconds: metrics.data?.system.uptime_seconds ?? 0 })],
             ]}
           />
         </Panel>
       </div>
-      <Panel title="Workspace resource usage">
+      <Panel title={t("workspaceUsage")}>
         <DataTableView
           loading={workspaceUsage.isLoading}
-          columns={["Workspace", "Resource", "Usage", "Percent", "Period / reset"]}
+          columns={[t("columnsWorkspace"), t("columnsResource"), t("columnsUsage"), t("columnsPercent"), t("columnsPeriod")]}
           rows={usageRows}
         />
       </Panel>
-      <Panel title="Backups">
+      <Panel title={t("backups")}>
         <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
           {backups.data?.restore_pending ? (
             <Alert className="max-w-2xl">
               <CircleAlert className="h-4 w-4" />
-              <AlertTitle>Restore pending</AlertTitle>
+              <AlertTitle>{t("restorePending")}</AlertTitle>
               <AlertDescription>{backups.data.restore_pending.backup_name}</AlertDescription>
             </Alert>
           ) : (
@@ -1478,48 +2637,48 @@ function OpsView() {
             <Button
               variant="outline"
               onClick={() => {
-                if (window.confirm("Clear the pending restore marker?")) {
+                if (window.confirm(t("confirmClearRestore"))) {
                   clearRestore.mutate();
                 }
               }}
               disabled={!backups.data?.restore_pending || clearRestore.isPending}
             >
-              <RotateCcw className="h-4 w-4" /> Clear
+              <RotateCcw className="h-4 w-4" /> {common("clear")}
             </Button>
             <Button onClick={() => createBackup.mutate()} disabled={createBackup.isPending}>
-              <Plus className="h-4 w-4" /> Create
+              <Plus className="h-4 w-4" /> {common("create")}
             </Button>
           </div>
         </div>
         <DataTableView
           loading={backups.isLoading}
-          columns={["Name", "Size", "Modified", "Actions"]}
+          columns={[t("columnsName"), t("columnsSize"), t("columnsModified"), t("columnsActions")]}
           rows={(backups.data?.backups ?? []).map((backup) => [
             backup.name,
             formatBytes(backup.size_bytes),
             backup.modified_at,
             <div key={backup.name} className="flex gap-2">
               <Button variant="outline" size="sm" onClick={() => download.mutate(backup.name)}>
-                <Download className="h-4 w-4" /> Download
+                <Download className="h-4 w-4" /> {common("download")}
               </Button>
               <Button
                 variant="outline"
                 size="sm"
                 onClick={() => {
-                  if (window.confirm(`Schedule restore from ${backup.name} on next restart?`)) {
+                  if (window.confirm(t("confirmScheduleRestore", { name: backup.name }))) {
                     scheduleRestore.mutate(backup.name);
                   }
                 }}
               >
-                <RotateCcw className="h-4 w-4" /> Restore
+                <RotateCcw className="h-4 w-4" /> {common("restore")}
               </Button>
             </div>,
           ])}
         />
       </Panel>
       <div className="grid gap-4 xl:grid-cols-2">
-        <Panel title="Ready payload"><JsonBlock value={ready.data ?? { status: "loading" }} /></Panel>
-        <Panel title="Diagnostics payload"><JsonBlock value={diagnostics.data ?? { status: "loading" }} /></Panel>
+        <Panel title={t("readyPayload")}><JsonBlock value={ready.data ?? { status: common("loading") }} /></Panel>
+        <Panel title={t("diagnosticsPayload")}><JsonBlock value={diagnostics.data ?? { status: common("loading") }} /></Panel>
       </div>
     </Section>
   );
@@ -1589,6 +2748,7 @@ function DataTableView({
   rows: React.ReactNode[][];
   loading?: boolean;
 }) {
+  const common = useTranslations("common");
   if (loading) return <Skeleton className="h-64 w-full" />;
   return (
     <div className="overflow-hidden rounded-lg border bg-card">
@@ -1604,14 +2764,22 @@ function DataTableView({
           {rows.length === 0 ? (
             <TableRow>
               <TableCell colSpan={columns.length} className="h-28 text-center text-muted-foreground">
-                No records yet.
+                {common("noRecords")}
               </TableCell>
             </TableRow>
           ) : (
             rows.map((row, index) => (
               <TableRow key={index}>
                 {row.map((cell, cellIndex) => (
-                  <TableCell key={cellIndex} className="max-w-[260px] truncate font-mono text-xs">
+                  <TableCell
+                    key={cellIndex}
+                    className={cn(
+                      "max-w-[260px] text-xs",
+                      typeof cell === "string" || typeof cell === "number"
+                        ? "truncate font-mono"
+                        : "font-sans",
+                    )}
+                  >
                     {cell}
                   </TableCell>
                 ))}
@@ -1625,9 +2793,10 @@ function DataTableView({
 }
 
 function ActivityList({ events, loading }: { events: ActivityEvent[]; loading?: boolean }) {
+  const t = useTranslations("activityView");
   if (loading) return <Skeleton className="h-72 w-full" />;
   if (!events.length) {
-    return <EmptyState icon={Activity} title="No activity yet" description="Mutations will appear here as the app is used." />;
+    return <EmptyState icon={Activity} title={t("emptyTitle")} description={t("emptyDescription")} />;
   }
   return (
     <div className="divide-y rounded-lg border bg-card">
@@ -1664,21 +2833,69 @@ function EmptyState({
   );
 }
 
-function JsonBlock({ value }: { value: unknown }) {
-  return (
-    <Textarea
-      readOnly
-      value={JSON.stringify(value, null, 2)}
-      className="min-h-72 resize-none font-mono text-xs"
-    />
-  );
+function JsonBlock({ value, minHeight = 288 }: { value: unknown; minHeight?: number }) {
+  return <CodeEditor value={JSON.stringify(value, null, 2)} minHeight={minHeight} readOnly />;
 }
 
-function parseJsonInput(value: string) {
+function parseJsonInput(value: string, invalidMessage: string) {
   try {
     return JSON.parse(value);
   } catch {
-    throw new Error("Input must be valid JSON");
+    throw new Error(invalidMessage);
+  }
+}
+
+function parseFunctionTestPayload(value: string, invalidMessage: string) {
+  const parsed = parseJsonInput(value, invalidMessage);
+  if (isRecord(parsed) && Object.hasOwn(parsed, "input")) {
+    return {
+      requestBody: parsed,
+      input: parsed.input,
+    };
+  }
+  return {
+    requestBody: { input: parsed },
+    input: parsed,
+  };
+}
+
+function safeBuildQueryString(value: string) {
+  try {
+    return buildQueryString(value, "");
+  } catch {
+    return "";
+  }
+}
+
+function buildQueryString(value: string, invalidMessage: string) {
+  const parsed = parseJsonInput(value, invalidMessage);
+  if (!isRecord(parsed)) {
+    if (invalidMessage) throw new Error(invalidMessage);
+    return "";
+  }
+  return new URLSearchParams(
+    Object.entries(parsed).flatMap(([key, entry]) => {
+      if (entry === null || typeof entry === "undefined") return [];
+      if (Array.isArray(entry)) {
+        return entry.map((item) => [key, String(item)] as [string, string]);
+      }
+      return [[key, String(entry)] as [string, string]];
+    }),
+  ).toString();
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function storageMimeTypes(bucket: StorageBucket) {
+  if (Array.isArray(bucket.allowed_mime_types)) return bucket.allowed_mime_types;
+  if (!bucket.allowed_mime_types_json) return [];
+  try {
+    const parsed = JSON.parse(bucket.allowed_mime_types_json);
+    return Array.isArray(parsed) ? parsed.map(String) : [];
+  } catch {
+    return [];
   }
 }
 
@@ -1715,10 +2932,11 @@ function Signal({
 }
 
 function StatusBadge({ ok }: { ok: boolean }) {
+  const common = useTranslations("common");
   return (
     <Badge variant={ok ? "default" : "secondary"} className="h-8 gap-1.5">
       {ok ? <CheckCircle2 className="h-3.5 w-3.5" /> : <CircleAlert className="h-3.5 w-3.5" />}
-      {ok ? "Ready" : "Checking"}
+      {ok ? common("ready") : common("checking")}
     </Badge>
   );
 }
