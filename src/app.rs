@@ -47,6 +47,10 @@ fn build_auth_public_routes(state: crate::AppState) -> Router<crate::AppState> {
     Router::new()
         .route("/register", post(crate::api::auth::register))
         .route("/auth/logout", post(crate::api::auth::logout))
+        .route(
+            "/apps/:app_id/auth/public-config",
+            get(crate::api::auth::get_auth_public_config),
+        )
         .merge(
             Router::new()
                 .route("/login", post(crate::api::auth::login))
@@ -118,6 +122,14 @@ fn build_protected_routes(
         .route(
             "/apps/:app_id/keys/:key_id",
             delete(crate::api::keys::revoke_app_key),
+        )
+        .route(
+            "/apps/:app_id/auth/providers",
+            get(crate::api::auth::list_auth_provider_configs),
+        )
+        .route(
+            "/apps/:app_id/auth/providers/:provider",
+            put(crate::api::auth::upsert_auth_provider_config),
         )
         .route("/admin/backups", get(crate::api::backups::list_backups))
         .route("/admin/backups", post(crate::api::backups::create_backup))

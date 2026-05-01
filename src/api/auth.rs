@@ -17,11 +17,15 @@ use crate::api::common::{json_error, json_message};
 
 mod events;
 mod password;
+mod providers;
 mod public;
 mod sessions;
 
 pub use events::list_auth_events;
 pub use password::{change_password, forgot_password, reset_password};
+pub use providers::{
+    get_auth_public_config, list_auth_provider_configs, upsert_auth_provider_config,
+};
 pub use public::{login, logout, refresh_session, register};
 pub use sessions::{list_sessions, me, revoke_all_sessions, revoke_session};
 

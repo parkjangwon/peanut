@@ -191,6 +191,7 @@ mod tests {
             "auth_events",
             "apps",
             "app_keys",
+            "auth_provider_configs",
             "service_tokens",
             "function_versions",
             "function_version_secrets",
