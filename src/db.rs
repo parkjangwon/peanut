@@ -203,6 +203,27 @@ mod tests {
             .unwrap();
             assert_eq!(exists.0, 1, "missing table {table_name}");
         }
+
+        for (table_name, column_name) in [
+            ("data_tables", "app_id"),
+            ("data_rows", "app_id"),
+            ("data_row_events", "app_id"),
+            ("data_query_presets", "app_id"),
+            ("functions", "app_id"),
+            ("function_versions", "app_id"),
+            ("function_invocations", "app_id"),
+            ("push_subscriptions", "app_id"),
+            ("push_queue", "app_id"),
+        ] {
+            let exists: (i64,) =
+                sqlx::query_as("SELECT COUNT(*) FROM pragma_table_info(?) WHERE name = ?")
+                    .bind(table_name)
+                    .bind(column_name)
+                    .fetch_one(&pool)
+                    .await
+                    .unwrap();
+            assert_eq!(exists.0, 1, "missing column {table_name}.{column_name}");
+        }
     }
 
     #[test]

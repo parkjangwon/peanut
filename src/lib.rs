@@ -8,6 +8,7 @@
 
 pub mod api;
 pub mod app;
+pub mod app_context;
 pub mod auth;
 pub mod config;
 pub mod console;
