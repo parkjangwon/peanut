@@ -1,10 +1,12 @@
 pub const DEFAULT_APP_ID: &str = "default";
 
+#[allow(dead_code)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AppContext {
     pub app_id: String,
 }
 
+#[allow(dead_code)]
 impl AppContext {
     pub fn default_app() -> Self {
         Self {

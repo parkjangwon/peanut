@@ -190,6 +190,7 @@ mod tests {
             "password_reset_tokens",
             "auth_events",
             "apps",
+            "app_keys",
             "service_tokens",
             "function_versions",
             "function_version_secrets",

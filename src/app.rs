@@ -113,6 +113,12 @@ fn build_protected_routes(
         .route("/apps/:app_id", get(crate::api::apps::get_app))
         .route("/apps/:app_id", patch(crate::api::apps::update_app))
         .route("/apps/:app_id", delete(crate::api::apps::delete_app))
+        .route("/apps/:app_id/keys", get(crate::api::keys::list_app_keys))
+        .route("/apps/:app_id/keys", post(crate::api::keys::create_app_key))
+        .route(
+            "/apps/:app_id/keys/:key_id",
+            delete(crate::api::keys::revoke_app_key),
+        )
         .route("/admin/backups", get(crate::api::backups::list_backups))
         .route("/admin/backups", post(crate::api::backups::create_backup))
         .route(

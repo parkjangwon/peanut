@@ -8,6 +8,7 @@
 
 mod api;
 mod app;
+mod app_context;
 mod auth;
 mod config;
 mod console;
