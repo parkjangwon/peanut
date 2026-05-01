@@ -86,29 +86,30 @@ curl -s -X POST "http://127.0.0.1:3000/api/admin/auth/login" \
   --data '{"email":"owner@example.com","password":"password123"}'
 ```
 
-## 공개 베타 흐름
+## Workspace 설정 흐름
 
-platform admin으로 베타 초대를 만듭니다.
+인스턴스 관리자로 workspace 설정 초대를 만듭니다.
 
 ```bash
-curl -s -X POST "$BASE_URL/api/admin/beta-invites" \
+curl -s -X POST "$BASE_URL/api/admin/workspace-invites" \
   -H "authorization: Bearer $ADMIN_TOKEN" \
   -H "content-type: application/json" \
-  --data '{"label":"local pilot","max_uses":1}'
+  --data '{"label":"local workspace","max_uses":1}'
 ```
 
-응답의 `invite_code`로 organization owner를 만듭니다.
+응답의 `invite_code`로 workspace owner를 만듭니다.
 
 ```bash
-curl -s -X POST "$BASE_URL/api/beta/signup" \
+curl -s -X POST "$BASE_URL/api/workspace-invites/accept" \
   -H "content-type: application/json" \
-  --data '{"invite_code":"pbi_...","organization_name":"Local Pilot","email":"founder@example.com","password":"password123"}'
+  --data '{"invite_code":"pbi_...","workspace_name":"Local Team","email":"owner@example.com","password":"password123"}'
 ```
 
-모든 organization은 기본적으로 `beta_free` 플랜을 받습니다. 사용량과 쿼터는 다음처럼 확인합니다.
+모든 workspace는 기본적으로 `self_hosted_default` 제한 프로필을 받습니다.
+사용량과 리소스 제한은 다음처럼 확인합니다.
 
 ```bash
-curl -s "$BASE_URL/api/orgs/$ORG_ID/usage" \
+curl -s "$BASE_URL/api/workspaces/$WORKSPACE_ID/resource-usage" \
   -H "authorization: Bearer $ADMIN_TOKEN"
 ```
 

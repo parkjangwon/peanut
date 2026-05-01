@@ -14,29 +14,29 @@ use crate::{
     auth::jwt::Claims,
 };
 
-pub const DEFAULT_ORGANIZATION_ID: &str = "default";
-const DEFAULT_PLAN_ID: &str = "beta_free";
+pub const DEFAULT_WORKSPACE_ID: &str = "default";
+const DEFAULT_LIMIT_PROFILE_ID: &str = "self_hosted_default";
 
 #[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
-pub struct OrganizationSummary {
+pub struct WorkspaceSummary {
     pub id: String,
     pub name: String,
     pub display_name: String,
     pub created_by: Option<String>,
     pub created_at: String,
     pub updated_at: String,
-    pub suspended_at: Option<String>,
-    pub suspended_reason: Option<String>,
+    pub disabled_at: Option<String>,
+    pub disabled_reason: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct OrganizationsResponse {
-    pub organizations: Vec<OrganizationSummary>,
+pub struct WorkspacesResponse {
+    pub workspaces: Vec<WorkspaceSummary>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
-pub struct OrganizationMember {
-    pub organization_id: String,
+pub struct WorkspaceMember {
+    pub workspace_id: String,
     pub user_id: String,
     pub role: String,
     pub created_at: String,
@@ -44,7 +44,7 @@ pub struct OrganizationMember {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct CreateBetaInviteRequest {
+pub struct CreateWorkspaceInviteRequest {
     pub label: String,
     pub email: Option<String>,
     pub domain: Option<String>,
@@ -53,7 +53,7 @@ pub struct CreateBetaInviteRequest {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
-pub struct BetaInviteSummary {
+pub struct WorkspaceSetupInviteSummary {
     pub id: String,
     pub label: String,
     pub email: Option<String>,
@@ -67,49 +67,49 @@ pub struct BetaInviteSummary {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct CreateBetaInviteResponse {
-    pub invite: BetaInviteSummary,
+pub struct CreateWorkspaceInviteResponse {
+    pub invite: WorkspaceSetupInviteSummary,
     pub invite_code: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct BetaInvitesResponse {
-    pub invites: Vec<BetaInviteSummary>,
+pub struct WorkspaceSetupInvitesResponse {
+    pub invites: Vec<WorkspaceSetupInviteSummary>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct BetaSignupRequest {
+pub struct AcceptWorkspaceInviteRequest {
     pub invite_code: String,
-    pub organization_name: String,
+    pub workspace_name: String,
     pub email: String,
     pub password: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct BetaSignupResponse {
+pub struct AcceptWorkspaceInviteResponse {
     pub access_token: String,
     pub refresh_token: String,
     pub token_type: String,
     pub expires_at: chrono::DateTime<Utc>,
     pub user: crate::api::auth::UserSummary,
-    pub organization: OrganizationSummary,
-    pub membership: OrganizationMember,
+    pub workspace: WorkspaceSummary,
+    pub membership: WorkspaceMember,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SetQuotaRequest {
-    pub quota_key: String,
+pub struct SetResourceLimitRequest {
+    pub resource_key: String,
     pub limit: i64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SuspendRequest {
+pub struct DisableRequest {
     pub reason: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct QuotaSummary {
-    pub quota_key: String,
+pub struct ResourceLimitSummary {
+    pub resource_key: String,
     pub used: i64,
     pub limit: i64,
     pub reset_at: Option<String>,
@@ -117,43 +117,43 @@ pub struct QuotaSummary {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UsageResponse {
-    pub organization_id: String,
-    pub plan_id: String,
-    pub quotas: Vec<QuotaSummary>,
+    pub workspace_id: String,
+    pub limit_profile_id: String,
+    pub resource_limits: Vec<ResourceLimitSummary>,
 }
 
-pub async fn ensure_default_organization(pool: &sqlx::SqlitePool) -> Result<String, sqlx::Error> {
-    sqlx::query("INSERT OR IGNORE INTO organizations (id, name, display_name) VALUES (?, ?, ?)")
-        .bind(DEFAULT_ORGANIZATION_ID)
-        .bind(DEFAULT_ORGANIZATION_ID)
-        .bind("Default Organization")
+pub async fn ensure_default_workspace(pool: &sqlx::SqlitePool) -> Result<String, sqlx::Error> {
+    sqlx::query("INSERT OR IGNORE INTO workspaces (id, name, display_name) VALUES (?, ?, ?)")
+        .bind(DEFAULT_WORKSPACE_ID)
+        .bind(DEFAULT_WORKSPACE_ID)
+        .bind("Default Workspace")
         .execute(pool)
         .await?;
     sqlx::query(
-        "INSERT OR IGNORE INTO organization_plan_assignments (organization_id, plan_id) VALUES (?, ?)",
+        "INSERT OR IGNORE INTO workspace_limit_profiles (workspace_id, limit_profile_id) VALUES (?, ?)",
     )
-    .bind(DEFAULT_ORGANIZATION_ID)
-    .bind(DEFAULT_PLAN_ID)
+    .bind(DEFAULT_WORKSPACE_ID)
+    .bind(DEFAULT_LIMIT_PROFILE_ID)
     .execute(pool)
     .await?;
-    Ok(DEFAULT_ORGANIZATION_ID.to_string())
+    Ok(DEFAULT_WORKSPACE_ID.to_string())
 }
 
-pub async fn upsert_organization_member(
+pub async fn upsert_workspace_member(
     pool: &sqlx::SqlitePool,
-    organization_id: &str,
+    workspace_id: &str,
     user_id: &str,
     role: &str,
 ) -> Result<(), sqlx::Error> {
     sqlx::query(
         r#"
-        INSERT INTO organization_members (organization_id, user_id, role)
+        INSERT INTO workspace_members (workspace_id, user_id, role)
         VALUES (?, ?, ?)
-        ON CONFLICT(organization_id, user_id)
+        ON CONFLICT(workspace_id, user_id)
         DO UPDATE SET role = excluded.role, updated_at = CURRENT_TIMESTAMP
         "#,
     )
-    .bind(organization_id)
+    .bind(workspace_id)
     .bind(user_id)
     .bind(role)
     .execute(pool)
@@ -161,51 +161,47 @@ pub async fn upsert_organization_member(
     Ok(())
 }
 
-pub async fn list_organizations(
+pub async fn list_workspaces(
     State(state): State<crate::AppState>,
     Extension(claims): Extension<Claims>,
 ) -> Response {
     if !claims.is_admin {
         return json_error(StatusCode::FORBIDDEN, "admin access required");
     }
-    if ensure_default_organization(&state.pool).await.is_err() {
+    if ensure_default_workspace(&state.pool).await.is_err() {
         return json_error(
             StatusCode::INTERNAL_SERVER_ERROR,
-            "failed to ensure organization",
+            "failed to ensure workspace",
         );
     }
 
-    let rows = sqlx::query_as::<_, OrganizationSummary>(
+    let rows = sqlx::query_as::<_, WorkspaceSummary>(
         r#"
-        SELECT DISTINCT o.id, o.name, o.display_name, o.created_by, o.created_at, o.updated_at, o.suspended_at, o.suspended_reason
-        FROM organizations o
-        LEFT JOIN organization_members om ON om.organization_id = o.id
-        WHERE om.user_id = ? OR ? = TRUE
+        SELECT DISTINCT o.id, o.name, o.display_name, o.created_by, o.created_at, o.updated_at, o.disabled_at, o.disabled_reason
+        FROM workspaces o
+        LEFT JOIN workspace_members om ON om.workspace_id = o.id
+        WHERE om.user_id = ? OR ? = 1
         ORDER BY o.created_at ASC, o.name ASC
         "#,
     )
     .bind(&claims.sub)
-    .bind(claims.is_admin)
+    .bind(if claims.is_admin { 1_i64 } else { 0_i64 })
     .fetch_all(&state.pool)
     .await;
 
     match rows {
-        Ok(organizations) => (
-            StatusCode::OK,
-            Json(OrganizationsResponse { organizations }),
-        )
-            .into_response(),
+        Ok(workspaces) => (StatusCode::OK, Json(WorkspacesResponse { workspaces })).into_response(),
         Err(_) => json_error(
             StatusCode::INTERNAL_SERVER_ERROR,
-            "failed to list organizations",
+            "failed to list workspaces",
         ),
     }
 }
 
-pub async fn create_beta_invite(
+pub async fn create_workspace_setup_invite(
     State(state): State<crate::AppState>,
     Extension(claims): Extension<Claims>,
-    Json(payload): Json<CreateBetaInviteRequest>,
+    Json(payload): Json<CreateWorkspaceInviteRequest>,
 ) -> Response {
     if !claims.is_admin {
         return json_error(StatusCode::FORBIDDEN, "admin access required");
@@ -235,7 +231,7 @@ pub async fn create_beta_invite(
         None => None,
     };
     let code = format!("pbi_{}", crate::api::auth::generate_opaque_token());
-    let summary = BetaInviteSummary {
+    let summary = WorkspaceSetupInviteSummary {
         id: Uuid::new_v4().to_string(),
         label: label.to_string(),
         email: payload.email.map(|email| email.trim().to_lowercase()),
@@ -250,7 +246,7 @@ pub async fn create_beta_invite(
 
     let result = sqlx::query(
         r#"
-        INSERT INTO beta_invites (
+        INSERT INTO workspace_setup_invites (
             id, label, code_hash, email, domain, max_uses, used_count, expires_at, created_by, created_at
         ) VALUES (?, ?, ?, ?, ?, ?, 0, ?, ?, ?)
         "#,
@@ -273,15 +269,15 @@ pub async fn create_beta_invite(
                 &state.pool,
                 None,
                 &claims,
-                "beta_invite.created",
-                "beta_invite",
+                "workspace_setup_invite.created",
+                "workspace_setup_invite",
                 &summary.id,
                 serde_json::json!({ "label": summary.label }),
             )
             .await;
             (
                 StatusCode::CREATED,
-                Json(CreateBetaInviteResponse {
+                Json(CreateWorkspaceInviteResponse {
                     invite: summary,
                     invite_code: code,
                 }),
@@ -290,36 +286,36 @@ pub async fn create_beta_invite(
         }
         Err(_) => json_error(
             StatusCode::INTERNAL_SERVER_ERROR,
-            "failed to create beta invite",
+            "failed to create workspace invite",
         ),
     }
 }
 
-pub async fn list_beta_invites(
+pub async fn list_workspace_setup_invites(
     State(state): State<crate::AppState>,
     Extension(claims): Extension<Claims>,
 ) -> Response {
     if !claims.is_admin {
         return json_error(StatusCode::FORBIDDEN, "admin access required");
     }
-    match sqlx::query_as::<_, BetaInviteSummary>(
+    match sqlx::query_as::<_, WorkspaceSetupInviteSummary>(
         r#"
         SELECT id, label, email, domain, max_uses, used_count, expires_at, created_by, created_at, revoked_at
-        FROM beta_invites
+        FROM workspace_setup_invites
         ORDER BY created_at DESC, id DESC
         "#,
     )
     .fetch_all(&state.pool)
     .await
     {
-        Ok(invites) => (StatusCode::OK, Json(BetaInvitesResponse { invites })).into_response(),
-        Err(_) => json_error(StatusCode::INTERNAL_SERVER_ERROR, "failed to list beta invites"),
+        Ok(invites) => (StatusCode::OK, Json(WorkspaceSetupInvitesResponse { invites })).into_response(),
+        Err(_) => json_error(StatusCode::INTERNAL_SERVER_ERROR, "failed to list workspace invites"),
     }
 }
 
-pub async fn beta_signup(
+pub async fn accept_workspace_invite(
     State(state): State<crate::AppState>,
-    Json(payload): Json<BetaSignupRequest>,
+    Json(payload): Json<AcceptWorkspaceInviteRequest>,
 ) -> Response {
     if let Err(message) = crate::api::auth::validate_credentials(&payload.email, &payload.password)
     {
@@ -331,7 +327,7 @@ pub async fn beta_signup(
             return json_error_with_code(
                 StatusCode::BAD_REQUEST,
                 "invite_invalid",
-                "valid beta invite is required",
+                "valid workspace invite is required",
             )
         }
         Err(_) => {
@@ -341,17 +337,17 @@ pub async fn beta_signup(
             )
         }
     };
-    let org_name = match normalize_slug(&payload.organization_name) {
+    let workspace_name = match normalize_slug(&payload.workspace_name) {
         Ok(value) => value,
         Err(message) => return json_error(StatusCode::BAD_REQUEST, message),
     };
-    let display_name = payload.organization_name.trim().to_string();
+    let display_name = payload.workspace_name.trim().to_string();
     let password_hash = match crate::auth::hash::hash_password(&payload.password) {
         Ok(hash) => hash,
         Err(_) => return json_error(StatusCode::INTERNAL_SERVER_ERROR, "failed to hash password"),
     };
     let user_id = Uuid::new_v4().to_string();
-    let org_id = Uuid::new_v4().to_string();
+    let workspace_id = Uuid::new_v4().to_string();
     let email = payload.email.trim().to_lowercase();
 
     let mut tx = match state.pool.begin().await {
@@ -359,7 +355,7 @@ pub async fn beta_signup(
         Err(_) => return json_error(StatusCode::INTERNAL_SERVER_ERROR, "failed to start signup"),
     };
     if !sqlx::query(
-        "UPDATE beta_invites SET used_count = used_count + 1 WHERE id = ? AND revoked_at IS NULL AND used_count < max_uses",
+        "UPDATE workspace_setup_invites SET used_count = used_count + 1 WHERE id = ? AND revoked_at IS NULL AND used_count < max_uses",
     )
     .bind(&invite.id)
     .execute(&mut *tx)
@@ -370,7 +366,7 @@ pub async fn beta_signup(
         return json_error_with_code(
             StatusCode::BAD_REQUEST,
             "invite_invalid",
-            "valid beta invite is required",
+            "valid workspace invite is required",
         );
     }
     let insert_user = sqlx::query(
@@ -389,48 +385,51 @@ pub async fn beta_signup(
         return json_error(StatusCode::CONFLICT, "user already exists");
     }
     let created_at = sqlite_timestamp(Utc::now());
-    let organization = OrganizationSummary {
-        id: org_id.clone(),
-        name: org_name,
+    let workspace = WorkspaceSummary {
+        id: workspace_id.clone(),
+        name: workspace_name,
         display_name,
         created_by: Some(user_id.clone()),
         created_at: created_at.clone(),
         updated_at: created_at.clone(),
-        suspended_at: None,
-        suspended_reason: None,
+        disabled_at: None,
+        disabled_reason: None,
     };
     let org_result = sqlx::query(
         r#"
-        INSERT INTO organizations (id, name, display_name, created_by, created_at, updated_at)
+        INSERT INTO workspaces (id, name, display_name, created_by, created_at, updated_at)
         VALUES (?, ?, ?, ?, ?, ?)
         "#,
     )
-    .bind(&organization.id)
-    .bind(&organization.name)
-    .bind(&organization.display_name)
-    .bind(organization.created_by.as_deref())
-    .bind(&organization.created_at)
-    .bind(&organization.updated_at)
+    .bind(&workspace.id)
+    .bind(&workspace.name)
+    .bind(&workspace.display_name)
+    .bind(workspace.created_by.as_deref())
+    .bind(&workspace.created_at)
+    .bind(&workspace.updated_at)
     .execute(&mut *tx)
     .await;
     if org_result.is_err() {
-        return json_error(StatusCode::CONFLICT, "organization name already exists");
+        return json_error(StatusCode::CONFLICT, "workspace name already exists");
     }
     if sqlx::query(
-        "INSERT INTO organization_plan_assignments (organization_id, plan_id) VALUES (?, ?)",
+        "INSERT INTO workspace_limit_profiles (workspace_id, limit_profile_id) VALUES (?, ?)",
     )
-    .bind(&organization.id)
-    .bind(DEFAULT_PLAN_ID)
+    .bind(&workspace.id)
+    .bind(DEFAULT_LIMIT_PROFILE_ID)
     .execute(&mut *tx)
     .await
     .is_err()
     {
-        return json_error(StatusCode::INTERNAL_SERVER_ERROR, "failed to assign plan");
+        return json_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "failed to assign limit_profile",
+        );
     }
     if sqlx::query(
-        "INSERT INTO organization_members (organization_id, user_id, role) VALUES (?, ?, 'owner')",
+        "INSERT INTO workspace_members (workspace_id, user_id, role) VALUES (?, ?, 'owner')",
     )
-    .bind(&organization.id)
+    .bind(&workspace.id)
     .bind(&user_id)
     .execute(&mut *tx)
     .await
@@ -463,33 +462,33 @@ pub async fn beta_signup(
         Ok(login) => login,
         Err(message) => return json_error(StatusCode::INTERNAL_SERVER_ERROR, message),
     };
-    let membership = OrganizationMember {
-        organization_id: organization.id.clone(),
+    let membership = WorkspaceMember {
+        workspace_id: workspace.id.clone(),
         user_id,
         role: "owner".to_string(),
-        created_at: organization.created_at.clone(),
-        updated_at: organization.created_at.clone(),
+        created_at: workspace.created_at.clone(),
+        updated_at: workspace.created_at.clone(),
     };
     (
         StatusCode::CREATED,
-        Json(BetaSignupResponse {
+        Json(AcceptWorkspaceInviteResponse {
             access_token: login.access_token,
             refresh_token: login.refresh_token,
             token_type: login.token_type,
             expires_at: login.expires_at,
             user,
-            organization,
+            workspace,
             membership,
         }),
     )
         .into_response()
 }
 
-pub async fn set_organization_quota(
+pub async fn set_workspace_resource_limit(
     State(state): State<crate::AppState>,
     Extension(claims): Extension<Claims>,
-    Path(org_id): Path<String>,
-    Json(payload): Json<SetQuotaRequest>,
+    Path(workspace_id): Path<String>,
+    Json(payload): Json<SetResourceLimitRequest>,
 ) -> Response {
     if !claims.is_admin {
         return json_error(StatusCode::FORBIDDEN, "admin access required");
@@ -497,81 +496,87 @@ pub async fn set_organization_quota(
     if payload.limit < 0 {
         return json_error(StatusCode::BAD_REQUEST, "limit must be zero or greater");
     }
-    let quota_key = payload.quota_key.trim();
-    if !is_supported_quota_key(quota_key) {
-        return json_error(StatusCode::BAD_REQUEST, "unsupported quota_key");
+    let resource_key = payload.resource_key.trim();
+    if !is_supported_resource_key(resource_key) {
+        return json_error(StatusCode::BAD_REQUEST, "unsupported resource_key");
     }
     match sqlx::query(
         r#"
-        INSERT INTO usage_counters (organization_id, quota_key, period_start, used, quota_limit)
+        INSERT INTO usage_counters (workspace_id, resource_key, period_start, used, resource_limit)
         VALUES (?, ?, 'all', 0, ?)
-        ON CONFLICT(organization_id, quota_key, period_start)
-        DO UPDATE SET quota_limit = excluded.quota_limit, updated_at = CURRENT_TIMESTAMP
+        ON CONFLICT(workspace_id, resource_key, period_start)
+        DO UPDATE SET resource_limit = excluded.resource_limit, updated_at = CURRENT_TIMESTAMP
         "#,
     )
-    .bind(&org_id)
-    .bind(quota_key)
+    .bind(&workspace_id)
+    .bind(resource_key)
     .bind(payload.limit)
     .execute(&state.pool)
     .await
     {
         Ok(_) => {
-            let response = quota_summary(&state.pool, &org_id, quota_key).await;
+            let response = resource_limit_summary(&state.pool, &workspace_id, resource_key).await;
             match response {
-                Ok(quota) => (StatusCode::OK, Json(quota)).into_response(),
-                Err(_) => json_error(StatusCode::INTERNAL_SERVER_ERROR, "failed to load quota"),
+                Ok(resource_limit) => (StatusCode::OK, Json(resource_limit)).into_response(),
+                Err(_) => json_error(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "failed to load resource_limit",
+                ),
             }
         }
-        Err(_) => json_error(StatusCode::INTERNAL_SERVER_ERROR, "failed to set quota"),
+        Err(_) => json_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "failed to set resource_limit",
+        ),
     }
 }
 
-pub async fn get_organization_usage(
+pub async fn get_workspace_usage(
     State(state): State<crate::AppState>,
     Extension(claims): Extension<Claims>,
-    Path(org_id): Path<String>,
+    Path(workspace_id): Path<String>,
 ) -> Response {
     if !claims.is_admin {
         return json_error(StatusCode::FORBIDDEN, "admin access required");
     }
-    match usage_response(&state.pool, &org_id).await {
+    match usage_response(&state.pool, &workspace_id).await {
         Ok(response) => (StatusCode::OK, Json(response)).into_response(),
         Err(_) => json_error(StatusCode::INTERNAL_SERVER_ERROR, "failed to load usage"),
     }
 }
 
-pub async fn suspend_organization(
+pub async fn disable_workspace(
     State(state): State<crate::AppState>,
     Extension(claims): Extension<Claims>,
-    Path(org_id): Path<String>,
-    Json(payload): Json<SuspendRequest>,
+    Path(workspace_id): Path<String>,
+    Json(payload): Json<DisableRequest>,
 ) -> Response {
-    set_organization_suspension(&state.pool, &claims, &org_id, true, payload.reason).await
+    set_workspace_disabled(&state.pool, &claims, &workspace_id, true, payload.reason).await
 }
 
-pub async fn unsuspend_organization(
+pub async fn enable_workspace(
     State(state): State<crate::AppState>,
     Extension(claims): Extension<Claims>,
-    Path(org_id): Path<String>,
+    Path(workspace_id): Path<String>,
 ) -> Response {
-    set_organization_suspension(&state.pool, &claims, &org_id, false, None).await
+    set_workspace_disabled(&state.pool, &claims, &workspace_id, false, None).await
 }
 
-pub async fn suspend_app(
+pub async fn disable_app(
     State(state): State<crate::AppState>,
     Extension(claims): Extension<Claims>,
     Path(app_id): Path<String>,
-    Json(payload): Json<SuspendRequest>,
+    Json(payload): Json<DisableRequest>,
 ) -> Response {
-    set_app_suspension(&state.pool, &claims, &app_id, true, payload.reason).await
+    set_app_disabled(&state.pool, &claims, &app_id, true, payload.reason).await
 }
 
-pub async fn unsuspend_app(
+pub async fn enable_app(
     State(state): State<crate::AppState>,
     Extension(claims): Extension<Claims>,
     Path(app_id): Path<String>,
 ) -> Response {
-    set_app_suspension(&state.pool, &claims, &app_id, false, None).await
+    set_app_disabled(&state.pool, &claims, &app_id, false, None).await
 }
 
 pub async fn sdk_suspension_response(
@@ -588,82 +593,82 @@ pub async fn sdk_suspension_response(
         ),
     >(
         r#"
-        SELECT a.suspended_at, a.suspended_reason, o.suspended_at, o.suspended_reason
+        SELECT a.disabled_at, a.disabled_reason, o.disabled_at, o.disabled_reason
         FROM apps a
-        JOIN organizations o ON o.id = a.organization_id
+        JOIN workspaces o ON o.id = a.workspace_id
         WHERE a.id = ? AND a.deleted_at IS NULL
         "#,
     )
     .bind(app_id)
     .fetch_optional(pool)
     .await?;
-    let Some((app_suspended_at, app_reason, org_suspended_at, org_reason)) = state else {
+    let Some((app_disabled_at, app_reason, workspace_disabled_at, workspace_reason)) = state else {
         return Ok(None);
     };
-    if org_suspended_at.is_some() {
+    if workspace_disabled_at.is_some() {
         return Ok(Some(json_error_with_code(
             StatusCode::FORBIDDEN,
-            "organization_suspended",
-            org_reason.unwrap_or_else(|| "organization is suspended".to_string()),
+            "workspace_disabled",
+            workspace_reason.unwrap_or_else(|| "workspace is disabled".to_string()),
         )));
     }
-    if app_suspended_at.is_some() {
+    if app_disabled_at.is_some() {
         return Ok(Some(json_error_with_code(
             StatusCode::FORBIDDEN,
-            "app_suspended",
-            app_reason.unwrap_or_else(|| "app is suspended".to_string()),
+            "app_disabled",
+            app_reason.unwrap_or_else(|| "app is disabled".to_string()),
         )));
     }
     Ok(None)
 }
 
-pub async fn require_quota_available(
+pub async fn require_resource_limit_available(
     pool: &sqlx::SqlitePool,
-    organization_id: &str,
-    quota_key: &str,
+    workspace_id: &str,
+    resource_key: &str,
     requested: i64,
 ) -> Result<(), Response> {
-    let quota = quota_summary(pool, organization_id, quota_key)
+    let resource_limit = resource_limit_summary(pool, workspace_id, resource_key)
         .await
         .map_err(|_| {
             json_error(
                 StatusCode::INTERNAL_SERVER_ERROR,
-                "failed to inspect organization quota",
+                "failed to inspect workspace resource_limit",
             )
         })?;
-    if quota.used + requested > quota.limit {
-        return Err(quota_exceeded_response(quota));
+    if resource_limit.used + requested > resource_limit.limit {
+        return Err(resource_limit_exceeded_response(resource_limit));
     }
     Ok(())
 }
 
 pub async fn record_usage(
     pool: &sqlx::SqlitePool,
-    organization_id: &str,
+    workspace_id: &str,
     app_id: Option<&str>,
-    quota_key: &str,
+    resource_key: &str,
     amount: i64,
 ) -> Result<(), sqlx::Error> {
     sqlx::query(
         r#"
-        INSERT INTO usage_counters (organization_id, quota_key, period_start, used)
+        INSERT INTO usage_counters (workspace_id, resource_key, period_start, used)
         VALUES (?, ?, 'all', ?)
-        ON CONFLICT(organization_id, quota_key, period_start)
+        ON CONFLICT(workspace_id, resource_key, period_start)
         DO UPDATE SET used = used + excluded.used, updated_at = CURRENT_TIMESTAMP
         "#,
     )
-    .bind(organization_id)
-    .bind(quota_key)
+    .bind(workspace_id)
+    .bind(resource_key)
     .bind(amount)
     .execute(pool)
     .await?;
     sqlx::query(
-        "INSERT INTO usage_events (id, organization_id, app_id, quota_key, amount) VALUES (?, ?, ?, ?, ?)",
+        "INSERT INTO usage_events (id, workspace_id, app_id, resource_key, amount) VALUES (?, ?, ?, ?, ?)",
     )
     .bind(Uuid::new_v4().to_string())
-    .bind(organization_id)
+    .bind(workspace_id)
     .bind(app_id)
-    .bind(quota_key)
+    .bind(resource_key)
     .bind(amount)
     .execute(pool)
     .await?;
@@ -674,11 +679,11 @@ async fn load_valid_invite(
     pool: &sqlx::SqlitePool,
     code: &str,
     email: &str,
-) -> Result<Option<BetaInviteSummary>, sqlx::Error> {
-    let invite = sqlx::query_as::<_, BetaInviteSummary>(
+) -> Result<Option<WorkspaceSetupInviteSummary>, sqlx::Error> {
+    let invite = sqlx::query_as::<_, WorkspaceSetupInviteSummary>(
         r#"
         SELECT id, label, email, domain, max_uses, used_count, expires_at, created_by, created_at, revoked_at
-        FROM beta_invites
+        FROM workspace_setup_invites
         WHERE code_hash = ?
           AND revoked_at IS NULL
           AND used_count < max_uses
@@ -708,51 +713,51 @@ async fn load_valid_invite(
     Ok(Some(invite))
 }
 
-async fn quota_summary(
+async fn resource_limit_summary(
     pool: &sqlx::SqlitePool,
-    organization_id: &str,
-    quota_key: &str,
-) -> Result<QuotaSummary, sqlx::Error> {
-    let used = if quota_key == "apps" {
+    workspace_id: &str,
+    resource_key: &str,
+) -> Result<ResourceLimitSummary, sqlx::Error> {
+    let used = if resource_key == "apps" {
         sqlx::query_as::<_, (i64,)>(
-            "SELECT COUNT(*) FROM apps WHERE organization_id = ? AND deleted_at IS NULL",
+            "SELECT COUNT(*) FROM apps WHERE workspace_id = ? AND deleted_at IS NULL",
         )
-        .bind(organization_id)
+        .bind(workspace_id)
         .fetch_one(pool)
         .await?
         .0
     } else {
         sqlx::query_as::<_, (Option<i64>,)>(
-            "SELECT used FROM usage_counters WHERE organization_id = ? AND quota_key = ? AND period_start = 'all'",
+            "SELECT used FROM usage_counters WHERE workspace_id = ? AND resource_key = ? AND period_start = 'all'",
         )
-        .bind(organization_id)
-        .bind(quota_key)
+        .bind(workspace_id)
+        .bind(resource_key)
         .fetch_optional(pool)
         .await?
         .and_then(|row| row.0)
         .unwrap_or(0)
     };
     let override_limit = sqlx::query_as::<_, (Option<i64>,)>(
-        "SELECT quota_limit FROM usage_counters WHERE organization_id = ? AND quota_key = ? AND period_start = 'all'",
+        "SELECT resource_limit FROM usage_counters WHERE workspace_id = ? AND resource_key = ? AND period_start = 'all'",
     )
-    .bind(organization_id)
-    .bind(quota_key)
+    .bind(workspace_id)
+    .bind(resource_key)
     .fetch_optional(pool)
     .await?
     .and_then(|row| row.0);
-    Ok(QuotaSummary {
-        quota_key: quota_key.to_string(),
+    Ok(ResourceLimitSummary {
+        resource_key: resource_key.to_string(),
         used,
-        limit: override_limit.unwrap_or_else(|| default_quota_limit(quota_key)),
+        limit: override_limit.unwrap_or_else(|| default_resource_limit(resource_key)),
         reset_at: None,
     })
 }
 
 async fn usage_response(
     pool: &sqlx::SqlitePool,
-    organization_id: &str,
+    workspace_id: &str,
 ) -> Result<UsageResponse, sqlx::Error> {
-    let mut quotas = Vec::new();
+    let mut resource_limits = Vec::new();
     for key in [
         "apps",
         "app_users",
@@ -762,74 +767,72 @@ async fn usage_response(
         "push_sends_month",
         "api_requests_month",
     ] {
-        quotas.push(quota_summary(pool, organization_id, key).await?);
+        resource_limits.push(resource_limit_summary(pool, workspace_id, key).await?);
     }
     Ok(UsageResponse {
-        organization_id: organization_id.to_string(),
-        plan_id: DEFAULT_PLAN_ID.to_string(),
-        quotas,
+        workspace_id: workspace_id.to_string(),
+        limit_profile_id: DEFAULT_LIMIT_PROFILE_ID.to_string(),
+        resource_limits,
     })
 }
 
-fn quota_exceeded_response(quota: QuotaSummary) -> Response {
+fn resource_limit_exceeded_response(resource_limit: ResourceLimitSummary) -> Response {
     (
         StatusCode::FORBIDDEN,
         Json(serde_json::json!({
-            "error": "organization quota exceeded",
-            "code": "quota_exceeded",
-            "quota_key": quota.quota_key,
-            "used": quota.used,
-            "limit": quota.limit,
-            "reset_at": quota.reset_at,
+            "error": "workspace resource_limit exceeded",
+            "code": "resource_limit_exceeded",
+            "resource_key": resource_limit.resource_key,
+            "used": resource_limit.used,
+            "limit": resource_limit.limit,
+            "reset_at": resource_limit.reset_at,
             "request_id": uuid::Uuid::new_v4().to_string(),
         })),
     )
         .into_response()
 }
 
-async fn set_organization_suspension(
+async fn set_workspace_disabled(
     pool: &sqlx::SqlitePool,
     claims: &Claims,
-    org_id: &str,
-    suspend: bool,
+    workspace_id: &str,
+    disable: bool,
     reason: Option<String>,
 ) -> Response {
     if !claims.is_admin {
         return json_error(StatusCode::FORBIDDEN, "admin access required");
     }
-    let result = if suspend {
+    let result = if disable {
         sqlx::query(
-            "UPDATE organizations SET suspended_at = CURRENT_TIMESTAMP, suspended_reason = ? WHERE id = ?",
+            "UPDATE workspaces SET disabled_at = CURRENT_TIMESTAMP, disabled_reason = ? WHERE id = ?",
         )
-        .bind(reason.as_deref().unwrap_or("suspended by platform admin"))
-        .bind(org_id)
+        .bind(reason.as_deref().unwrap_or("disabled by platform admin"))
+        .bind(workspace_id)
         .execute(pool)
         .await
     } else {
-        sqlx::query(
-            "UPDATE organizations SET suspended_at = NULL, suspended_reason = NULL WHERE id = ?",
-        )
-        .bind(org_id)
-        .execute(pool)
-        .await
+        sqlx::query("UPDATE workspaces SET disabled_at = NULL, disabled_reason = NULL WHERE id = ?")
+            .bind(workspace_id)
+            .execute(pool)
+            .await
     };
     match result {
         Ok(result) if result.rows_affected() == 0 => {
-            json_error(StatusCode::NOT_FOUND, "organization not found")
+            json_error(StatusCode::NOT_FOUND, "workspace not found")
         }
         Ok(_) => {
-            let action = if suspend {
-                "organization.suspended"
+            let action = if disable {
+                "workspace.disabled"
             } else {
-                "organization.unsuspended"
+                "workspace.enabled"
             };
             let _ = crate::api::audit::record_audit_log(
                 pool,
                 None,
                 claims,
                 action,
-                "organization",
-                org_id,
+                "workspace",
+                workspace_id,
                 serde_json::json!({ "reason": reason }),
             )
             .await;
@@ -841,30 +844,30 @@ async fn set_organization_suspension(
         }
         Err(_) => json_error(
             StatusCode::INTERNAL_SERVER_ERROR,
-            "failed to update organization suspension",
+            "failed to update workspace disabled state",
         ),
     }
 }
 
-async fn set_app_suspension(
+async fn set_app_disabled(
     pool: &sqlx::SqlitePool,
     claims: &Claims,
     app_id: &str,
-    suspend: bool,
+    disable: bool,
     reason: Option<String>,
 ) -> Response {
     if !claims.is_admin {
         return json_error(StatusCode::FORBIDDEN, "admin access required");
     }
-    let result = if suspend {
-        sqlx::query("UPDATE apps SET suspended_at = CURRENT_TIMESTAMP, suspended_reason = ? WHERE id = ? AND deleted_at IS NULL")
-            .bind(reason.as_deref().unwrap_or("suspended by platform admin"))
+    let result = if disable {
+        sqlx::query("UPDATE apps SET disabled_at = CURRENT_TIMESTAMP, disabled_reason = ? WHERE id = ? AND deleted_at IS NULL")
+            .bind(reason.as_deref().unwrap_or("disabled by platform admin"))
             .bind(app_id)
             .execute(pool)
             .await
     } else {
         sqlx::query(
-            "UPDATE apps SET suspended_at = NULL, suspended_reason = NULL WHERE id = ? AND deleted_at IS NULL",
+            "UPDATE apps SET disabled_at = NULL, disabled_reason = NULL WHERE id = ? AND deleted_at IS NULL",
         )
         .bind(app_id)
         .execute(pool)
@@ -875,10 +878,10 @@ async fn set_app_suspension(
             json_error(StatusCode::NOT_FOUND, "app not found")
         }
         Ok(_) => {
-            let action = if suspend {
-                "app.suspended"
+            let action = if disable {
+                "app.disabled"
             } else {
-                "app.unsuspended"
+                "app.enabled"
             };
             let _ = crate::api::audit::record_audit_log(
                 pool,
@@ -898,13 +901,13 @@ async fn set_app_suspension(
         }
         Err(_) => json_error(
             StatusCode::INTERNAL_SERVER_ERROR,
-            "failed to update app suspension",
+            "failed to update app disabled state",
         ),
     }
 }
 
-fn default_quota_limit(quota_key: &str) -> i64 {
-    match quota_key {
+fn default_resource_limit(resource_key: &str) -> i64 {
+    match resource_key {
         "apps" => 3,
         "app_users" => 10_000,
         "data_rows" => 250_000,
@@ -916,7 +919,7 @@ fn default_quota_limit(quota_key: &str) -> i64 {
     }
 }
 
-fn is_supported_quota_key(value: &str) -> bool {
+fn is_supported_resource_key(value: &str) -> bool {
     matches!(
         value,
         "apps"
@@ -948,10 +951,10 @@ fn normalize_slug(value: &str) -> Result<String, &'static str> {
     }
     let slug = slug.trim_matches('-').to_string();
     if slug.is_empty() {
-        return Err("organization_name is required");
+        return Err("workspace_name is required");
     }
     if slug.len() > 80 {
-        return Err("organization_name must be 80 chars or fewer");
+        return Err("workspace_name must be 80 chars or fewer");
     }
     Ok(slug)
 }

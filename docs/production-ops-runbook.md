@@ -41,25 +41,29 @@ Peanut is pre-public and does not expose legacy global API routes. Production tr
 
 Before opening traffic after a deploy, confirm `/api/ready` reports `"ready": true` and `/api/admin/ops/diagnostics` reports `"ok": true`. These checks verify the default app, app_id columns, app-scoped unique indexes, and duplicate invariant checks.
 
-The embedded console is part of the binary and should be treated as the primary operator surface for public beta. The Functions tab must support create/edit/lint/dry-run/invoke/version rollback/invocation retry, and the Operations tab must expose readiness, diagnostics, metrics, backup download, and pending restore state without requiring ad hoc JSON inspection.
+The embedded console is part of the binary and should be treated as the primary
+self-hosted operator surface. The Functions tab must support
+create/edit/lint/dry-run/invoke/version rollback/invocation retry, and the
+Operations tab must expose readiness, diagnostics, metrics, backup download,
+and pending restore state without requiring ad hoc JSON inspection.
 
 The console supports English and Korean. Operators should verify both locales
 after console changes because the static export is embedded into the Rust
 binary.
 
-## Public Beta Operations
+## Workspace Operations
 
-Run public beta as invite-only:
+Run workspace setup as invite-only:
 
-1. Create a beta invite with `POST /api/admin/beta-invites`.
-2. Have the pilot owner call `POST /api/beta/signup`.
-3. Confirm the organization appears in `GET /api/orgs`.
-4. Confirm `GET /api/orgs/:org_id/usage` returns the `beta_free` plan.
-5. Adjust only the specific pilot quota needed with `POST /api/orgs/:org_id/quotas`.
+1. Create a workspace invite with `POST /api/admin/workspace-invites`.
+2. Have the workspace owner call `POST /api/workspace-invites/accept`.
+3. Confirm the workspace appears in `GET /api/workspaces`.
+4. Confirm `GET /api/workspaces/:workspace_id/resource-usage` returns the `self_hosted_default` limit profile.
+5. Adjust only the specific resource limit needed with `POST /api/workspaces/:workspace_id/resource-limits`.
 
-If a pilot hits `quota_exceeded`, prefer increasing the narrow quota rather than
-raising every limit. Keep the JSON response in incident notes because it includes
-`quota_key`, `used`, and `limit`.
+If a workspace hits `resource_limit_exceeded`, prefer increasing the narrow
+resource limit rather than raising every limit. Keep the JSON response in
+incident notes because it includes `resource_key`, `used`, and `limit`.
 
 ## Migration Failure Rollback
 

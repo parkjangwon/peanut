@@ -54,18 +54,18 @@ async fn bootstrap_admin(app: &axum::Router) -> String {
 }
 
 #[tokio::test]
-async fn beta_signup_requires_a_valid_invite_and_creates_an_org_owner() {
+async fn workspace_invite_accept_requires_a_valid_invite_and_creates_a_workspace_owner() {
     let (app, _dir) = common::make_app_without_seeded_key().await;
     let admin_token = bootstrap_admin(&app).await;
 
     let blocked = json_request(
         &app,
         Method::POST,
-        "/api/beta/signup",
+        "/api/workspace-invites/accept",
         None,
         serde_json::json!({
             "invite_code": "missing",
-            "organization_name": "Acorn Labs",
+            "workspace_name": "Acorn Labs",
             "email": "founder@acorn.test",
             "password": "secret123"
         }),
@@ -78,10 +78,10 @@ async fn beta_signup_requires_a_valid_invite_and_creates_an_org_owner() {
     let invite = json_request(
         &app,
         Method::POST,
-        "/api/admin/beta-invites",
+        "/api/admin/workspace-invites",
         Some(&admin_token),
         serde_json::json!({
-            "label": "pilot",
+            "label": "team setup",
             "max_uses": 1
         }),
     )
@@ -93,11 +93,11 @@ async fn beta_signup_requires_a_valid_invite_and_creates_an_org_owner() {
     let signup = json_request(
         &app,
         Method::POST,
-        "/api/beta/signup",
+        "/api/workspace-invites/accept",
         None,
         serde_json::json!({
             "invite_code": code,
-            "organization_name": "Acorn Labs",
+            "workspace_name": "Acorn Labs",
             "email": "founder@acorn.test",
             "password": "secret123"
         }),
@@ -105,40 +105,44 @@ async fn beta_signup_requires_a_valid_invite_and_creates_an_org_owner() {
     .await;
     assert_eq!(signup.status(), StatusCode::CREATED);
     let body: Value = common::response_json(signup).await;
-    assert_eq!(body["organization"]["name"], "acorn-labs");
+    assert_eq!(body["workspace"]["name"], "acorn-labs");
     assert_eq!(body["membership"]["role"], "owner");
     assert!(body["access_token"].as_str().unwrap().len() > 20);
 }
 
 #[tokio::test]
-async fn quota_exceeded_blocks_app_creation_with_stable_error_code() {
+async fn resource_limit_exceeded_blocks_app_creation_with_stable_error_code() {
     let (app, _dir) = common::make_app_without_seeded_key().await;
     let admin_token = bootstrap_admin(&app).await;
 
-    let orgs = json_request(
+    let workspaces = json_request(
         &app,
         Method::GET,
-        "/api/orgs",
+        "/api/workspaces",
         Some(&admin_token),
         serde_json::json!({}),
     )
     .await;
-    assert_eq!(orgs.status(), StatusCode::OK);
-    let orgs_body: Value = common::response_json(orgs).await;
-    let org_id = orgs_body["organizations"][0]["id"].as_str().unwrap();
+    if workspaces.status() != StatusCode::OK {
+        let body: Value = common::response_json(workspaces).await;
+        panic!("workspace list failed: {body}");
+    }
+    assert_eq!(workspaces.status(), StatusCode::OK);
+    let workspaces_body: Value = common::response_json(workspaces).await;
+    let workspace_id = workspaces_body["workspaces"][0]["id"].as_str().unwrap();
 
-    let quota = json_request(
+    let limit = json_request(
         &app,
         Method::POST,
-        &format!("/api/orgs/{org_id}/quotas"),
+        &format!("/api/workspaces/{workspace_id}/resource-limits"),
         Some(&admin_token),
         serde_json::json!({
-            "quota_key": "apps",
+            "resource_key": "apps",
             "limit": 0
         }),
     )
     .await;
-    assert_eq!(quota.status(), StatusCode::OK);
+    assert_eq!(limit.status(), StatusCode::OK);
 
     let create = json_request(
         &app,
@@ -146,7 +150,7 @@ async fn quota_exceeded_blocks_app_creation_with_stable_error_code() {
         "/api/apps",
         Some(&admin_token),
         serde_json::json!({
-            "organization_id": org_id,
+            "workspace_id": workspace_id,
             "name": "blocked",
             "display_name": "Blocked"
         }),
@@ -154,12 +158,12 @@ async fn quota_exceeded_blocks_app_creation_with_stable_error_code() {
     .await;
     assert_eq!(create.status(), StatusCode::FORBIDDEN);
     let body: Value = common::response_json(create).await;
-    assert_eq!(body["code"], "quota_exceeded");
-    assert_eq!(body["quota_key"], "apps");
+    assert_eq!(body["code"], "resource_limit_exceeded");
+    assert_eq!(body["resource_key"], "apps");
 }
 
 #[tokio::test]
-async fn suspended_organization_blocks_sdk_writes() {
+async fn disabled_workspace_blocks_sdk_writes() {
     let (app, _dir) = common::make_app_without_seeded_key().await;
     let admin_token = bootstrap_admin(&app).await;
 
@@ -178,15 +182,15 @@ async fn suspended_organization_blocks_sdk_writes() {
     let key_body: Value = common::response_json(key_response).await;
     let server_key = key_body["key"].as_str().unwrap();
 
-    let suspend = json_request(
+    let disable = json_request(
         &app,
         Method::POST,
-        "/api/admin/orgs/default/suspend",
+        "/api/admin/workspaces/default/disable",
         Some(&admin_token),
-        serde_json::json!({ "reason": "abuse investigation" }),
+        serde_json::json!({ "reason": "maintenance window" }),
     )
     .await;
-    assert_eq!(suspend.status(), StatusCode::OK);
+    assert_eq!(disable.status(), StatusCode::OK);
 
     let request = Request::builder()
         .method(Method::POST)
@@ -207,5 +211,40 @@ async fn suspended_organization_blocks_sdk_writes() {
     let response = app.clone().oneshot(request).await.unwrap();
     assert_eq!(response.status(), StatusCode::FORBIDDEN);
     let body: Value = common::response_json(response).await;
-    assert_eq!(body["code"], "organization_suspended");
+    assert_eq!(body["code"], "workspace_disabled");
+}
+
+#[tokio::test]
+async fn removed_public_beta_and_org_routes_return_api_404() {
+    let (app, _dir) = common::make_app_without_seeded_key().await;
+    let admin_token = bootstrap_admin(&app).await;
+
+    for (method, uri, token) in [
+        (Method::POST, "/api/beta/signup", None),
+        (
+            Method::POST,
+            "/api/admin/beta-invites",
+            Some(admin_token.as_str()),
+        ),
+        (Method::GET, "/api/orgs", Some(admin_token.as_str())),
+        (
+            Method::POST,
+            "/api/admin/orgs/default/suspend",
+            Some(admin_token.as_str()),
+        ),
+    ] {
+        let response = json_request(
+            &app,
+            method,
+            uri,
+            token,
+            serde_json::json!({ "invite_code": "missing" }),
+        )
+        .await;
+        assert_eq!(
+            response.status(),
+            StatusCode::NOT_FOUND,
+            "{uri} should be removed"
+        );
+    }
 }

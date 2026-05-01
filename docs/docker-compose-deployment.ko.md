@@ -105,7 +105,7 @@ scripts/verify-compose.sh
 PEANUT_ADMIN_TOKEN="$ADMIN_TOKEN" scripts/verify-compose.sh
 ```
 
-검증 스크립트는 readiness, Deno, beta invite/signup, app auth, Data CRUD, Storage CRUD, Functions, Push diagnostics, backup download, restore-pending safety를 확인합니다.
+검증 스크립트는 readiness, Deno, workspace invite setup, app auth, Data CRUD, Storage CRUD, Functions, Push diagnostics, backup download, restore-pending safety를 확인합니다.
 
 ## Reverse Proxy 주의사항
 

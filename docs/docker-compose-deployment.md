@@ -109,7 +109,7 @@ Existing install with an admin token:
 PEANUT_ADMIN_TOKEN="$ADMIN_TOKEN" scripts/verify-compose.sh
 ```
 
-The verifier checks readiness, Deno availability, beta invite/signup, app auth,
+The verifier checks readiness, Deno availability, workspace invite setup, app auth,
 Data CRUD, Storage CRUD, Functions, Push diagnostics, backup download, and
 restore-pending safety.
 

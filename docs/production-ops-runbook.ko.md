@@ -11,18 +11,18 @@
 
 백업 다운로드와 복구 예약은 platform `owner` 역할만 수행해야 합니다.
 
-## 공개 베타 운영
+## Workspace 운영
 
-공개 베타는 invite-only로 운영합니다.
+Workspace 설정은 invite-only로 운영합니다.
 
-1. `POST /api/admin/beta-invites`로 베타 초대를 만듭니다.
-2. 파일럿 owner가 `POST /api/beta/signup`으로 조직을 만듭니다.
-3. `GET /api/orgs`에서 조직이 보이는지 확인합니다.
-4. `GET /api/orgs/:org_id/usage`에서 `beta_free` 플랜과 쿼터를 확인합니다.
-5. 필요한 경우에만 `POST /api/orgs/:org_id/quotas`로 특정 쿼터를 조정합니다.
+1. `POST /api/admin/workspace-invites`로 workspace 초대를 만듭니다.
+2. workspace owner가 `POST /api/workspace-invites/accept`로 workspace를 만듭니다.
+3. `GET /api/workspaces`에서 workspace가 보이는지 확인합니다.
+4. `GET /api/workspaces/:workspace_id/resource-usage`에서 `self_hosted_default` 제한 프로필을 확인합니다.
+5. 필요한 경우에만 `POST /api/workspaces/:workspace_id/resource-limits`로 특정 리소스 제한을 조정합니다.
 
-`quota_exceeded`가 발생하면 모든 제한을 넓히기보다 응답의 `quota_key`,
-`used`, `limit`을 보고 필요한 쿼터만 조정합니다.
+`resource_limit_exceeded`가 발생하면 모든 제한을 넓히기보다 응답의
+`resource_key`, `used`, `limit`을 보고 필요한 리소스 제한만 조정합니다.
 
 ## 콘솔 다국어
 

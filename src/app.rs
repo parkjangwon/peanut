@@ -42,7 +42,10 @@ fn build_bootstrap_routes(state: crate::AppState) -> Router<crate::AppState> {
 
     Router::new()
         .route("/bootstrap/admin", post(crate::api::auth::bootstrap_admin))
-        .route("/beta/signup", post(crate::api::organizations::beta_signup))
+        .route(
+            "/workspace-invites/accept",
+            post(crate::api::workspaces::accept_workspace_invite),
+        )
         .layer(auth_rate_limit)
 }
 
@@ -96,38 +99,38 @@ fn build_protected_routes(
     Router::new()
         .route("/admin/users", get(crate::api::admin::list_users))
         .route("/admin/auth/me", get(crate::api::auth::admin_me))
-        .route("/orgs", get(crate::api::organizations::list_organizations))
+        .route("/workspaces", get(crate::api::workspaces::list_workspaces))
         .route(
-            "/orgs/:org_id/usage",
-            get(crate::api::organizations::get_organization_usage),
+            "/workspaces/:workspace_id/resource-usage",
+            get(crate::api::workspaces::get_workspace_usage),
         )
         .route(
-            "/orgs/:org_id/quotas",
-            post(crate::api::organizations::set_organization_quota),
+            "/workspaces/:workspace_id/resource-limits",
+            post(crate::api::workspaces::set_workspace_resource_limit),
         )
         .route(
-            "/admin/beta-invites",
-            get(crate::api::organizations::list_beta_invites),
+            "/admin/workspace-invites",
+            get(crate::api::workspaces::list_workspace_setup_invites),
         )
         .route(
-            "/admin/beta-invites",
-            post(crate::api::organizations::create_beta_invite),
+            "/admin/workspace-invites",
+            post(crate::api::workspaces::create_workspace_setup_invite),
         )
         .route(
-            "/admin/orgs/:org_id/suspend",
-            post(crate::api::organizations::suspend_organization),
+            "/admin/workspaces/:workspace_id/disable",
+            post(crate::api::workspaces::disable_workspace),
         )
         .route(
-            "/admin/orgs/:org_id/unsuspend",
-            post(crate::api::organizations::unsuspend_organization),
+            "/admin/workspaces/:workspace_id/enable",
+            post(crate::api::workspaces::enable_workspace),
         )
         .route(
-            "/admin/apps/:app_id/suspend",
-            post(crate::api::organizations::suspend_app),
+            "/admin/apps/:app_id/disable",
+            post(crate::api::workspaces::disable_app),
         )
         .route(
-            "/admin/apps/:app_id/unsuspend",
-            post(crate::api::organizations::unsuspend_app),
+            "/admin/apps/:app_id/enable",
+            post(crate::api::workspaces::enable_app),
         )
         .route(
             "/admin/users/:user_id/role",

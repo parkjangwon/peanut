@@ -1,8 +1,9 @@
 # Peanut
 
-Peanut is a self-hosted backend platform core packaged as a Rust service. It is
-designed around app-level isolation: every app gets its own user namespace, data
-tables, storage buckets, functions, push state, keys, and activity feed.
+Peanut is a self-hosted, single-binary BaaS packaged as a Rust service. It is
+designed around workspace and app isolation: every app gets its own user
+namespace, data tables, storage buckets, functions, push state, keys, and
+activity feed.
 
 Peanut is intentionally operationally small:
 
@@ -10,8 +11,8 @@ Peanut is intentionally operationally small:
 - local filesystem object storage
 - JWT auth with server-tracked refresh tokens
 - app-scoped API keys with explicit scopes
-- invite-only public beta signup with organizations and membership records
-- built-in free beta plan quotas and usage counters
+- workspace setup invites and membership records
+- built-in self-hosted resource limits and usage counters
 - platform admin roles: owner, developer, operator, viewer
 - app-scoped Data, Storage, Push, and Functions APIs
 - embedded Next.js admin console served by the Rust binary
@@ -54,7 +55,7 @@ For Docker Compose, create a `.env` with `JWT_SECRET`, then run:
 docker compose up -d
 ```
 
-Detailed setup, verification, first-admin, beta-invite, and deployment steps are
+Detailed setup, verification, first-admin, workspace-invite, and deployment steps are
 in the guide documents below.
 
 ## Core Docs
@@ -68,8 +69,8 @@ in the guide documents below.
 - `docs/app-scoped-api.ko.md`
 - `docs/getting-started.md`
 - `docs/getting-started.ko.md`
-- `docs/quotas-and-limits.md`
-- `docs/quotas-and-limits.ko.md`
+- `docs/resource-limits.md`
+- `docs/resource-limits.ko.md`
 - `docs/auth-client.md`
 - `docs/data-api.md`
 - `docs/production-ops-runbook.md`

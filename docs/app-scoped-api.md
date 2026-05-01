@@ -46,26 +46,26 @@ The bearer token is required for user-scoped operations such as `/auth/me`, clie
 
 Admin APIs for app, key, provider, bucket, table, function, queue, diagnostics, and activity management also live under `/api/apps/:app_id/...` where the operation is app-specific.
 
-## Public Beta Control Plane
+## Workspace Control Plane
 
-Peanut's public beta surface is organization-based and invite-only:
+Peanut is self-hosted only. Workspaces are internal team/project boundaries
+inside one Peanut instance:
 
-- `POST /api/admin/beta-invites` creates a one-time or limited-use invite code.
-- `GET /api/admin/beta-invites` lists beta invites without exposing plaintext invite codes.
-- `POST /api/beta/signup` consumes an invite and creates an organization owner.
-- `GET /api/orgs` lists organizations visible to the signed-in console user.
-- `GET /api/orgs/:org_id/usage` returns the assigned plan and quota usage.
-- `POST /api/orgs/:org_id/quotas` adjusts a quota for pilot operations.
-- `POST /api/admin/orgs/:org_id/suspend|unsuspend` controls organization-level abuse response.
-- `POST /api/admin/apps/:app_id/suspend|unsuspend` controls app-level abuse response.
+- `POST /api/admin/workspace-invites` creates a limited-use setup invite.
+- `GET /api/admin/workspace-invites` lists setup invites without plaintext codes.
+- `POST /api/workspace-invites/accept` consumes an invite and creates a workspace owner.
+- `GET /api/workspaces` lists workspaces visible to the signed-in console user.
+- `GET /api/workspaces/:workspace_id/resource-usage` returns resource usage.
+- `POST /api/workspaces/:workspace_id/resource-limits` adjusts one resource limit.
+- `POST /api/admin/workspaces/:workspace_id/disable|enable` controls workspace access.
+- `POST /api/admin/apps/:app_id/disable|enable` controls app access.
 
-Apps now carry `organization_id`, `suspended_at`, and `suspended_reason`.
-`POST /api/apps` accepts an optional `organization_id`; when omitted, Peanut
-uses the default organization for compatibility with first-install operations.
-App creation is blocked with `code: "quota_exceeded"` when the organization's
-`apps` quota is exhausted.
-SDK requests are blocked with `organization_suspended` or `app_suspended` when
-the corresponding tenant boundary is suspended.
+Apps carry `workspace_id`, `disabled_at`, and `disabled_reason`. `POST /api/apps`
+accepts an optional `workspace_id`; when omitted, Peanut uses the default
+workspace. App creation is blocked with `code: "resource_limit_exceeded"` when
+the workspace's `apps` resource limit is exhausted. SDK requests are blocked
+with `workspace_disabled` or `app_disabled` when the corresponding boundary is
+disabled.
 
 ## Readiness
 

@@ -48,6 +48,14 @@ const FALLBACK_HTML: &str = r#"<!doctype html>
 "#;
 
 pub async fn static_handler(uri: Uri) -> impl IntoResponse {
+    if uri.path().starts_with("/api/") {
+        return Response::builder()
+            .status(StatusCode::NOT_FOUND)
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(Body::from(r#"{"error":"api route not found"}"#))
+            .unwrap();
+    }
+
     let path = asset_path(uri.path());
     if let Some(asset) = ConsoleAssets::get(&path) {
         return asset_response(&path, asset.data.into_owned());
@@ -145,6 +153,21 @@ mod tests {
             .to_str()
             .unwrap()
             .starts_with("text/html"));
+    }
+
+    #[tokio::test]
+    async fn test_static_handler_unknown_api_route_returns_not_found() {
+        let response = static_handler(Uri::from_static("/api/removed"))
+            .await
+            .into_response();
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+        assert!(response
+            .headers()
+            .get(header::CONTENT_TYPE)
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .starts_with("application/json"));
     }
 
     #[tokio::test]

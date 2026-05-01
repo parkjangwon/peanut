@@ -54,28 +54,28 @@ if [[ -z "${ADMIN_TOKEN}" && -n "${BOOTSTRAP_EMAIL}" && -n "${BOOTSTRAP_PASSWORD
 fi
 
 if [[ -n "${ADMIN_TOKEN}" ]]; then
-  echo "==> Verifying invite-only beta organization signup"
-  BETA_SUFFIX="$(date +%s)"
-  BETA_EMAIL="beta-verify-${BETA_SUFFIX}@example.com"
-  curl -fsS -X POST "${BASE_URL}/api/admin/beta-invites" \
+  echo "==> Verifying workspace invite setup"
+  WORKSPACE_SUFFIX="$(date +%s)"
+  WORKSPACE_EMAIL="workspace-verify-${WORKSPACE_SUFFIX}@example.com"
+  curl -fsS -X POST "${BASE_URL}/api/admin/workspace-invites" \
     -H "Authorization: Bearer ${ADMIN_TOKEN}" \
     -H "Content-Type: application/json" \
-    --data '{"label":"compose verifier beta invite","max_uses":1}' \
-    >/tmp/peanut-beta-invite.json
-  BETA_INVITE_CODE="$(json_value invite_code </tmp/peanut-beta-invite.json)"
-  curl -fsS -X POST "${BASE_URL}/api/beta/signup" \
+    --data '{"label":"compose verifier workspace invite","max_uses":1}' \
+    >/tmp/peanut-workspace-invite.json
+  WORKSPACE_INVITE_CODE="$(json_value invite_code </tmp/peanut-workspace-invite.json)"
+  curl -fsS -X POST "${BASE_URL}/api/workspace-invites/accept" \
     -H "Content-Type: application/json" \
-    --data "{\"invite_code\":\"${BETA_INVITE_CODE}\",\"organization_name\":\"Compose Verify ${BETA_SUFFIX}\",\"email\":\"${BETA_EMAIL}\",\"password\":\"password123\"}" \
-    >/tmp/peanut-beta-signup.json
-  BETA_ORG_ID="$(json_value organization.id </tmp/peanut-beta-signup.json)"
-  curl -fsS "${BASE_URL}/api/orgs" \
+    --data "{\"invite_code\":\"${WORKSPACE_INVITE_CODE}\",\"workspace_name\":\"Compose Verify ${WORKSPACE_SUFFIX}\",\"email\":\"${WORKSPACE_EMAIL}\",\"password\":\"password123\"}" \
+    >/tmp/peanut-workspace-accept.json
+  WORKSPACE_ID="$(json_value workspace.id </tmp/peanut-workspace-accept.json)"
+  curl -fsS "${BASE_URL}/api/workspaces" \
     -H "Authorization: Bearer ${ADMIN_TOKEN}" \
-    >/tmp/peanut-orgs.json
-  grep -q "${BETA_ORG_ID}" /tmp/peanut-orgs.json
-  curl -fsS "${BASE_URL}/api/orgs/${BETA_ORG_ID}/usage" \
+    >/tmp/peanut-workspaces.json
+  grep -q "${WORKSPACE_ID}" /tmp/peanut-workspaces.json
+  curl -fsS "${BASE_URL}/api/workspaces/${WORKSPACE_ID}/resource-usage" \
     -H "Authorization: Bearer ${ADMIN_TOKEN}" \
-    >/tmp/peanut-org-usage.json
-  grep -q '"plan_id":"beta_free"' /tmp/peanut-org-usage.json
+    >/tmp/peanut-workspace-usage.json
+  grep -q '"limit_profile_id":"self_hosted_default"' /tmp/peanut-workspace-usage.json
 
   echo "==> Creating app-scoped server key for ${APP_ID}"
   curl -fsS -X POST "${BASE_URL}/api/apps/${APP_ID}/keys" \

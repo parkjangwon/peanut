@@ -32,15 +32,22 @@ Authorization: Bearer <user-access-token>
 
 공개 베타는 조직 기반이며 초대 코드가 필요합니다.
 
-- `POST /api/admin/beta-invites`: 제한 사용 가능한 베타 초대 코드를 만듭니다.
-- `GET /api/admin/beta-invites`: 평문 초대 코드 없이 초대 목록을 조회합니다.
-- `POST /api/beta/signup`: 초대를 소비해 조직 owner를 만듭니다.
-- `GET /api/orgs`: 로그인한 콘솔 사용자가 볼 수 있는 조직을 조회합니다.
-- `GET /api/orgs/:org_id/usage`: 플랜과 쿼터 사용량을 조회합니다.
-- `POST /api/orgs/:org_id/quotas`: 파일럿 운영용 쿼터를 조정합니다.
-- `POST /api/admin/orgs/:org_id/suspend|unsuspend`: 조직 단위 남용 대응 상태를 제어합니다.
-- `POST /api/admin/apps/:app_id/suspend|unsuspend`: 앱 단위 남용 대응 상태를 제어합니다.
+## Workspace 컨트롤 플레인
 
-앱에는 `organization_id`, `suspended_at`, `suspended_reason`이 포함됩니다.
-`POST /api/apps`는 선택적으로 `organization_id`를 받으며, 생략하면 첫 설치 호환을 위해 default organization을 사용합니다. 조직의 `apps` 쿼터가 초과되면 `code: "quota_exceeded"`로 거절합니다.
-조직 또는 앱이 suspend 상태이면 SDK 요청은 `organization_suspended` 또는 `app_suspended` 코드로 거절됩니다.
+Peanut은 셀프호스팅 전용입니다. workspace는 하나의 Peanut 인스턴스 안에서
+내부 팀/프로젝트를 나누는 경계입니다.
+
+- `POST /api/admin/workspace-invites`: 제한 사용 가능한 workspace 설정 초대 코드를 만듭니다.
+- `GET /api/admin/workspace-invites`: 평문 초대 코드 없이 초대 목록을 조회합니다.
+- `POST /api/workspace-invites/accept`: 초대를 소비해 workspace owner를 만듭니다.
+- `GET /api/workspaces`: 로그인한 콘솔 사용자가 볼 수 있는 workspace를 조회합니다.
+- `GET /api/workspaces/:workspace_id/resource-usage`: 리소스 사용량을 조회합니다.
+- `POST /api/workspaces/:workspace_id/resource-limits`: 특정 리소스 제한을 조정합니다.
+- `POST /api/admin/workspaces/:workspace_id/disable|enable`: workspace 접근 상태를 제어합니다.
+- `POST /api/admin/apps/:app_id/disable|enable`: 앱 접근 상태를 제어합니다.
+
+앱에는 `workspace_id`, `disabled_at`, `disabled_reason`이 포함됩니다.
+`POST /api/apps`는 선택적으로 `workspace_id`를 받으며, 생략하면 default
+workspace를 사용합니다. workspace의 `apps` 리소스 제한을 초과하면
+`code: "resource_limit_exceeded"`로 거절합니다. workspace 또는 앱이 disabled
+상태이면 SDK 요청은 `workspace_disabled` 또는 `app_disabled` 코드로 거절됩니다.

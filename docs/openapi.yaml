@@ -113,54 +113,54 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/SessionResponse"
-  /api/admin/beta-invites:
+  /api/admin/workspace-invites:
     get:
-      operationId: listBetaInvites
-      summary: List invite-only beta signup invites
+      operationId: listWorkspaceInvites
+      summary: List workspace setup invites
       responses:
         "200":
-          description: Beta invite summaries.
+          description: Workspace invite summaries.
     post:
-      operationId: createBetaInvite
-      summary: Create an invite-only beta signup code
+      operationId: createWorkspaceInvite
+      summary: Create a workspace setup invite code
       requestBody:
         required: true
         content:
           application/json:
             schema:
-              $ref: "#/components/schemas/CreateBetaInviteRequest"
+              $ref: "#/components/schemas/CreateWorkspaceInviteRequest"
       responses:
         "201":
           description: Invite summary plus one-time plaintext invite code.
-  /api/beta/signup:
+  /api/workspace-invites/accept:
     post:
-      operationId: betaSignup
-      summary: Consume a beta invite and create an organization owner
+      operationId: acceptWorkspaceInvite
+      summary: Consume an invite and create a workspace owner
       security: []
       requestBody:
         required: true
         content:
           application/json:
             schema:
-              $ref: "#/components/schemas/BetaSignupRequest"
+              $ref: "#/components/schemas/AcceptWorkspaceInviteRequest"
       responses:
         "201":
-          description: Organization owner session and membership.
+          description: Workspace owner session and membership.
         "400":
           description: Invalid or exhausted invite.
-  /api/orgs:
+  /api/workspaces:
     get:
-      operationId: listOrganizations
-      summary: List organizations visible to the console user
+      operationId: listWorkspaces
+      summary: List workspaces visible to the console user
       responses:
         "200":
-          description: Organization list.
-  /api/orgs/{org_id}/usage:
+          description: Workspace list.
+  /api/workspaces/{workspace_id}/resource-usage:
     get:
-      operationId: getOrganizationUsage
-      summary: Return organization plan and quota usage
+      operationId: getWorkspaceResourceUsage
+      summary: Return workspace resource usage
       parameters:
-        - name: org_id
+        - name: workspace_id
           in: path
           required: true
           schema:
@@ -168,12 +168,12 @@ paths:
       responses:
         "200":
           description: Usage summary.
-  /api/orgs/{org_id}/quotas:
+  /api/workspaces/{workspace_id}/resource-limits:
     post:
-      operationId: setOrganizationQuota
-      summary: Override one public-beta quota for an organization
+      operationId: setWorkspaceResourceLimit
+      summary: Override one resource limit for a workspace
       parameters:
-        - name: org_id
+        - name: workspace_id
           in: path
           required: true
           schema:
@@ -183,16 +183,16 @@ paths:
         content:
           application/json:
             schema:
-              $ref: "#/components/schemas/SetQuotaRequest"
+              $ref: "#/components/schemas/SetResourceLimitRequest"
       responses:
         "200":
-          description: Updated quota summary.
-  /api/admin/orgs/{org_id}/suspend:
+          description: Updated resource limit summary.
+  /api/admin/workspaces/{workspace_id}/disable:
     post:
-      operationId: suspendOrganization
-      summary: Suspend an organization and block SDK writes
+      operationId: disableWorkspace
+      summary: Disable a workspace and block SDK writes
       parameters:
-        - name: org_id
+        - name: workspace_id
           in: path
           required: true
           schema:
@@ -201,46 +201,46 @@ paths:
         content:
           application/json:
             schema:
-              $ref: "#/components/schemas/SuspendRequest"
+              $ref: "#/components/schemas/DisableRequest"
       responses:
         "200":
-          description: Organization suspended.
-  /api/admin/orgs/{org_id}/unsuspend:
+          description: Workspace disabled.
+  /api/admin/workspaces/{workspace_id}/enable:
     post:
-      operationId: unsuspendOrganization
-      summary: Unsuspend an organization
+      operationId: enableWorkspace
+      summary: Enable a workspace
       parameters:
-        - name: org_id
+        - name: workspace_id
           in: path
           required: true
           schema:
             type: string
       responses:
         "200":
-          description: Organization unsuspended.
-  /api/admin/apps/{app_id}/suspend:
+          description: Workspace enabled.
+  /api/admin/apps/{app_id}/disable:
     post:
-      operationId: suspendApp
-      summary: Suspend an app and block SDK writes
+      operationId: disableApp
+      summary: Disable an app and block SDK writes
       parameters:
         - $ref: "#/components/parameters/AppId"
       requestBody:
         content:
           application/json:
             schema:
-              $ref: "#/components/schemas/SuspendRequest"
+              $ref: "#/components/schemas/DisableRequest"
       responses:
         "200":
-          description: App suspended.
-  /api/admin/apps/{app_id}/unsuspend:
+          description: App disabled.
+  /api/admin/apps/{app_id}/enable:
     post:
-      operationId: unsuspendApp
-      summary: Unsuspend an app
+      operationId: enableApp
+      summary: Enable an app
       parameters:
         - $ref: "#/components/parameters/AppId"
       responses:
         "200":
-          description: App unsuspended.
+          description: App enabled.
   /api/apps:
     get:
       operationId: listApps
@@ -1102,7 +1102,7 @@ components:
         admin_role:
           type: string
           enum: [owner, developer, operator, viewer]
-    CreateBetaInviteRequest:
+    CreateWorkspaceInviteRequest:
       type: object
       required: [label]
       properties:
@@ -1120,19 +1120,19 @@ components:
         expires_in_days:
           type: integer
           minimum: 1
-    BetaSignupRequest:
+    AcceptWorkspaceInviteRequest:
       type: object
-      required: [invite_code, organization_name, email, password]
+      required: [invite_code, workspace_name, email, password]
       properties:
         invite_code:
           type: string
-        organization_name:
+        workspace_name:
           type: string
         email:
           type: string
         password:
           type: string
-    OrganizationSummary:
+    WorkspaceSummary:
       type: object
       required: [id, name, display_name, created_at, updated_at]
       properties:
@@ -1149,33 +1149,33 @@ components:
           type: string
         updated_at:
           type: string
-        suspended_at:
+        disabled_at:
           type: string
           nullable: true
-        suspended_reason:
+        disabled_reason:
           type: string
           nullable: true
-    SetQuotaRequest:
+    SetResourceLimitRequest:
       type: object
-      required: [quota_key, limit]
+      required: [resource_key, limit]
       properties:
-        quota_key:
+        resource_key:
           type: string
           enum: [apps, app_users, data_rows, storage_bytes, function_invocations_month, push_sends_month, api_requests_month]
         limit:
           type: integer
           minimum: 0
-    SuspendRequest:
+    DisableRequest:
       type: object
       properties:
         reason:
           type: string
           nullable: true
-    QuotaSummary:
+    ResourceLimitSummary:
       type: object
-      required: [quota_key, used, limit]
+      required: [resource_key, used, limit]
       properties:
-        quota_key:
+        resource_key:
           type: string
         used:
           type: integer
@@ -1188,7 +1188,7 @@ components:
       type: object
       required: [name, display_name]
       properties:
-        organization_id:
+        workspace_id:
           type: string
           nullable: true
         name:

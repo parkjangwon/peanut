@@ -93,29 +93,30 @@ curl -s -X POST "http://127.0.0.1:3000/api/admin/auth/login" \
   --data '{"email":"owner@example.com","password":"password123"}'
 ```
 
-## Public Beta Flow
+## Workspace Setup Flow
 
-Create a beta invite as a platform admin:
+Create a workspace setup invite as an instance admin:
 
 ```bash
-curl -s -X POST "$BASE_URL/api/admin/beta-invites" \
+curl -s -X POST "$BASE_URL/api/admin/workspace-invites" \
   -H "authorization: Bearer $ADMIN_TOKEN" \
   -H "content-type: application/json" \
-  --data '{"label":"local pilot","max_uses":1}'
+  --data '{"label":"local workspace","max_uses":1}'
 ```
 
-Use the returned `invite_code` to create an organization owner:
+Use the returned `invite_code` to create a workspace owner:
 
 ```bash
-curl -s -X POST "$BASE_URL/api/beta/signup" \
+curl -s -X POST "$BASE_URL/api/workspace-invites/accept" \
   -H "content-type: application/json" \
-  --data '{"invite_code":"pbi_...","organization_name":"Local Pilot","email":"founder@example.com","password":"password123"}'
+  --data '{"invite_code":"pbi_...","workspace_name":"Local Team","email":"owner@example.com","password":"password123"}'
 ```
 
-Every organization receives the `beta_free` plan. Usage and quota inspection:
+Every workspace receives the `self_hosted_default` limit profile. Usage and
+resource limit inspection:
 
 ```bash
-curl -s "$BASE_URL/api/orgs/$ORG_ID/usage" \
+curl -s "$BASE_URL/api/workspaces/$WORKSPACE_ID/resource-usage" \
   -H "authorization: Bearer $ADMIN_TOKEN"
 ```
 
