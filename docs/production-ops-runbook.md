@@ -43,6 +43,24 @@ Before opening traffic after a deploy, confirm `/api/ready` reports `"ready": tr
 
 The embedded console is part of the binary and should be treated as the primary operator surface for public beta. The Functions tab must support create/edit/lint/dry-run/invoke/version rollback/invocation retry, and the Operations tab must expose readiness, diagnostics, metrics, backup download, and pending restore state without requiring ad hoc JSON inspection.
 
+The console supports English and Korean. Operators should verify both locales
+after console changes because the static export is embedded into the Rust
+binary.
+
+## Public Beta Operations
+
+Run public beta as invite-only:
+
+1. Create a beta invite with `POST /api/admin/beta-invites`.
+2. Have the pilot owner call `POST /api/beta/signup`.
+3. Confirm the organization appears in `GET /api/orgs`.
+4. Confirm `GET /api/orgs/:org_id/usage` returns the `beta_free` plan.
+5. Adjust only the specific pilot quota needed with `POST /api/orgs/:org_id/quotas`.
+
+If a pilot hits `quota_exceeded`, prefer increasing the narrow quota rather than
+raising every limit. Keep the JSON response in incident notes because it includes
+`quota_key`, `used`, and `limit`.
+
 ## Migration Failure Rollback
 
 Peanut does not use down migrations in production. Rollback is backup based:

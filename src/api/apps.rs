@@ -16,12 +16,15 @@ const DEFAULT_APP_ID: &str = "default";
 #[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
 pub struct AppSummary {
     pub id: String,
+    pub organization_id: String,
     pub name: String,
     pub display_name: String,
     pub created_by: Option<String>,
     pub created_at: String,
     pub updated_at: String,
     pub deleted_at: Option<String>,
+    pub suspended_at: Option<String>,
+    pub suspended_reason: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -36,6 +39,7 @@ pub struct AppResponse {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CreateAppRequest {
+    pub organization_id: Option<String>,
     pub name: String,
     pub display_name: String,
 }
@@ -55,7 +59,7 @@ pub async fn list_apps(
 
     match sqlx::query_as::<_, AppSummary>(
         r#"
-        SELECT id, name, display_name, created_by, created_at, updated_at, deleted_at
+        SELECT id, organization_id, name, display_name, created_by, created_at, updated_at, deleted_at, suspended_at, suspended_reason
         FROM apps
         WHERE deleted_at IS NULL
         ORDER BY created_at ASC, name ASC
@@ -86,24 +90,42 @@ pub async fn create_app(
         Ok(display_name) => display_name,
         Err(error) => return json_error(StatusCode::BAD_REQUEST, error),
     };
+    let organization_id = payload
+        .organization_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or(crate::api::organizations::DEFAULT_ORGANIZATION_ID)
+        .to_string();
+
+    if let Err(response) =
+        crate::api::organizations::require_quota_available(&state.pool, &organization_id, "apps", 1)
+            .await
+    {
+        return response;
+    }
 
     let app = AppSummary {
         id: Uuid::new_v4().to_string(),
+        organization_id,
         name,
         display_name,
         created_by: Some(claims.sub.clone()),
         created_at: sqlite_timestamp(Utc::now()),
         updated_at: sqlite_timestamp(Utc::now()),
         deleted_at: None,
+        suspended_at: None,
+        suspended_reason: None,
     };
 
     let result = sqlx::query(
         r#"
-        INSERT INTO apps (id, name, display_name, created_by, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?)
+        INSERT INTO apps (id, organization_id, name, display_name, created_by, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
         "#,
     )
     .bind(&app.id)
+    .bind(&app.organization_id)
     .bind(&app.name)
     .bind(&app.display_name)
     .bind(app.created_by.as_deref())
@@ -114,6 +136,14 @@ pub async fn create_app(
 
     match result {
         Ok(_) => {
+            let _ = crate::api::organizations::record_usage(
+                &state.pool,
+                &app.organization_id,
+                Some(&app.id),
+                "apps",
+                1,
+            )
+            .await;
             let _ = crate::api::audit::record_audit_log(
                 &state.pool,
                 Some(&app.id),
@@ -253,7 +283,7 @@ async fn load_app(
 ) -> Result<Option<AppSummary>, sqlx::Error> {
     sqlx::query_as::<_, AppSummary>(
         r#"
-        SELECT id, name, display_name, created_by, created_at, updated_at, deleted_at
+        SELECT id, organization_id, name, display_name, created_by, created_at, updated_at, deleted_at, suspended_at, suspended_reason
         FROM apps
         WHERE id = ? AND deleted_at IS NULL
         "#,
@@ -330,7 +360,7 @@ mod tests {
         let (state, _dir) = test_support::make_test_state().await;
 
         let app: AppSummary = sqlx::query_as(
-            "SELECT id, name, display_name, created_by, created_at, updated_at, deleted_at FROM apps WHERE id = 'default'",
+            "SELECT id, organization_id, name, display_name, created_by, created_at, updated_at, deleted_at, suspended_at, suspended_reason FROM apps WHERE id = 'default'",
         )
         .fetch_one(&state.pool)
         .await
@@ -349,6 +379,7 @@ mod tests {
             State(state.clone()),
             Extension(claims(&admin.user.id, true)),
             Json(CreateAppRequest {
+                organization_id: None,
                 name: "Mobile_App".to_string(),
                 display_name: "Mobile App".to_string(),
             }),
@@ -404,6 +435,7 @@ mod tests {
             State(state),
             Extension(claims("member", false)),
             Json(CreateAppRequest {
+                organization_id: None,
                 name: "blocked".to_string(),
                 display_name: "Blocked".to_string(),
             }),
@@ -411,5 +443,38 @@ mod tests {
         .await;
 
         assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    }
+
+    #[tokio::test]
+    async fn test_org_owner_can_create_app_inside_their_organization() {
+        let (state, _dir) = test_support::make_test_state().await;
+        let admin = register_admin(state.clone()).await;
+        let org_id = crate::api::organizations::ensure_default_organization(&state.pool)
+            .await
+            .unwrap();
+        crate::api::organizations::upsert_organization_member(
+            &state.pool,
+            &org_id,
+            &admin.user.id,
+            "owner",
+        )
+        .await
+        .unwrap();
+
+        let create = create_app(
+            State(state.clone()),
+            Extension(claims(&admin.user.id, true)),
+            Json(CreateAppRequest {
+                organization_id: Some(org_id.clone()),
+                name: "org_app".to_string(),
+                display_name: "Org App".to_string(),
+            }),
+        )
+        .await;
+
+        assert_eq!(create.status(), StatusCode::CREATED);
+        let body: AppResponse = test_support::response_json(create).await;
+        assert_eq!(body.app.organization_id, org_id);
+        assert!(body.app.suspended_at.is_none());
     }
 }

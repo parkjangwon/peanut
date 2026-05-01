@@ -10,6 +10,7 @@ pub mod functions;
 pub mod health;
 pub mod keys;
 pub mod ops;
+pub mod organizations;
 pub mod push;
 pub mod sdk;
 pub mod storage;

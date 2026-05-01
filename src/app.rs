@@ -42,6 +42,7 @@ fn build_bootstrap_routes(state: crate::AppState) -> Router<crate::AppState> {
 
     Router::new()
         .route("/bootstrap/admin", post(crate::api::auth::bootstrap_admin))
+        .route("/beta/signup", post(crate::api::organizations::beta_signup))
         .layer(auth_rate_limit)
 }
 
@@ -95,6 +96,39 @@ fn build_protected_routes(
     Router::new()
         .route("/admin/users", get(crate::api::admin::list_users))
         .route("/admin/auth/me", get(crate::api::auth::admin_me))
+        .route("/orgs", get(crate::api::organizations::list_organizations))
+        .route(
+            "/orgs/:org_id/usage",
+            get(crate::api::organizations::get_organization_usage),
+        )
+        .route(
+            "/orgs/:org_id/quotas",
+            post(crate::api::organizations::set_organization_quota),
+        )
+        .route(
+            "/admin/beta-invites",
+            get(crate::api::organizations::list_beta_invites),
+        )
+        .route(
+            "/admin/beta-invites",
+            post(crate::api::organizations::create_beta_invite),
+        )
+        .route(
+            "/admin/orgs/:org_id/suspend",
+            post(crate::api::organizations::suspend_organization),
+        )
+        .route(
+            "/admin/orgs/:org_id/unsuspend",
+            post(crate::api::organizations::unsuspend_organization),
+        )
+        .route(
+            "/admin/apps/:app_id/suspend",
+            post(crate::api::organizations::suspend_app),
+        )
+        .route(
+            "/admin/apps/:app_id/unsuspend",
+            post(crate::api::organizations::unsuspend_app),
+        )
         .route(
             "/admin/users/:user_id/role",
             patch(crate::api::admin::update_admin_role),

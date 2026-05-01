@@ -50,11 +50,19 @@ fn status_error_code(status: StatusCode) -> String {
 }
 
 pub fn json_error(status: StatusCode, message: impl Into<String>) -> Response {
+    json_error_with_code(status, status_error_code(status), message)
+}
+
+pub fn json_error_with_code(
+    status: StatusCode,
+    code: impl Into<String>,
+    message: impl Into<String>,
+) -> Response {
     (
         status,
         Json(ApiError {
             error: message.into(),
-            code: status_error_code(status),
+            code: code.into(),
             request_id: Some(current_request_id().unwrap_or_else(|| Uuid::new_v4().to_string())),
         }),
     )

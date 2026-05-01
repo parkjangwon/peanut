@@ -194,6 +194,15 @@ mod tests {
             "auth_provider_configs",
             "storage_buckets",
             "audit_logs",
+            "organizations",
+            "organization_members",
+            "app_members",
+            "beta_invites",
+            "organization_invites",
+            "plans",
+            "organization_plan_assignments",
+            "usage_counters",
+            "usage_events",
             "oauth_states",
             "auth_identities",
             "service_tokens",
@@ -220,6 +229,10 @@ mod tests {
             ("function_invocations", "app_id"),
             ("push_subscriptions", "app_id"),
             ("push_queue", "app_id"),
+            ("apps", "organization_id"),
+            ("apps", "suspended_at"),
+            ("apps", "suspended_reason"),
+            ("audit_logs", "organization_id"),
         ] {
             let exists: (i64,) =
                 sqlx::query_as("SELECT COUNT(*) FROM pragma_table_info(?) WHERE name = ?")

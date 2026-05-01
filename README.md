@@ -10,10 +10,13 @@ Peanut is intentionally operationally small:
 - local filesystem object storage
 - JWT auth with server-tracked refresh tokens
 - app-scoped API keys with explicit scopes
+- invite-only public beta signup with organizations and membership records
+- built-in free beta plan quotas and usage counters
 - platform admin roles: owner, developer, operator, viewer
 - app-scoped Data, Storage, Push, and Functions APIs
 - embedded Next.js admin console served by the Rust binary
 - console workbenches for Auth, Data, Storage, Functions, Push, activity, and operations
+- English and Korean console locale switching
 - single-node production runbooks and diagnostics
 
 ## API Shape
@@ -67,6 +70,29 @@ curl -s -X POST "$BASE_URL/api/apps/default/keys" \
 The bootstrapped admin is assigned the `owner` role. Owner-only operations
 include app key create/revoke/rotate, backup download, and restore scheduling.
 
+## Public Beta Organizations
+
+Public beta signup is invite-only. A platform admin can create a beta invite:
+
+```bash
+curl -s -X POST "$BASE_URL/api/admin/beta-invites" \
+  -H "authorization: Bearer $ADMIN_TOKEN" \
+  -H "content-type: application/json" \
+  --data '{"label":"pilot","max_uses":1}'
+```
+
+The one-time `invite_code` can create an organization owner:
+
+```bash
+curl -s -X POST "$BASE_URL/api/beta/signup" \
+  -H "content-type: application/json" \
+  --data '{"invite_code":"pbi_...","organization_name":"Acorn Labs","email":"founder@example.com","password":"password123"}'
+```
+
+Every organization receives the `beta_free` plan by default. Admins can inspect
+usage through `/api/orgs/:org_id/usage` and adjust a quota for pilot operations
+through `/api/orgs/:org_id/quotas`.
+
 Register and login an app user:
 
 ```bash
@@ -85,6 +111,11 @@ curl -s -X POST "$BASE_URL/api/apps/default/auth/login" \
 
 - `docs/openapi.yaml`
 - `docs/app-scoped-api.md`
+- `docs/app-scoped-api.ko.md`
+- `docs/getting-started.md`
+- `docs/getting-started.ko.md`
+- `docs/quotas-and-limits.md`
+- `docs/quotas-and-limits.ko.md`
 - `docs/auth-client.md`
 - `docs/data-api.md`
 - `docs/production-ops-runbook.md`

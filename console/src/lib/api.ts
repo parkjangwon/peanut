@@ -19,12 +19,39 @@ export type LoginResponse = {
 
 export type AppSummary = {
   id: string;
+  organization_id: string;
   name: string;
   display_name: string;
   created_by?: string | null;
   created_at: string;
   updated_at: string;
   deleted_at?: string | null;
+  suspended_at?: string | null;
+  suspended_reason?: string | null;
+};
+
+export type OrganizationSummary = {
+  id: string;
+  name: string;
+  display_name: string;
+  created_by?: string | null;
+  created_at: string;
+  updated_at: string;
+  suspended_at?: string | null;
+  suspended_reason?: string | null;
+};
+
+export type QuotaSummary = {
+  quota_key: string;
+  used: number;
+  limit: number;
+  reset_at?: string | null;
+};
+
+export type UsageSummary = {
+  organization_id: string;
+  plan_id: string;
+  quotas: QuotaSummary[];
 };
 
 export type AppKey = {

@@ -29,6 +29,7 @@ import {
 import type React from "react";
 import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useTranslations } from "next-intl";
 import { toast } from "sonner";
 
 import { PeanutLogo, PeanutMark } from "@/components/console/brand";
@@ -56,6 +57,7 @@ import {
   storedUser,
 } from "@/lib/api";
 import { cn } from "@/lib/utils";
+import { useConsoleLocale } from "@/i18n/provider";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -82,17 +84,17 @@ type View =
   | "activity"
   | "ops";
 
-const navItems: Array<{ view: View; label: string; icon: React.ComponentType<{ className?: string }> }> = [
-  { view: "overview", label: "Overview", icon: LayoutDashboard },
-  { view: "apps", label: "Apps", icon: Boxes },
-  { view: "keys", label: "API Keys", icon: KeyRound },
-  { view: "auth", label: "Auth", icon: Users },
-  { view: "data", label: "Data", icon: Database },
-  { view: "storage", label: "Storage", icon: Archive },
-  { view: "functions", label: "Functions", icon: Code2 },
-  { view: "push", label: "Push", icon: Bell },
-  { view: "activity", label: "Activity", icon: Activity },
-  { view: "ops", label: "Operations", icon: Wrench },
+const navItems: Array<{ view: View; labelKey: string; icon: React.ComponentType<{ className?: string }> }> = [
+  { view: "overview", labelKey: "overview", icon: LayoutDashboard },
+  { view: "apps", labelKey: "apps", icon: Boxes },
+  { view: "keys", labelKey: "keys", icon: KeyRound },
+  { view: "auth", labelKey: "auth", icon: Users },
+  { view: "data", labelKey: "data", icon: Database },
+  { view: "storage", labelKey: "storage", icon: Archive },
+  { view: "functions", labelKey: "functions", icon: Code2 },
+  { view: "push", labelKey: "push", icon: Bell },
+  { view: "activity", labelKey: "activity", icon: Activity },
+  { view: "ops", labelKey: "ops", icon: Wrench },
 ];
 
 export function ConsoleApp() {
@@ -202,6 +204,7 @@ function AuthScreen({
   onModeChange: (value: boolean) => void;
   onAuthenticated: (session: Awaited<ReturnType<typeof loginAdmin>>) => void;
 }) {
+  const t = useTranslations("auth");
   const [email, setEmail] = useState("admin@peanut.local");
   const [password, setPassword] = useState("");
 
@@ -209,14 +212,14 @@ function AuthScreen({
     mutationFn: () =>
       bootstrapping ? bootstrapAdmin(email, password) : loginAdmin(email, password),
     onSuccess: (session) => {
-      toast.success(bootstrapping ? "Admin created" : "Signed in");
+      toast.success(bootstrapping ? t("adminCreated") : t("signedIn"));
       onAuthenticated(session);
     },
     onError: (error: Error & { status?: number }) => {
       if (!bootstrapping && error.status === 401) {
-        toast.error("Invalid credentials");
+        toast.error(t("invalidCredentials"));
       } else if (bootstrapping && error.status === 409) {
-        toast.error("An admin already exists. Sign in instead.");
+        toast.error(t("adminExists"));
         onModeChange(false);
       } else {
         toast.error(error.message);
@@ -231,32 +234,31 @@ function AuthScreen({
           <PeanutLogo />
           <div className="max-w-2xl space-y-5">
             <Badge className="bg-primary/10 text-primary hover:bg-primary/10">
-              Rust single-binary BaaS
+              {t("badge")}
             </Badge>
             <h1 className="text-4xl font-semibold tracking-tight text-foreground sm:text-6xl">
-              Peanut control plane, roasted clean.
+              {t("headline")}
             </h1>
             <p className="max-w-xl text-lg leading-8 text-muted-foreground">
-              Manage apps, auth, data, storage, functions, push, and operations
-              from the console embedded inside the Peanut binary.
+              {t("description")}
             </p>
           </div>
           <div className="grid max-w-2xl grid-cols-1 gap-3 sm:grid-cols-3">
-            <Signal icon={ShieldCheck} label="App isolation" />
-            <Signal icon={Database} label="Data workbench" />
-            <Signal icon={Cloud} label="Ops ready" />
+            <Signal icon={ShieldCheck} label={t("signalIsolation")} />
+            <Signal icon={Database} label={t("signalData")} />
+            <Signal icon={Cloud} label={t("signalOps")} />
           </div>
         </section>
         <section className="rounded-lg border bg-card p-6 shadow-sm">
           <div className="mb-6 flex items-center justify-between gap-4">
             <div>
               <h2 className="text-xl font-semibold">
-                {bootstrapping ? "Create first admin" : "Admin sign in"}
+                {bootstrapping ? t("createFirstAdmin") : t("adminSignIn")}
               </h2>
               <p className="text-sm text-muted-foreground">
                 {bootstrapping
-                  ? "Use this once on a fresh Peanut install."
-                  : "Sign in with a platform admin account."}
+                  ? t("freshInstallHelp")
+                  : t("signInHelp")}
               </p>
             </div>
             <PeanutMark />
@@ -272,18 +274,18 @@ function AuthScreen({
               type="email"
               value={email}
               onChange={(event) => setEmail(event.target.value)}
-              placeholder="admin@example.com"
+              placeholder={t("emailPlaceholder")}
               autoComplete="email"
             />
             <Input
               type="password"
               value={password}
               onChange={(event) => setPassword(event.target.value)}
-              placeholder="At least 8 characters"
+              placeholder={t("passwordPlaceholder")}
               autoComplete={bootstrapping ? "new-password" : "current-password"}
             />
             <Button className="w-full" disabled={mutation.isPending}>
-              {mutation.isPending ? "Working..." : bootstrapping ? "Create admin" : "Sign in"}
+              {mutation.isPending ? t("working") : bootstrapping ? t("createAdmin") : t("signIn")}
             </Button>
           </form>
           <Button
@@ -292,7 +294,7 @@ function AuthScreen({
             className="mt-4 w-full"
             onClick={() => onModeChange(!bootstrapping)}
           >
-            {bootstrapping ? "I already have an admin" : "Set up a fresh install"}
+            {bootstrapping ? t("alreadyHaveAdmin") : t("setUpFresh")}
           </Button>
         </section>
       </div>
@@ -317,6 +319,8 @@ function ConsoleHeader({
   onViewChange: (view: View) => void;
   onLogout: () => void;
 }) {
+  const t = useTranslations("common");
+  const { locale, setLocale } = useConsoleLocale();
   return (
     <header className="sticky top-0 z-20 border-b bg-background/92 backdrop-blur">
       <div className="flex h-16 items-center justify-between gap-3 px-4 sm:px-6 lg:px-8">
@@ -335,7 +339,7 @@ function ConsoleHeader({
           </Sheet>
           <Select value={selectedAppId} onValueChange={onAppChange}>
             <SelectTrigger className="w-[230px] max-w-[58vw] bg-card">
-              <SelectValue placeholder="Select app" />
+              <SelectValue placeholder={t("selectApp")} />
             </SelectTrigger>
             <SelectContent>
               {apps.map((app) => (
@@ -347,9 +351,18 @@ function ConsoleHeader({
           </Select>
         </div>
         <div className="flex items-center gap-3">
+          <Select value={locale} onValueChange={(value) => setLocale(value as "en" | "ko")}>
+            <SelectTrigger className="h-9 w-[116px] bg-card" aria-label={t("language")}>
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="en">{t("english")}</SelectItem>
+              <SelectItem value="ko">{t("korean")}</SelectItem>
+            </SelectContent>
+          </Select>
           <div className="hidden text-right text-sm sm:block">
             <div className="font-medium">{user.email}</div>
-            <div className="text-xs text-muted-foreground">Platform {user.admin_role}</div>
+            <div className="text-xs text-muted-foreground">{t("platformRole", { role: user.admin_role })}</div>
           </div>
           <Button size="icon" variant="outline" onClick={onLogout}>
             <LogOut className="h-4 w-4" />
@@ -361,6 +374,7 @@ function ConsoleHeader({
 }
 
 function ConsoleNav({ view, onChange }: { view: View; onChange: (view: View) => void }) {
+  const t = useTranslations("nav");
   return (
     <nav className="space-y-1">
       {navItems.map((item) => (
@@ -376,7 +390,7 @@ function ConsoleNav({ view, onChange }: { view: View; onChange: (view: View) => 
           )}
         >
           <item.icon className="h-4 w-4" />
-          {item.label}
+          {t(item.labelKey)}
         </button>
       ))}
     </nav>
@@ -394,13 +408,14 @@ function ViewContent({
   appsLoading: boolean;
   selectedApp?: AppSummary;
 }) {
+  const t = useTranslations("apps");
   if (appsLoading) return <Skeleton className="h-80 w-full" />;
   if (!selectedApp && view !== "apps") {
     return (
       <EmptyState
         icon={Boxes}
-        title="Create your first app"
-        description="Peanut isolates Auth, Data, Storage, Functions, and Push by app."
+        title={t("emptyTitle")}
+        description={t("emptyDescription")}
       />
     );
   }
@@ -430,6 +445,8 @@ function ViewContent({
 }
 
 function OverviewView({ apps, app }: { apps: AppSummary[]; app: AppSummary }) {
+  const t = useTranslations("overview");
+  const common = useTranslations("common");
   const ready = useQuery({
     queryKey: ["ready"],
     queryFn: () => apiFetch<Record<string, unknown>>("/api/ready", { auth: false }),
@@ -450,21 +467,21 @@ function OverviewView({ apps, app }: { apps: AppSummary[]; app: AppSummary }) {
 
   return (
     <Section
-      title="Platform overview"
-      description="A quick read on isolation, runtime readiness, and recent movement."
+      title={t("title")}
+      description={t("description")}
       action={<StatusBadge ok={Boolean(ready.data?.ready)} />}
     >
       <div className="grid gap-4 md:grid-cols-4">
-        <Metric label="Apps" value={apps.length} icon={Boxes} />
-        <Metric label="Selected app" value={app.display_name} icon={ShieldCheck} />
-        <Metric label="Ready" value={ready.data?.status?.toString() ?? "checking"} icon={CheckCircle2} />
-        <Metric label="Diagnostics" value={diagnostics.isError ? "needs attention" : "loaded"} icon={Wrench} />
+        <Metric label={t("apps")} value={apps.length} icon={Boxes} />
+        <Metric label={t("selectedApp")} value={app.display_name} icon={ShieldCheck} />
+        <Metric label={t("ready")} value={ready.data?.status?.toString() ?? common("checking")} icon={CheckCircle2} />
+        <Metric label={t("diagnostics")} value={diagnostics.isError ? common("needsAttention") : common("loaded")} icon={Wrench} />
       </div>
       <div className="grid gap-4 lg:grid-cols-[1.2fr_0.8fr]">
-        <Panel title="Recent activity">
+        <Panel title={t("recentActivity")}>
           <ActivityList events={activity.data ?? []} />
         </Panel>
-        <Panel title="Platform signal">
+        <Panel title={t("platformSignal")}>
           <JsonBlock value={diagnostics.data ?? ready.data ?? { status: "loading" }} />
         </Panel>
       </div>
@@ -473,6 +490,8 @@ function OverviewView({ apps, app }: { apps: AppSummary[]; app: AppSummary }) {
 }
 
 function AppsView({ apps }: { apps: AppSummary[] }) {
+  const t = useTranslations("apps");
+  const common = useTranslations("common");
   const queryClient = useQueryClient();
   const [open, setOpen] = useState(false);
   const [name, setName] = useState("");
@@ -484,7 +503,7 @@ function AppsView({ apps }: { apps: AppSummary[] }) {
         body: JSON.stringify({ name, display_name: displayName }),
       }),
     onSuccess: () => {
-      toast.success("App created");
+      toast.success(t("created"));
       setOpen(false);
       setName("");
       setDisplayName("");
@@ -495,26 +514,26 @@ function AppsView({ apps }: { apps: AppSummary[] }) {
 
   return (
     <Section
-      title="Apps"
-      description="Each app has isolated users, tables, buckets, functions, push subscriptions, and keys."
+      title={t("title")}
+      description={t("description")}
       action={
         <Dialog open={open} onOpenChange={setOpen}>
           <DialogTrigger asChild>
-            <Button><Plus className="h-4 w-4" />New app</Button>
+            <Button><Plus className="h-4 w-4" />{common("newApp")}</Button>
           </DialogTrigger>
           <DialogContent>
-            <DialogHeader><DialogTitle>Create app</DialogTitle></DialogHeader>
+            <DialogHeader><DialogTitle>{t("createTitle")}</DialogTitle></DialogHeader>
             <div className="space-y-3">
-              <Input placeholder="name, e.g. mobile-prod" value={name} onChange={(event) => setName(event.target.value)} />
-              <Input placeholder="Display name" value={displayName} onChange={(event) => setDisplayName(event.target.value)} />
-              <Button className="w-full" onClick={() => createApp.mutate()} disabled={createApp.isPending}>Create</Button>
+              <Input placeholder={t("namePlaceholder")} value={name} onChange={(event) => setName(event.target.value)} />
+              <Input placeholder={t("displayNamePlaceholder")} value={displayName} onChange={(event) => setDisplayName(event.target.value)} />
+              <Button className="w-full" onClick={() => createApp.mutate()} disabled={createApp.isPending}>{common("create")}</Button>
             </div>
           </DialogContent>
         </Dialog>
       }
     >
       <DataTableView
-        columns={["Display name", "Name", "ID", "Created"]}
+        columns={[t("columnsDisplay"), t("columnsName"), t("columnsId"), t("columnsCreated")]}
         rows={apps.map((app) => [app.display_name, app.name, app.id, app.created_at])}
       />
     </Section>
@@ -522,40 +541,42 @@ function AppsView({ apps }: { apps: AppSummary[] }) {
 }
 
 function KeysView({ app }: { app: AppSummary }) {
+  const t = useTranslations("keys");
+  const common = useTranslations("common");
   const queryClient = useQueryClient();
   const keys = useQuery({
     queryKey: ["keys", app.id],
     queryFn: async () => (await apiFetch<{ app_keys: Array<Record<string, unknown>> }>(`/api/apps/${app.id}/keys`)).app_keys,
   });
   const [keyType, setKeyType] = useState("server");
-  const [name, setName] = useState("Server key");
+  const [name, setName] = useState(t("serverKey"));
   const createKey = useMutation({
     mutationFn: () =>
       apiFetch<{ key: string }>(`/api/apps/${app.id}/keys`, {
         method: "POST",
         body: JSON.stringify({ name, key_type: keyType }),
-      }),
+    }),
     onSuccess: (response) => {
-      toast.success("Key created. Copy it now: " + response.key.slice(0, 18) + "...");
+      toast.success(t("created", { prefix: response.key.slice(0, 18) }));
       queryClient.invalidateQueries({ queryKey: ["keys", app.id] });
     },
     onError: (error: Error) => toast.error(error.message),
   });
 
   return (
-    <Section title="API keys" description="Create least-privilege keys for clients, servers, and admin automation.">
-      <Panel title="Create key">
+    <Section title={t("title")} description={t("description")}>
+      <Panel title={t("create")}>
         <div className="grid gap-3 md:grid-cols-[1fr_180px_auto]">
           <Input value={name} onChange={(event) => setName(event.target.value)} />
           <Select value={keyType} onValueChange={setKeyType}>
             <SelectTrigger><SelectValue /></SelectTrigger>
             <SelectContent>
-              <SelectItem value="client">Client</SelectItem>
-              <SelectItem value="server">Server</SelectItem>
-              <SelectItem value="admin">Admin</SelectItem>
+              <SelectItem value="client">{t("client")}</SelectItem>
+              <SelectItem value="server">{t("server")}</SelectItem>
+              <SelectItem value="admin">{t("admin")}</SelectItem>
             </SelectContent>
           </Select>
-          <Button onClick={() => createKey.mutate()} disabled={createKey.isPending}>Create</Button>
+          <Button onClick={() => createKey.mutate()} disabled={createKey.isPending}>{common("create")}</Button>
         </div>
       </Panel>
       <DataTableView
@@ -565,8 +586,8 @@ function KeysView({ app }: { app: AppSummary }) {
           String(key.name ?? ""),
           String(key.key_type ?? ""),
           String(key.key_prefix ?? ""),
-          String(key.last_used_at ?? "never"),
-          key.revoked_at ? "revoked" : "active",
+          String(key.last_used_at ?? common("never")),
+          key.revoked_at ? common("revoked") : common("active"),
         ])}
       />
     </Section>

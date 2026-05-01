@@ -46,6 +46,27 @@ The bearer token is required for user-scoped operations such as `/auth/me`, clie
 
 Admin APIs for app, key, provider, bucket, table, function, queue, diagnostics, and activity management also live under `/api/apps/:app_id/...` where the operation is app-specific.
 
+## Public Beta Control Plane
+
+Peanut's public beta surface is organization-based and invite-only:
+
+- `POST /api/admin/beta-invites` creates a one-time or limited-use invite code.
+- `GET /api/admin/beta-invites` lists beta invites without exposing plaintext invite codes.
+- `POST /api/beta/signup` consumes an invite and creates an organization owner.
+- `GET /api/orgs` lists organizations visible to the signed-in console user.
+- `GET /api/orgs/:org_id/usage` returns the assigned plan and quota usage.
+- `POST /api/orgs/:org_id/quotas` adjusts a quota for pilot operations.
+- `POST /api/admin/orgs/:org_id/suspend|unsuspend` controls organization-level abuse response.
+- `POST /api/admin/apps/:app_id/suspend|unsuspend` controls app-level abuse response.
+
+Apps now carry `organization_id`, `suspended_at`, and `suspended_reason`.
+`POST /api/apps` accepts an optional `organization_id`; when omitted, Peanut
+uses the default organization for compatibility with first-install operations.
+App creation is blocked with `code: "quota_exceeded"` when the organization's
+`apps` quota is exhausted.
+SDK requests are blocked with `organization_suspended` or `app_suspended` when
+the corresponding tenant boundary is suspended.
+
 ## Readiness
 
 Use:

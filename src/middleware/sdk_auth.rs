@@ -39,6 +39,18 @@ pub async fn sdk_auth_middleware(
 ) -> Result<Response, Response> {
     let path_app_id = app_id_from_sdk_path(req.uri().path())
         .ok_or_else(|| json_error(StatusCode::BAD_REQUEST, "app_id is required"))?;
+    if let Some(response) =
+        crate::api::organizations::sdk_suspension_response(&state.pool, &path_app_id)
+            .await
+            .map_err(|_| {
+                json_error(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "failed to inspect app suspension",
+                )
+            })?
+    {
+        return Err(response);
+    }
     let raw_key = req
         .headers()
         .get("x-peanut-api-key")

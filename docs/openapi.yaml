@@ -113,6 +113,134 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/SessionResponse"
+  /api/admin/beta-invites:
+    get:
+      operationId: listBetaInvites
+      summary: List invite-only beta signup invites
+      responses:
+        "200":
+          description: Beta invite summaries.
+    post:
+      operationId: createBetaInvite
+      summary: Create an invite-only beta signup code
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateBetaInviteRequest"
+      responses:
+        "201":
+          description: Invite summary plus one-time plaintext invite code.
+  /api/beta/signup:
+    post:
+      operationId: betaSignup
+      summary: Consume a beta invite and create an organization owner
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/BetaSignupRequest"
+      responses:
+        "201":
+          description: Organization owner session and membership.
+        "400":
+          description: Invalid or exhausted invite.
+  /api/orgs:
+    get:
+      operationId: listOrganizations
+      summary: List organizations visible to the console user
+      responses:
+        "200":
+          description: Organization list.
+  /api/orgs/{org_id}/usage:
+    get:
+      operationId: getOrganizationUsage
+      summary: Return organization plan and quota usage
+      parameters:
+        - name: org_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Usage summary.
+  /api/orgs/{org_id}/quotas:
+    post:
+      operationId: setOrganizationQuota
+      summary: Override one public-beta quota for an organization
+      parameters:
+        - name: org_id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SetQuotaRequest"
+      responses:
+        "200":
+          description: Updated quota summary.
+  /api/admin/orgs/{org_id}/suspend:
+    post:
+      operationId: suspendOrganization
+      summary: Suspend an organization and block SDK writes
+      parameters:
+        - name: org_id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SuspendRequest"
+      responses:
+        "200":
+          description: Organization suspended.
+  /api/admin/orgs/{org_id}/unsuspend:
+    post:
+      operationId: unsuspendOrganization
+      summary: Unsuspend an organization
+      parameters:
+        - name: org_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Organization unsuspended.
+  /api/admin/apps/{app_id}/suspend:
+    post:
+      operationId: suspendApp
+      summary: Suspend an app and block SDK writes
+      parameters:
+        - $ref: "#/components/parameters/AppId"
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SuspendRequest"
+      responses:
+        "200":
+          description: App suspended.
+  /api/admin/apps/{app_id}/unsuspend:
+    post:
+      operationId: unsuspendApp
+      summary: Unsuspend an app
+      parameters:
+        - $ref: "#/components/parameters/AppId"
+      responses:
+        "200":
+          description: App unsuspended.
   /api/apps:
     get:
       operationId: listApps
@@ -974,10 +1102,95 @@ components:
         admin_role:
           type: string
           enum: [owner, developer, operator, viewer]
+    CreateBetaInviteRequest:
+      type: object
+      required: [label]
+      properties:
+        label:
+          type: string
+        email:
+          type: string
+          nullable: true
+        domain:
+          type: string
+          nullable: true
+        max_uses:
+          type: integer
+          minimum: 1
+        expires_in_days:
+          type: integer
+          minimum: 1
+    BetaSignupRequest:
+      type: object
+      required: [invite_code, organization_name, email, password]
+      properties:
+        invite_code:
+          type: string
+        organization_name:
+          type: string
+        email:
+          type: string
+        password:
+          type: string
+    OrganizationSummary:
+      type: object
+      required: [id, name, display_name, created_at, updated_at]
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        display_name:
+          type: string
+        created_by:
+          type: string
+          nullable: true
+        created_at:
+          type: string
+        updated_at:
+          type: string
+        suspended_at:
+          type: string
+          nullable: true
+        suspended_reason:
+          type: string
+          nullable: true
+    SetQuotaRequest:
+      type: object
+      required: [quota_key, limit]
+      properties:
+        quota_key:
+          type: string
+          enum: [apps, app_users, data_rows, storage_bytes, function_invocations_month, push_sends_month, api_requests_month]
+        limit:
+          type: integer
+          minimum: 0
+    SuspendRequest:
+      type: object
+      properties:
+        reason:
+          type: string
+          nullable: true
+    QuotaSummary:
+      type: object
+      required: [quota_key, used, limit]
+      properties:
+        quota_key:
+          type: string
+        used:
+          type: integer
+        limit:
+          type: integer
+        reset_at:
+          type: string
+          nullable: true
     CreateAppRequest:
       type: object
       required: [name, display_name]
       properties:
+        organization_id:
+          type: string
+          nullable: true
         name:
           type: string
         display_name:

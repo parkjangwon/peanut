@@ -275,7 +275,7 @@ fn validate_password(password: &str) -> Result<(), String> {
     Ok(())
 }
 
-async fn issue_login_response(
+pub(crate) async fn issue_login_response(
     state: &crate::AppState,
     app_id: &str,
     user: UserSummary,
