@@ -194,6 +194,8 @@ mod tests {
             "auth_provider_configs",
             "storage_buckets",
             "audit_logs",
+            "oauth_states",
+            "auth_identities",
             "service_tokens",
             "function_versions",
             "function_version_secrets",

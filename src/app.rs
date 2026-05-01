@@ -53,6 +53,14 @@ fn build_auth_public_routes(state: crate::AppState) -> Router<crate::AppState> {
             "/apps/:app_id/auth/public-config",
             get(crate::api::auth::get_auth_public_config),
         )
+        .route(
+            "/apps/:app_id/auth/oauth/:provider/start",
+            get(crate::api::auth::oauth_start),
+        )
+        .route(
+            "/apps/:app_id/auth/oauth/:provider/callback",
+            get(crate::api::auth::oauth_callback),
+        )
         .merge(
             Router::new()
                 .route("/login", post(crate::api::auth::login))
