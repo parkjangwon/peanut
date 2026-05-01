@@ -248,7 +248,7 @@ export class PeanutFunctionsClient {
         this.client = client;
     }
     invoke(endpointSlug, input = null, options = {}) {
-        return this.client.request("POST", this.client.appPath(`/functions/endpoints/${encodePath(endpointSlug)}`), {
+        return this.client.request("POST", this.client.appPath(`/function-endpoints/${encodePath(endpointSlug)}`), {
             body: {
                 input,
                 api_key: options.apiKey,

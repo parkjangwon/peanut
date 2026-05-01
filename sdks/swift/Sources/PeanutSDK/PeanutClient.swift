@@ -462,7 +462,7 @@ public final class PeanutFunctionsClient: @unchecked Sendable {
         if let asyncInvoke {
             payload["async_invoke"] = .bool(asyncInvoke)
         }
-        return try await client.requestJSON(PeanutJSONObject.self, method: "POST", path: client.appPath("/functions/endpoints/\(PeanutClient.segment(endpointSlug))"), body: payload)
+        return try await client.requestJSON(PeanutJSONObject.self, method: "POST", path: client.appPath("/function-endpoints/\(PeanutClient.segment(endpointSlug))"), body: payload)
     }
 
     private func requireClient() -> PeanutClient {

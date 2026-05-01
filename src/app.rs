@@ -354,7 +354,7 @@ fn build_sdk_routes(state: crate::AppState, max_upload_bytes: usize) -> Router<c
             post(crate::api::sdk::enqueue_push_message),
         )
         .route(
-            "/apps/:app_id/functions/endpoints/:endpoint_slug",
+            "/apps/:app_id/function-endpoints/:endpoint_slug",
             post(crate::api::sdk::invoke_function),
         )
         .route(

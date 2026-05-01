@@ -761,7 +761,7 @@ paths:
       responses:
         "200":
           description: Dry-run result.
-  /api/apps/{app_id}/functions/endpoints/{endpoint_slug}:
+  /api/apps/{app_id}/function-endpoints/{endpoint_slug}:
     post:
       operationId: invokeAppFunction
       summary: Invoke a function endpoint
@@ -1066,8 +1066,7 @@ components:
         body:
           type: string
         user_id:
-          type: string
-          nullable: true
+          type: [string, "null"]
     UserSummary:
       type: object
       required: [id, app_id, email, is_active, is_admin, admin_role]
@@ -1093,8 +1092,7 @@ components:
           type: string
           description: Must exactly match the backup file name.
         reason:
-          type: string
-          nullable: true
+          type: [string, "null"]
     UpdateAdminRoleRequest:
       type: object
       required: [admin_role]
@@ -1109,11 +1107,9 @@ components:
         label:
           type: string
         email:
-          type: string
-          nullable: true
+          type: [string, "null"]
         domain:
-          type: string
-          nullable: true
+          type: [string, "null"]
         max_uses:
           type: integer
           minimum: 1
@@ -1143,18 +1139,15 @@ components:
         display_name:
           type: string
         created_by:
-          type: string
-          nullable: true
+          type: [string, "null"]
         created_at:
           type: string
         updated_at:
           type: string
         disabled_at:
-          type: string
-          nullable: true
+          type: [string, "null"]
         disabled_reason:
-          type: string
-          nullable: true
+          type: [string, "null"]
     SetResourceLimitRequest:
       type: object
       required: [resource_key, limit]
@@ -1169,8 +1162,7 @@ components:
       type: object
       properties:
         reason:
-          type: string
-          nullable: true
+          type: [string, "null"]
     ResourceLimitSummary:
       type: object
       required: [resource_key, used, limit, period_start, source]
@@ -1184,8 +1176,7 @@ components:
         period_start:
           type: string
         reset_at:
-          type: string
-          nullable: true
+          type: [string, "null"]
         source:
           type: string
           enum: [count, counter]
@@ -1194,8 +1185,7 @@ components:
       required: [name, display_name]
       properties:
         workspace_id:
-          type: string
-          nullable: true
+          type: [string, "null"]
         name:
           type: string
         display_name:

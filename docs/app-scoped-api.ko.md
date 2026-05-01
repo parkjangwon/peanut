@@ -24,7 +24,7 @@ Authorization: Bearer <user-access-token>
 - `GET /api/apps/:app_id/data/tables`
 - `GET|POST /api/apps/:app_id/data/tables/:table/rows`
 - `GET|PUT|DELETE /api/apps/:app_id/storage/buckets/:bucket/objects/*key`
-- `POST /api/apps/:app_id/functions/endpoints/:endpoint_slug`
+- `POST /api/apps/:app_id/function-endpoints/:endpoint_slug`
 - `GET|POST|DELETE /api/apps/:app_id/push/subscriptions`
 - `POST /api/apps/:app_id/push/messages`
 

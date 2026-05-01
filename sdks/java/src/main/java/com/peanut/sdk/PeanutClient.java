@@ -276,7 +276,7 @@ public final class PeanutClient {
             if (asyncInvoke != null) {
                 fields.add("\"async_invoke\":" + asyncInvoke);
             }
-            return requestJson("POST", appPath("/functions/endpoints/" + segment(endpointSlug)), fields.toString());
+            return requestJson("POST", appPath("/function-endpoints/" + segment(endpointSlug)), fields.toString());
         }
     }
 

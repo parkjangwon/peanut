@@ -303,7 +303,7 @@ fn role_rank(role: &str) -> i32 {
 
 pub async fn list_backup_summaries(database_url: &str) -> std::io::Result<Vec<BackupSummary>> {
     let db_path = FsPath::new(crate::db::extract_db_path(database_url));
-    let db_dir = db_path.parent().unwrap_or(FsPath::new("."));
+    let db_dir = backup_dir_for_db_path(db_path);
     let db_filename = db_path
         .file_name()
         .and_then(|value| value.to_str())
@@ -344,7 +344,7 @@ pub async fn backup_summary_from_path(path: PathBuf) -> std::io::Result<BackupSu
 fn resolve_backup_path(database_url: &str, backup_name: &str) -> Result<PathBuf, String> {
     validate_backup_name(backup_name)?;
     let db_path = FsPath::new(crate::db::extract_db_path(database_url));
-    let db_dir = db_path.parent().unwrap_or(FsPath::new("."));
+    let db_dir = backup_dir_for_db_path(db_path);
     Ok(db_dir.join(backup_name))
 }
 
@@ -406,8 +406,15 @@ pub async fn read_restore_pending(
 
 pub fn restore_marker_path(database_url: &str) -> PathBuf {
     let db_path = FsPath::new(crate::db::extract_db_path(database_url));
-    let db_dir = db_path.parent().unwrap_or(FsPath::new("."));
+    let db_dir = backup_dir_for_db_path(db_path);
     db_dir.join(RESTORE_MARKER_FILE)
+}
+
+fn backup_dir_for_db_path(db_path: &FsPath) -> &FsPath {
+    match db_path.parent() {
+        Some(parent) if !parent.as_os_str().is_empty() => parent,
+        _ => FsPath::new("."),
+    }
 }
 
 #[cfg(test)]
@@ -476,6 +483,19 @@ mod tests {
         assert_eq!(body.backups.len(), 1);
         assert!(body.backups[0].name.ends_with(".backup"));
         assert!(body.restore_pending.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_list_backup_summaries_handles_database_in_current_directory() {
+        let dir = tempfile::tempdir().unwrap();
+        let previous = std::env::current_dir().unwrap();
+        std::env::set_current_dir(dir.path()).unwrap();
+
+        let result = list_backup_summaries("sqlite://peanut.db").await;
+
+        std::env::set_current_dir(previous).unwrap();
+        assert!(result.is_ok());
+        assert!(result.unwrap().is_empty());
     }
 
     #[tokio::test]

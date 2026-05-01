@@ -51,10 +51,12 @@ import {
   OpsMetrics,
   PeanutUser,
   refreshAdminSession,
+  UsageSummary,
   SdkStorageObjectSummary,
   StorageBucket,
   storeSession,
   storedUser,
+  WorkspaceSummary,
 } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import { useConsoleLocale } from "@/i18n/provider";
@@ -1024,7 +1026,7 @@ function FunctionsView({ app }: { app: AppSummary }) {
   });
   const invokeFunction = useMutation({
     mutationFn: () =>
-      apiFetch<Record<string, unknown>>(`/api/apps/${app.id}/functions/endpoints/${endpointSlug}`, {
+      apiFetch<Record<string, unknown>>(`/api/apps/${app.id}/function-endpoints/${endpointSlug}`, {
         method: "POST",
         body: JSON.stringify({ input: parseJsonInput(inputJson) }),
       }),
@@ -1341,6 +1343,18 @@ function OpsView() {
     queryKey: ["ops", "backups"],
     queryFn: () => apiFetch<BackupsResponse>("/api/admin/backups"),
   });
+  const workspaceUsage = useQuery({
+    queryKey: ["ops", "workspace-usage"],
+    queryFn: async () => {
+      const response = await apiFetch<{ workspaces: WorkspaceSummary[] }>("/api/workspaces");
+      return Promise.all(
+        response.workspaces.map(async (workspace) => ({
+          workspace,
+          usage: await apiFetch<UsageSummary>(`/api/workspaces/${workspace.id}/resource-usage`),
+        })),
+      );
+    },
+  });
   const createBackup = useMutation({
     mutationFn: () => apiFetch("/api/admin/backups", { method: "POST", body: JSON.stringify({}) }),
     onSuccess: () => {
@@ -1388,22 +1402,38 @@ function OpsView() {
     },
     onError: (error: Error) => toast.error(error.message),
   });
-  const platform = diagnostics.data as { checks?: Array<{ name: string; ok: boolean; message?: string }> } | undefined;
+  const platform = diagnostics.data as { checks?: Array<{ name: string; ok: boolean; message?: string; severity?: string }> } | undefined;
+  const platformChecks = platform?.checks ?? [];
+  const failedChecks = platformChecks.filter((check) => !check.ok).length;
+  const warningChecks = platformChecks.filter((check) => check.ok && check.severity === "warning").length;
+  const usageRows =
+    workspaceUsage.data?.flatMap(({ workspace, usage }) =>
+      usage.resource_limits.map((limit) => [
+        workspace.display_name,
+        limit.resource_key,
+        `${limit.used.toLocaleString()} / ${limit.limit.toLocaleString()}`,
+        `${usagePercent(limit.used, limit.limit)}%`,
+        limit.reset_at ?? limit.period_start,
+      ]),
+    ) ?? [];
   return (
     <Section title="Operations" description="Single-node production checks, backup posture, schema invariants, and service health.">
       <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
         <Metric label="Ready" value={String(ready.data?.status ?? "checking")} icon={CheckCircle2} />
+        <Metric label="Warnings" value={warningChecks} icon={CircleAlert} />
+        <Metric label="Failures" value={failedChecks} icon={Wrench} />
         <Metric label="DB size" value={formatBytes(metrics.data?.database.size_bytes ?? 0)} icon={Database} />
-        <Metric label="Objects" value={metrics.data?.storage.object_count ?? 0} icon={Archive} />
-        <Metric label="Function failures" value={metrics.data?.functions.failures_24h ?? 0} icon={Code2} />
       </div>
       <div className="grid gap-4 xl:grid-cols-[1fr_1.2fr]">
         <Panel title="Platform checks">
           <div className="space-y-2">
-            {(platform?.checks ?? []).map((check) => (
+            {platformChecks.map((check) => (
               <div key={check.name} className="flex items-center justify-between gap-3 rounded-md border px-3 py-2">
                 <div className="min-w-0">
-                  <div className="font-medium">{check.name}</div>
+                  <div className="flex items-center gap-2 font-medium">
+                    {check.name}
+                    {check.severity === "warning" && <Badge variant="secondary">warning</Badge>}
+                  </div>
                   <div className="truncate text-xs text-muted-foreground">{check.message ?? ""}</div>
                 </div>
                 <Badge variant={check.ok ? "default" : "destructive"}>{check.ok ? "OK" : "Fail"}</Badge>
@@ -1426,6 +1456,13 @@ function OpsView() {
           />
         </Panel>
       </div>
+      <Panel title="Workspace resource usage">
+        <DataTableView
+          loading={workspaceUsage.isLoading}
+          columns={["Workspace", "Resource", "Usage", "Percent", "Period / reset"]}
+          rows={usageRows}
+        />
+      </Panel>
       <Panel title="Backups">
         <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
           {backups.data?.restore_pending ? (
@@ -1438,7 +1475,15 @@ function OpsView() {
             <StatusBadge ok />
           )}
           <div className="flex gap-2">
-            <Button variant="outline" onClick={() => clearRestore.mutate()} disabled={!backups.data?.restore_pending || clearRestore.isPending}>
+            <Button
+              variant="outline"
+              onClick={() => {
+                if (window.confirm("Clear the pending restore marker?")) {
+                  clearRestore.mutate();
+                }
+              }}
+              disabled={!backups.data?.restore_pending || clearRestore.isPending}
+            >
               <RotateCcw className="h-4 w-4" /> Clear
             </Button>
             <Button onClick={() => createBackup.mutate()} disabled={createBackup.isPending}>
@@ -1457,7 +1502,15 @@ function OpsView() {
               <Button variant="outline" size="sm" onClick={() => download.mutate(backup.name)}>
                 <Download className="h-4 w-4" /> Download
               </Button>
-              <Button variant="outline" size="sm" onClick={() => scheduleRestore.mutate(backup.name)}>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => {
+                  if (window.confirm(`Schedule restore from ${backup.name} on next restart?`)) {
+                    scheduleRestore.mutate(backup.name);
+                  }
+                }}
+              >
                 <RotateCcw className="h-4 w-4" /> Restore
               </Button>
             </div>,
@@ -1639,6 +1692,11 @@ function formatBytes(value: number) {
     unit += 1;
   }
   return `${size.toFixed(size >= 10 ? 0 : 1)} ${units[unit]}`;
+}
+
+function usagePercent(used: number, limit: number) {
+  if (limit <= 0) return used > 0 ? 100 : 0;
+  return Math.min(100, Math.round((used / limit) * 100));
 }
 
 function Signal({

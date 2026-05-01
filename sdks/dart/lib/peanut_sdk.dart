@@ -429,7 +429,7 @@ class PeanutFunctionsClient {
     }
     return _client.requestJson<JsonMap>(
       'POST',
-      _client.appPath('/functions/endpoints/${_segment(endpointSlug)}'),
+      _client.appPath('/function-endpoints/${_segment(endpointSlug)}'),
       body: payload,
     );
   }

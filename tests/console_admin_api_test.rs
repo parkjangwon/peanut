@@ -294,9 +294,18 @@ async fn console_admin_can_manage_function_workbench_without_app_key() {
     assert_eq!(body["versions"][0]["app_id"], "default");
     assert!(body["versions"][0]["is_active"].as_bool().unwrap());
 
-    let invoke = common::post_json_authed(
+    let legacy_invoke = common::post_json_authed(
         &app,
         "/api/apps/default/functions/endpoints/hello-console",
+        &token,
+        serde_json::json!({ "input": { "from": "console" } }),
+    )
+    .await;
+    assert_eq!(legacy_invoke.status(), StatusCode::NOT_FOUND);
+
+    let invoke = common::post_json_authed(
+        &app,
+        "/api/apps/default/function-endpoints/hello-console",
         &token,
         serde_json::json!({ "input": { "from": "console" } }),
     )

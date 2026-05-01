@@ -333,7 +333,7 @@ export class PeanutFunctionsClient {
   constructor(private readonly client: PeanutClient) {}
 
   invoke(endpointSlug: string, input: JsonValue = null, options: { apiKey?: string; async?: boolean } = {}): Promise<unknown> {
-    return this.client.request("POST", this.client.appPath(`/functions/endpoints/${encodePath(endpointSlug)}`), {
+    return this.client.request("POST", this.client.appPath(`/function-endpoints/${encodePath(endpointSlug)}`), {
       body: {
         input,
         api_key: options.apiKey,

@@ -193,7 +193,7 @@ if [[ -n "${ADMIN_TOKEN}" ]]; then
     --data "{\"name\":\"${SMOKE_FUNCTION}\",\"display_name\":\"Compose Verify\",\"endpoint_slug\":\"${SMOKE_FUNCTION_SLUG}\",\"runtime\":\"javascript\",\"source_code\":\"export default function handler(ctx) { return { ok: true, input: ctx.request.input } }\",\"invoke_policy\":\"authenticated\",\"timeout_ms\":3000,\"enabled\":true}" \
     >/tmp/peanut-function-create.json
   grep -q "\"app_id\":\"${APP_ID}\"" /tmp/peanut-function-create.json
-  curl -fsS -X POST "${BASE_URL}/api/apps/${APP_ID}/functions/endpoints/${SMOKE_FUNCTION_SLUG}" \
+  curl -fsS -X POST "${BASE_URL}/api/apps/${APP_ID}/function-endpoints/${SMOKE_FUNCTION_SLUG}" \
     -H "Authorization: Bearer ${ADMIN_TOKEN}" \
     -H "Content-Type: application/json" \
     --data '{"input":{"from":"compose"}}' \

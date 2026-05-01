@@ -602,6 +602,50 @@ async fn disabled_workspace_blocks_sdk_writes() {
 }
 
 #[tokio::test]
+async fn disabled_app_blocks_sdk_requests() {
+    let (app, _dir) = common::make_app_without_seeded_key().await;
+    let admin_token = bootstrap_admin(&app).await;
+
+    let key_response = json_request(
+        &app,
+        Method::POST,
+        "/api/apps/default/keys",
+        Some(&admin_token),
+        serde_json::json!({
+            "name": "server",
+            "key_type": "server"
+        }),
+    )
+    .await;
+    assert_eq!(key_response.status(), StatusCode::CREATED);
+    let key_body: Value = common::response_json(key_response).await;
+    let server_key = key_body["key"].as_str().unwrap();
+
+    let disable = json_request(
+        &app,
+        Method::POST,
+        "/api/admin/apps/default/disable",
+        Some(&admin_token),
+        serde_json::json!({ "reason": "maintenance window" }),
+    )
+    .await;
+    assert_eq!(disable.status(), StatusCode::OK);
+
+    let response = sdk_json_request(
+        &app,
+        Method::GET,
+        "/api/apps/default/data/tables",
+        server_key,
+        None,
+        serde_json::json!({}),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    let body: Value = common::response_json(response).await;
+    assert_eq!(body["code"], "app_disabled");
+}
+
+#[tokio::test]
 async fn removed_public_beta_and_org_routes_return_api_404() {
     let (app, _dir) = common::make_app_without_seeded_key().await;
     let admin_token = bootstrap_admin(&app).await;
