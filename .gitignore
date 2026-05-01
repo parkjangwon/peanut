@@ -1,4 +1,6 @@
 /target
+console/.next/
+console/node_modules/
 .omx/
 /data/*.db
 /data/*.db-shm

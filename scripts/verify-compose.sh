@@ -86,6 +86,10 @@ if [[ -n "${ADMIN_TOKEN}" ]]; then
     -H "X-Peanut-Api-Key: ${SERVER_KEY}" \
     >/tmp/peanut-auth-events.json
   grep -q '"events"' /tmp/peanut-auth-events.json
+  curl -fsS "${BASE_URL}/api/apps/${APP_ID}/auth/users" \
+    -H "Authorization: Bearer ${ADMIN_TOKEN}" \
+    >/tmp/peanut-auth-users.json
+  grep -q "${VERIFY_EMAIL}" /tmp/peanut-auth-users.json
 
   echo "==> Verifying app-scoped Data CRUD"
   curl -fsS -X POST "${BASE_URL}/api/apps/${APP_ID}/data/tables" \
@@ -99,7 +103,11 @@ if [[ -n "${ADMIN_TOKEN}" ]]; then
     -H "Content-Type: application/json" \
     --data '{"data":{"title":"ok"}}' \
     >/tmp/peanut-data-row.json
-  grep -q '"row"' /tmp/peanut-data-row.json
+  grep -q '"id"' /tmp/peanut-data-row.json
+  curl -fsS "${BASE_URL}/api/apps/${APP_ID}/data/tables/${SMOKE_TABLE}/rows" \
+    -H "Authorization: Bearer ${ADMIN_TOKEN}" \
+    >/tmp/peanut-data-rows-admin.json
+  grep -q '"rows"' /tmp/peanut-data-rows-admin.json
 
   echo "==> Verifying app-scoped Storage CRUD"
   curl -fsS -X POST "${BASE_URL}/api/apps/${APP_ID}/storage/buckets" \
@@ -118,6 +126,10 @@ if [[ -n "${ADMIN_TOKEN}" ]]; then
     -H "X-Peanut-Api-Key: ${SERVER_KEY}" \
     >/tmp/peanut-storage-get.txt
   grep -q 'hello from compose' /tmp/peanut-storage-get.txt
+  curl -fsS "${BASE_URL}/api/apps/${APP_ID}/storage/buckets/${SMOKE_BUCKET}/objects" \
+    -H "Authorization: Bearer ${ADMIN_TOKEN}" \
+    >/tmp/peanut-storage-objects-admin.json
+  grep -q 'hello.txt' /tmp/peanut-storage-objects-admin.json
 
   echo "==> Verifying admin backup API"
   curl -fsS -X POST "${BASE_URL}/api/admin/backups" \
@@ -141,6 +153,12 @@ if [[ -n "${ADMIN_TOKEN}" ]]; then
   curl -fsS "${BASE_URL}/api/apps/${APP_ID}/push/diagnostics" \
     -H "Authorization: Bearer ${ADMIN_TOKEN}" >/tmp/peanut-push-diagnostics.json
   grep -q '"checks"' /tmp/peanut-push-diagnostics.json
+  curl -fsS -X POST "${BASE_URL}/api/apps/${APP_ID}/push/test-message" \
+    -H "Authorization: Bearer ${ADMIN_TOKEN}" \
+    -H "Content-Type: application/json" \
+    --data "{\"title\":\"compose test\",\"body\":\"hello from compose\",\"user_id\":\"${VERIFY_USER_ID}\"}" \
+    >/tmp/peanut-push-test-message.json
+  grep -q 'queued push message' /tmp/peanut-push-test-message.json
 else
   echo "==> Skipping authenticated checks; set PEANUT_ADMIN_TOKEN or PEANUT_BOOTSTRAP_EMAIL/PEANUT_BOOTSTRAP_PASSWORD"
 fi

@@ -9,6 +9,7 @@ use tower_http::cors::{Any, CorsLayer};
 pub fn build_app(state: crate::AppState, config: &crate::config::AppConfig) -> Router {
     let cors_layer = build_cors_layer(&config.auth_allowed_origins);
     let bootstrap_routes = build_bootstrap_routes(state.clone());
+    let admin_auth_routes = build_admin_auth_routes(state.clone());
     let auth_public_routes = build_auth_public_routes(state.clone());
     let protected_routes = build_protected_routes(state.clone(), config.max_upload_bytes);
     let sdk_routes = build_sdk_routes(state.clone(), config.max_upload_bytes);
@@ -17,6 +18,7 @@ pub fn build_app(state: crate::AppState, config: &crate::config::AppConfig) -> R
         .route("/api/health", get(crate::api::health::health_check))
         .route("/api/ready", get(crate::api::health::readiness_check))
         .nest("/api", bootstrap_routes)
+        .nest("/api", admin_auth_routes)
         .nest("/api", auth_public_routes)
         .nest("/api", sdk_routes)
         .nest("/api", protected_routes)
@@ -40,6 +42,22 @@ fn build_bootstrap_routes(state: crate::AppState) -> Router<crate::AppState> {
 
     Router::new()
         .route("/bootstrap/admin", post(crate::api::auth::bootstrap_admin))
+        .layer(auth_rate_limit)
+}
+
+fn build_admin_auth_routes(state: crate::AppState) -> Router<crate::AppState> {
+    let auth_rate_limit = axum::middleware::from_fn_with_state(
+        state.clone(),
+        crate::middleware::rate_limit::auth_rate_limit_middleware,
+    );
+
+    Router::new()
+        .route("/admin/auth/login", post(crate::api::auth::admin_login))
+        .route(
+            "/admin/auth/refresh",
+            post(crate::api::auth::admin_refresh_session),
+        )
+        .route("/admin/auth/logout", post(crate::api::auth::admin_logout))
         .layer(auth_rate_limit)
 }
 
@@ -76,6 +94,7 @@ fn build_protected_routes(
 ) -> Router<crate::AppState> {
     Router::new()
         .route("/admin/users", get(crate::api::admin::list_users))
+        .route("/admin/auth/me", get(crate::api::auth::admin_me))
         .route("/apps", get(crate::api::apps::list_apps))
         .route("/apps", post(crate::api::apps::create_app))
         .route("/apps/:app_id", get(crate::api::apps::get_app))
@@ -102,6 +121,30 @@ fn build_protected_routes(
         .route(
             "/apps/:app_id/auth/providers/:provider/diagnostics",
             get(crate::api::auth::diagnose_auth_provider_config),
+        )
+        .route(
+            "/apps/:app_id/auth/users",
+            get(crate::api::auth::list_admin_users),
+        )
+        .route(
+            "/apps/:app_id/auth/users/:user_id",
+            get(crate::api::auth::get_admin_user),
+        )
+        .route(
+            "/apps/:app_id/auth/users/:user_id/activate",
+            post(crate::api::auth::activate_admin_user),
+        )
+        .route(
+            "/apps/:app_id/auth/users/:user_id/deactivate",
+            post(crate::api::auth::deactivate_admin_user),
+        )
+        .route(
+            "/apps/:app_id/auth/users/:user_id/sessions",
+            get(crate::api::auth::list_admin_user_sessions),
+        )
+        .route(
+            "/apps/:app_id/auth/users/:user_id/sessions/:session_id",
+            delete(crate::api::auth::revoke_admin_user_session),
         )
         .route(
             "/apps/:app_id/storage/buckets",
@@ -309,6 +352,10 @@ fn build_app_admin_push_routes() -> Router<crate::AppState> {
         .route(
             "/apps/:app_id/push/queue/stats",
             get(crate::api::app_scope::list_push_queue_stats),
+        )
+        .route(
+            "/apps/:app_id/push/test-message",
+            post(crate::api::app_scope::enqueue_push_test_message),
         )
 }
 

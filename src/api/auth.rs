@@ -15,12 +15,19 @@ use uuid::Uuid;
 
 use crate::api::common::{json_error, json_message};
 
+mod admin_console;
+mod admin_users;
 mod events;
 mod password;
 mod providers;
 mod public;
 mod sessions;
 
+pub use admin_console::{admin_login, admin_logout, admin_me, admin_refresh_session};
+pub use admin_users::{
+    activate_admin_user, deactivate_admin_user, get_admin_user, list_admin_user_sessions,
+    list_admin_users, revoke_admin_user_session,
+};
 pub use events::list_auth_events;
 pub use password::{change_password, forgot_password_for_app, reset_password_for_app};
 #[cfg(test)]

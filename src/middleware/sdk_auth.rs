@@ -44,10 +44,40 @@ pub async fn sdk_auth_middleware(
         .get("x-peanut-api-key")
         .and_then(|value| value.to_str().ok())
         .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .ok_or_else(|| json_error(StatusCode::UNAUTHORIZED, "missing X-Peanut-Api-Key"))?;
+        .filter(|value| !value.is_empty());
 
-    let authenticated_key = authenticate_sdk_app_key(&state, raw_key).await?;
+    if raw_key.is_none() {
+        let auth_header = req
+            .headers()
+            .get("Authorization")
+            .and_then(|value| value.to_str().ok());
+        let claims =
+            crate::middleware::auth::authenticate_bearer_token(&state, auth_header).await?;
+        if !claims.is_admin {
+            return Err(json_error(StatusCode::FORBIDDEN, "admin access required"));
+        }
+        if claims.app_id != path_app_id && claims.app_id != crate::app_context::DEFAULT_APP_ID {
+            return Err(json_error(
+                StatusCode::FORBIDDEN,
+                "bearer token does not belong to this app",
+            ));
+        }
+
+        let actor = Claims {
+            app_id: path_app_id.clone(),
+            ..claims
+        };
+        let principal = Principal::user_for_app(actor.sub.clone(), path_app_id, true);
+        req.extensions_mut().insert(SdkAuthContext {
+            principal: principal.clone(),
+            user: Some(actor.clone()),
+            actor,
+        });
+        req.extensions_mut().insert(principal);
+        return Ok(next.run(req).await);
+    }
+
+    let authenticated_key = authenticate_sdk_app_key(&state, raw_key.unwrap()).await?;
     enforce_app_key_rate_limit(
         &state,
         &authenticated_key.key_id,

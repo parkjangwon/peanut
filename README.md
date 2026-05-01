@@ -11,6 +11,7 @@ Peanut is intentionally operationally small:
 - JWT auth with server-tracked refresh tokens
 - app-scoped API keys with explicit scopes
 - app-scoped Data, Storage, Push, and Functions APIs
+- embedded Next.js admin console served by the Rust binary
 - single-node production runbooks and diagnostics
 
 ## API Shape
@@ -42,6 +43,15 @@ curl -s -X POST "$BASE_URL/api/bootstrap/admin" \
 
 The response contains an admin access token and refresh token. After any admin
 exists, bootstrap returns `409`.
+
+The embedded admin console uses the same bootstrap flow on a fresh install. Once
+an admin exists, sign in through the console or call:
+
+```bash
+curl -s -X POST "$BASE_URL/api/admin/auth/login" \
+  -H "content-type: application/json" \
+  --data '{"email":"owner@example.com","password":"password123"}'
+```
 
 Create an app key:
 
@@ -84,6 +94,17 @@ Local Rust checks:
 cargo test
 cargo clippy --all-targets --all-features -- -D warnings
 ```
+
+Admin console checks:
+
+```bash
+cd console
+npm run build
+```
+
+`npm run build` exports static assets to `console/out`. Release binaries embed
+that directory and serve the console from `/`, while `/api/...` remains the API
+surface.
 
 Docker Compose smoke:
 

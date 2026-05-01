@@ -52,6 +52,67 @@ paths:
                 $ref: "#/components/schemas/LoginResponse"
         "409":
           $ref: "#/components/responses/Error"
+  /api/admin/auth/login:
+    post:
+      operationId: loginAdmin
+      summary: Login a platform admin for the embedded console
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AuthCredentials"
+      responses:
+        "200":
+          description: Admin access and refresh token pair.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LoginResponse"
+  /api/admin/auth/refresh:
+    post:
+      operationId: refreshAdminSession
+      summary: Rotate an admin console refresh token
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RefreshTokenRequest"
+      responses:
+        "200":
+          description: Rotated admin token pair.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LoginResponse"
+  /api/admin/auth/logout:
+    post:
+      operationId: logoutAdmin
+      summary: Revoke an admin console refresh token
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RefreshTokenRequest"
+      responses:
+        "200":
+          description: Admin session revoked.
+  /api/admin/auth/me:
+    get:
+      operationId: getAdminSession
+      summary: Return the current platform admin
+      responses:
+        "200":
+          description: Current admin session.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SessionResponse"
   /api/apps:
     get:
       operationId: listApps
@@ -274,6 +335,82 @@ paths:
       responses:
         "200":
           description: Auth event list.
+  /api/apps/{app_id}/auth/users:
+    get:
+      operationId: listAdminAppUsers
+      summary: List app users for the admin console
+      parameters:
+        - $ref: "#/components/parameters/AppId"
+      responses:
+        "200":
+          description: App user list.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AdminUsersResponse"
+  /api/apps/{app_id}/auth/users/{user_id}:
+    get:
+      operationId: getAdminAppUser
+      summary: Get an app user for the admin console
+      parameters:
+        - $ref: "#/components/parameters/AppId"
+        - $ref: "#/components/parameters/UserId"
+      responses:
+        "200":
+          description: App user.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SessionResponse"
+  /api/apps/{app_id}/auth/users/{user_id}/activate:
+    post:
+      operationId: activateAdminAppUser
+      summary: Activate an app user
+      parameters:
+        - $ref: "#/components/parameters/AppId"
+        - $ref: "#/components/parameters/UserId"
+      responses:
+        "200":
+          description: User activated.
+  /api/apps/{app_id}/auth/users/{user_id}/deactivate:
+    post:
+      operationId: deactivateAdminAppUser
+      summary: Deactivate an app user
+      parameters:
+        - $ref: "#/components/parameters/AppId"
+        - $ref: "#/components/parameters/UserId"
+      responses:
+        "200":
+          description: User deactivated.
+  /api/apps/{app_id}/auth/users/{user_id}/sessions:
+    get:
+      operationId: listAdminAppUserSessions
+      summary: List app user sessions for the admin console
+      parameters:
+        - $ref: "#/components/parameters/AppId"
+        - $ref: "#/components/parameters/UserId"
+      responses:
+        "200":
+          description: User session list.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SessionsResponse"
+  /api/apps/{app_id}/auth/users/{user_id}/sessions/{session_id}:
+    delete:
+      operationId: revokeAdminAppUserSession
+      summary: Revoke an app user session from the admin console
+      parameters:
+        - $ref: "#/components/parameters/AppId"
+        - $ref: "#/components/parameters/UserId"
+        - name: session_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Session revoked.
   /api/apps/{app_id}/data/tables:
     get:
       operationId: listAppDataTables
@@ -439,6 +576,20 @@ paths:
       responses:
         "201":
           description: Subscription created.
+  /api/apps/{app_id}/push/subscriptions/{subscription_id}:
+    delete:
+      operationId: deletePushSubscription
+      summary: Delete a push subscription
+      parameters:
+        - $ref: "#/components/parameters/AppId"
+        - name: subscription_id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Subscription deleted.
   /api/apps/{app_id}/push/messages:
     post:
       operationId: enqueuePushMessage
@@ -450,6 +601,21 @@ paths:
       responses:
         "201":
           description: Message queued.
+  /api/apps/{app_id}/push/test-message:
+    post:
+      operationId: enqueuePushTestMessage
+      summary: Queue a console test push message
+      parameters:
+        - $ref: "#/components/parameters/AppId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/EnqueuePushRequest"
+      responses:
+        "201":
+          description: Test message queued.
   /api/apps/{app_id}/push/diagnostics:
     get:
       operationId: getAppPushDiagnostics
@@ -520,6 +686,12 @@ components:
       required: true
       schema:
         type: string
+    UserId:
+      name: user_id
+      in: path
+      required: true
+      schema:
+        type: string
   responses:
     Error:
       description: Error response.
@@ -560,6 +732,45 @@ components:
           format: date-time
         user:
           $ref: "#/components/schemas/UserSummary"
+    RefreshTokenRequest:
+      type: object
+      required: [refresh_token]
+      properties:
+        refresh_token:
+          type: string
+    SessionResponse:
+      type: object
+      required: [user]
+      properties:
+        user:
+          $ref: "#/components/schemas/UserSummary"
+    SessionsResponse:
+      type: object
+      required: [sessions]
+      properties:
+        sessions:
+          type: array
+          items:
+            type: object
+    AdminUsersResponse:
+      type: object
+      required: [users]
+      properties:
+        users:
+          type: array
+          items:
+            $ref: "#/components/schemas/UserSummary"
+    EnqueuePushRequest:
+      type: object
+      required: [title, body]
+      properties:
+        title:
+          type: string
+        body:
+          type: string
+        user_id:
+          type: string
+          nullable: true
     UserSummary:
       type: object
       required: [id, app_id, email, is_active, is_admin]

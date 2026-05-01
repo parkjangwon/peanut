@@ -525,3 +525,16 @@ pub async fn list_push_queue_stats(
     };
     crate::api::push::list_queue_stats(State(state), Extension(claims), Query(params)).await
 }
+
+pub async fn enqueue_push_test_message(
+    State(state): State<crate::AppState>,
+    Extension(claims): Extension<Claims>,
+    Path(app_id): Path<String>,
+    Json(payload): Json<crate::api::push::EnqueuePushRequest>,
+) -> Response {
+    let claims = match claims_for_app(claims, app_id) {
+        Ok(claims) => claims,
+        Err(response) => return response,
+    };
+    crate::api::push::enqueue_message(State(state), Extension(claims), Json(payload)).await
+}

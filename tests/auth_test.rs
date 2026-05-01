@@ -32,6 +32,46 @@ async fn bootstrap_admin_returns_token_once_on_fresh_install() {
 }
 
 #[tokio::test]
+async fn admin_console_auth_lifecycle_uses_platform_admin_without_app_key() {
+    let (app, _dir) = common::make_app_without_seeded_key().await;
+
+    let bootstrap = common::post_json(
+        &app,
+        "/api/bootstrap/admin",
+        serde_json::json!({ "email": "console@example.com", "password": "password123" }),
+    )
+    .await;
+    assert_eq!(bootstrap.status(), StatusCode::CREATED);
+
+    let login = common::post_json(
+        &app,
+        "/api/admin/auth/login",
+        serde_json::json!({ "email": "console@example.com", "password": "password123" }),
+    )
+    .await;
+    assert_eq!(login.status(), StatusCode::OK);
+    let body: Value = common::response_json(login).await;
+    let access_token = body["access_token"].as_str().unwrap();
+    let refresh_token = body["refresh_token"].as_str().unwrap();
+
+    let me = common::get_authed(&app, "/api/admin/auth/me", access_token).await;
+    assert_eq!(me.status(), StatusCode::OK);
+    let me_body: Value = common::response_json(me).await;
+    assert_eq!(me_body["user"]["email"], "console@example.com");
+    assert_eq!(me_body["user"]["is_admin"], true);
+
+    let refresh = common::post_json(
+        &app,
+        "/api/admin/auth/refresh",
+        serde_json::json!({ "refresh_token": refresh_token }),
+    )
+    .await;
+    assert_eq!(refresh.status(), StatusCode::OK);
+    let refresh_body: Value = common::response_json(refresh).await;
+    assert!(refresh_body["access_token"].is_string());
+}
+
+#[tokio::test]
 async fn register_and_login_roundtrip() {
     let (app, _dir) = common::make_app().await;
 
