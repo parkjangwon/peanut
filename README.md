@@ -36,80 +36,34 @@ rejects bearer tokens used against a different app path.
 Legacy global paths such as `/api/register`, `/api/login`, `/api/data`,
 `/api/storage`, `/api/s3`, `/api/push`, and `/api/functions` are not mounted.
 
-## First Install
+## Quick Start
 
-Create the first platform admin once:
-
-```bash
-curl -s -X POST "$BASE_URL/api/bootstrap/admin" \
-  -H "content-type: application/json" \
-  --data '{"email":"owner@example.com","password":"password123"}'
-```
-
-The response contains an admin access token and refresh token. After any admin
-exists, bootstrap returns `409`.
-
-The embedded admin console uses the same bootstrap flow on a fresh install. Once
-an admin exists, sign in through the console or call:
+For local development, build the embedded console and run the Rust service:
 
 ```bash
-curl -s -X POST "$BASE_URL/api/admin/auth/login" \
-  -H "content-type: application/json" \
-  --data '{"email":"owner@example.com","password":"password123"}'
+cd console && npm install && npm run build && cd ..
+JWT_SECRET="$(openssl rand -hex 32)" cargo run
 ```
 
-Create an app key:
+Then open `http://127.0.0.1:3000` and create the first platform admin from the
+console.
+
+For Docker Compose, create a `.env` with `JWT_SECRET`, then run:
 
 ```bash
-curl -s -X POST "$BASE_URL/api/apps/default/keys" \
-  -H "authorization: Bearer $ADMIN_TOKEN" \
-  -H "content-type: application/json" \
-  --data '{"name":"server","key_type":"server"}'
+docker compose up -d
 ```
 
-The bootstrapped admin is assigned the `owner` role. Owner-only operations
-include app key create/revoke/rotate, backup download, and restore scheduling.
-
-## Public Beta Organizations
-
-Public beta signup is invite-only. A platform admin can create a beta invite:
-
-```bash
-curl -s -X POST "$BASE_URL/api/admin/beta-invites" \
-  -H "authorization: Bearer $ADMIN_TOKEN" \
-  -H "content-type: application/json" \
-  --data '{"label":"pilot","max_uses":1}'
-```
-
-The one-time `invite_code` can create an organization owner:
-
-```bash
-curl -s -X POST "$BASE_URL/api/beta/signup" \
-  -H "content-type: application/json" \
-  --data '{"invite_code":"pbi_...","organization_name":"Acorn Labs","email":"founder@example.com","password":"password123"}'
-```
-
-Every organization receives the `beta_free` plan by default. Admins can inspect
-usage through `/api/orgs/:org_id/usage` and adjust a quota for pilot operations
-through `/api/orgs/:org_id/quotas`.
-
-Register and login an app user:
-
-```bash
-curl -s -X POST "$BASE_URL/api/apps/default/auth/register" \
-  -H "x-peanut-api-key: $APP_KEY" \
-  -H "content-type: application/json" \
-  --data '{"email":"user@example.com","password":"password123"}'
-
-curl -s -X POST "$BASE_URL/api/apps/default/auth/login" \
-  -H "x-peanut-api-key: $APP_KEY" \
-  -H "content-type: application/json" \
-  --data '{"email":"user@example.com","password":"password123"}'
-```
+Detailed setup, verification, first-admin, beta-invite, and deployment steps are
+in the guide documents below.
 
 ## Core Docs
 
 - `docs/openapi.yaml`
+- `docs/local-development.md`
+- `docs/local-development.ko.md`
+- `docs/docker-compose-deployment.md`
+- `docs/docker-compose-deployment.ko.md`
 - `docs/app-scoped-api.md`
 - `docs/app-scoped-api.ko.md`
 - `docs/getting-started.md`
@@ -121,39 +75,3 @@ curl -s -X POST "$BASE_URL/api/apps/default/auth/login" \
 - `docs/production-ops-runbook.md`
 - `docs/migration-backup-guide.md`
 - `docs/deployment.md`
-
-## Verification
-
-Local Rust checks:
-
-```bash
-cargo test
-cargo clippy --all-targets --all-features -- -D warnings
-```
-
-Admin console checks:
-
-```bash
-cd console
-npm run lint
-npm run build
-```
-
-`npm run build` exports static assets to `console/out`. Release binaries embed
-that directory and serve the console from `/`, while `/api/...` remains the API
-surface.
-
-Docker Compose smoke:
-
-```bash
-PEANUT_BOOTSTRAP_EMAIL=owner@example.com \
-PEANUT_BOOTSTRAP_PASSWORD=password123 \
-scripts/verify-compose.sh
-```
-
-For an existing install, provide `PEANUT_ADMIN_TOKEN` instead of bootstrap
-credentials.
-
-With admin credentials, the compose verifier exercises the public-beta path:
-app auth, Data CRUD, Storage CRUD, Function create/invoke/invocation listing,
-Push diagnostics/test message, backup download, and restore-pending safety.
