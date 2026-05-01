@@ -51,6 +51,65 @@ pub async fn invoke_function(
         auth_claims,
         payload.input,
         payload.async_invoke.unwrap_or(false),
+        crate::app_context::DEFAULT_APP_ID,
+        0,
+        None,
+    )
+    .await
+}
+
+pub async fn invoke_app_function(
+    State(state): State<crate::AppState>,
+    claims: Option<Extension<Claims>>,
+    headers: HeaderMap,
+    Path((app_id, endpoint_slug)): Path<(String, String)>,
+    Json(payload): Json<InvokeFunctionRequest>,
+) -> Response {
+    let function = match load_function_by_app_endpoint(&state.pool, &app_id, &endpoint_slug).await {
+        Ok(function) => function,
+        Err(LoadFunctionError::NotFound) => {
+            return json_error(StatusCode::NOT_FOUND, "function endpoint not found")
+        }
+        Err(LoadFunctionError::QueryFailed) => {
+            return json_error(StatusCode::INTERNAL_SERVER_ERROR, "failed to load function")
+        }
+    };
+
+    if !function.enabled {
+        return json_error(StatusCode::CONFLICT, "function is disabled");
+    }
+    if let Some(response) = require_origin_policy(&function, &headers) {
+        return response;
+    }
+    if let Some(response) = require_invoke_policy(&function, claims.as_ref()) {
+        return response;
+    }
+    if let Some(response) = require_api_key(&function, &headers, payload.api_key.as_deref()) {
+        return response;
+    }
+    if let Some(response) = require_rate_limit(&state.pool, &function).await {
+        return response;
+    }
+
+    let auth_claims = claims.map(|Extension(claims)| claims);
+    let function_version =
+        match load_function_version_by_id(&state.pool, &function.active_version_id).await {
+            Ok(version) => version,
+            Err(_) => {
+                return json_error(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "failed to load active function version",
+                )
+            }
+        };
+    run_function_invocation_with_version(
+        &state,
+        &function,
+        function_version,
+        auth_claims,
+        payload.input,
+        payload.async_invoke.unwrap_or(false),
+        &app_id,
         0,
         None,
     )
@@ -81,6 +140,7 @@ pub(crate) async fn run_function_invocation_with_version(
     claims: Option<Claims>,
     input: Value,
     async_invoke: bool,
+    app_id: &str,
     retry_count: i64,
     parent_invocation_id: Option<String>,
 ) -> Response {
@@ -106,7 +166,7 @@ pub(crate) async fn run_function_invocation_with_version(
     };
 
     if sqlx::query(
-        "INSERT INTO function_invocations (id, function_id, status, request_json, invoke_mode, function_version_id, retry_count, parent_invocation_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO function_invocations (id, function_id, status, request_json, invoke_mode, function_version_id, retry_count, parent_invocation_id, app_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
     )
     .bind(&invocation.invocation_id)
     .bind(&function.id)
@@ -116,6 +176,7 @@ pub(crate) async fn run_function_invocation_with_version(
     .bind(&invocation.function_version.id)
     .bind(invocation.retry_count)
     .bind(invocation.parent_invocation_id.as_deref())
+    .bind(app_id)
     .execute(&state.pool)
     .await
     .is_err()
@@ -352,6 +413,22 @@ fn require_origin_policy(function: &FunctionDetail, headers: &HeaderMap) -> Opti
             "origin header is required for this function",
         )),
     }
+}
+
+async fn load_function_by_app_endpoint(
+    pool: &sqlx::SqlitePool,
+    app_id: &str,
+    endpoint_slug: &str,
+) -> Result<FunctionDetail, LoadFunctionError> {
+    sqlx::query_as::<_, FunctionDetail>(
+        "SELECT id, name, display_name, endpoint_slug, runtime, source_code, invoke_policy, env_json, api_key_hash, allowed_origins_json, rate_limit_per_minute, CASE WHEN api_key_hash IS NULL OR api_key_hash = '' THEN 0 ELSE 1 END AS api_key_present, timeout_ms, enabled, active_version_number, active_version_id, secret_key_count, created_by, updated_by, created_at, updated_at FROM functions WHERE app_id = ? AND endpoint_slug = ?",
+    )
+    .bind(app_id)
+    .bind(endpoint_slug)
+    .fetch_optional(pool)
+    .await
+    .map_err(|_| LoadFunctionError::QueryFailed)?
+    .ok_or(LoadFunctionError::NotFound)
 }
 
 fn require_api_key(

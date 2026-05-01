@@ -16,6 +16,7 @@ use crate::{
 pub struct SdkAuthContext {
     pub principal: Principal,
     pub user: Option<Claims>,
+    pub actor: Claims,
 }
 
 #[derive(Debug, Clone, FromRow)]
@@ -25,6 +26,7 @@ struct StoredSdkAppKey {
     key_type: String,
     scopes_json: String,
     created_by: String,
+    created_by_is_admin: bool,
     rate_limit_per_minute: Option<i64>,
 }
 
@@ -74,6 +76,7 @@ pub async fn sdk_auth_middleware(
     req.extensions_mut().insert(SdkAuthContext {
         principal: principal.clone(),
         user,
+        actor: authenticated_key.actor,
     });
     req.extensions_mut().insert(principal);
     Ok(next.run(req).await)
@@ -82,6 +85,7 @@ pub async fn sdk_auth_middleware(
 struct AuthenticatedSdkAppKey {
     key_id: String,
     principal: Principal,
+    actor: Claims,
     rate_limit: u32,
 }
 
@@ -92,11 +96,19 @@ async fn authenticate_sdk_app_key(
     let token_hash = crate::api::auth::hash_opaque_token(raw_key);
     let stored = sqlx::query_as::<_, StoredSdkAppKey>(
         r#"
-        SELECT id, app_id, key_type, scopes_json, created_by, rate_limit_per_minute
-        FROM app_keys
-        WHERE key_hash = ?
-          AND revoked_at IS NULL
-          AND (expires_at IS NULL OR expires_at > CURRENT_TIMESTAMP)
+        SELECT
+            ak.id,
+            ak.app_id,
+            ak.key_type,
+            ak.scopes_json,
+            ak.created_by,
+            COALESCE(u.is_admin, FALSE) AS created_by_is_admin,
+            ak.rate_limit_per_minute
+        FROM app_keys ak
+        LEFT JOIN users u ON u.id = ak.created_by
+        WHERE ak.key_hash = ?
+          AND ak.revoked_at IS NULL
+          AND (ak.expires_at IS NULL OR ak.expires_at > CURRENT_TIMESTAMP)
         "#,
     )
     .bind(&token_hash)
@@ -119,16 +131,21 @@ async fn authenticate_sdk_app_key(
         .await;
 
     let key_id = stored.id.clone();
+    let actor = Claims {
+        sub: stored.created_by.clone(),
+        exp: i64::MAX,
+        is_admin: stored.created_by_is_admin || is_admin,
+    };
     let rate_limit = stored
         .rate_limit_per_minute
         .and_then(|value| u32::try_from(value).ok())
         .filter(|value| *value > 0)
         .unwrap_or(DEFAULT_SDK_KEY_RATE_LIMIT_PER_MINUTE);
     let principal = Principal::app_key(stored.id, stored.app_id, is_admin, scopes);
-    let _ = stored.created_by;
     Ok(AuthenticatedSdkAppKey {
         key_id,
         principal,
+        actor,
         rate_limit,
     })
 }

@@ -336,6 +336,11 @@ mod tests {
                 scopes.contains(&"admin:all"),
                 scopes.into_iter().map(str::to_string).collect(),
             ),
+            actor: crate::auth::jwt::Claims {
+                sub: "admin_1".to_string(),
+                exp: 9999999999,
+                is_admin: true,
+            },
             user,
         }
     }

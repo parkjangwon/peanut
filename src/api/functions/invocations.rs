@@ -194,6 +194,7 @@ pub async fn retry_function_invocation(
         Some(claims),
         input,
         false,
+        crate::app_context::DEFAULT_APP_ID,
         invocation.retry_count + 1,
         Some(invocation.id),
     )

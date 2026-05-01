@@ -268,6 +268,69 @@ fn build_s3_routes(state: crate::AppState, max_upload_bytes: usize) -> Router<cr
 fn build_sdk_routes(state: crate::AppState, max_upload_bytes: usize) -> Router<crate::AppState> {
     Router::new()
         .route(
+            "/apps/:app_id/auth/register",
+            post(crate::api::sdk::register),
+        )
+        .route("/apps/:app_id/auth/login", post(crate::api::sdk::login))
+        .route(
+            "/apps/:app_id/auth/refresh",
+            post(crate::api::sdk::refresh_session),
+        )
+        .route("/apps/:app_id/auth/logout", post(crate::api::sdk::logout))
+        .route("/apps/:app_id/auth/me", get(crate::api::sdk::me))
+        .route(
+            "/apps/:app_id/data/tables",
+            get(crate::api::sdk::list_data_tables),
+        )
+        .route(
+            "/apps/:app_id/data/tables/:table",
+            get(crate::api::sdk::get_data_table),
+        )
+        .route(
+            "/apps/:app_id/data/tables/:table/rows",
+            get(crate::api::sdk::list_data_rows),
+        )
+        .route(
+            "/apps/:app_id/data/tables/:table/rows",
+            post(crate::api::sdk::create_data_row),
+        )
+        .route(
+            "/apps/:app_id/data/tables/:table/rows/:row_id",
+            get(crate::api::sdk::get_data_row),
+        )
+        .route(
+            "/apps/:app_id/data/tables/:table/rows/:row_id",
+            patch(crate::api::sdk::update_data_row),
+        )
+        .route(
+            "/apps/:app_id/data/tables/:table/rows/:row_id",
+            delete(crate::api::sdk::delete_data_row),
+        )
+        .route(
+            "/apps/:app_id/push/subscriptions",
+            get(crate::api::sdk::list_push_subscriptions),
+        )
+        .route(
+            "/apps/:app_id/push/subscriptions",
+            post(crate::api::sdk::create_push_subscription),
+        )
+        .route(
+            "/apps/:app_id/push/subscriptions/:subscription_id",
+            delete(crate::api::sdk::delete_push_subscription),
+        )
+        .route(
+            "/apps/:app_id/push/vapid-public-key",
+            get(crate::api::sdk::get_vapid_public_key),
+        )
+        .route(
+            "/apps/:app_id/push/messages",
+            post(crate::api::sdk::enqueue_push_message),
+        )
+        .route(
+            "/apps/:app_id/functions/endpoints/:endpoint_slug",
+            post(crate::api::sdk::invoke_function),
+        )
+        .route(
             "/apps/:app_id/storage/buckets/:bucket/objects",
             get(crate::api::storage::list_sdk_objects),
         )
@@ -462,6 +525,7 @@ fn build_cors_layer(auth_allowed_origins: &[String]) -> CorsLayer {
         header::AUTHORIZATION,
         header::CONTENT_TYPE,
         HeaderName::from_static("x-peanut-client-id"),
+        HeaderName::from_static("x-peanut-api-key"),
     ];
 
     let base = CorsLayer::new()
