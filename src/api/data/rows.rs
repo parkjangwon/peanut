@@ -75,6 +75,16 @@ pub async fn create_row(
                     Some(&normalized),
                 );
             }
+            let _ = crate::api::audit::record_audit_log(
+                &state.pool,
+                Some(crate::app_context::DEFAULT_APP_ID),
+                &claims,
+                "data.row.created",
+                "data_row",
+                &row_id,
+                serde_json::json!({ "table": table.name }),
+            )
+            .await;
             match load_row(&state.pool, &table.id, &row_id).await {
                 Ok(row) => match DataRowResponse::try_from_record(row) {
                     Ok(resp) => (StatusCode::CREATED, Json(resp)).into_response(),
@@ -301,6 +311,16 @@ pub async fn update_row(
             if let Ok(event_id) = record_row_event(&state.pool, &table.id, &row_id, &claims.sub, "update", Some(&normalized)).await {
                 emit_data_row_event(&state, event_id, &table.name, &row_id, &claims.sub, "update", Some(&normalized));
             }
+            let _ = crate::api::audit::record_audit_log(
+                &state.pool,
+                Some(crate::app_context::DEFAULT_APP_ID),
+                &claims,
+                "data.row.updated",
+                "data_row",
+                &row_id,
+                serde_json::json!({ "table": table.name }),
+            )
+            .await;
             match load_row(&state.pool, &table.id, &row_id).await {
                 Ok(row) => match DataRowResponse::try_from_record(row) {
                     Ok(resp) => (StatusCode::OK, Json(resp)).into_response(),
@@ -382,6 +402,16 @@ pub async fn delete_row(
                     previous.as_ref(),
                 );
             }
+            let _ = crate::api::audit::record_audit_log(
+                &state.pool,
+                Some(crate::app_context::DEFAULT_APP_ID),
+                &claims,
+                "data.row.deleted",
+                "data_row",
+                &row_id,
+                serde_json::json!({ "table": table.name }),
+            )
+            .await;
             json_message(StatusCode::OK, format!("deleted row {}", row_id))
         }
         Err(_) => json_error(StatusCode::INTERNAL_SERVER_ERROR, "failed to delete row"),

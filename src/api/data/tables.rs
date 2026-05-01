@@ -85,7 +85,19 @@ pub async fn create_table(
     .await
     {
         Ok(_) => match load_table(&state.pool, &name).await {
-            Ok(table) => (StatusCode::CREATED, Json(DataTableResponse { table: table.into() })).into_response(),
+            Ok(table) => {
+                let _ = crate::api::audit::record_audit_log(
+                    &state.pool,
+                    Some(crate::app_context::DEFAULT_APP_ID),
+                    &claims,
+                    "data.table.created",
+                    "data_table",
+                    &table.name,
+                    serde_json::json!({ "display_name": table.display_name }),
+                )
+                .await;
+                (StatusCode::CREATED, Json(DataTableResponse { table: table.into() })).into_response()
+            }
             Err(LoadTableError::NotFound) => {
                 json_error(StatusCode::INTERNAL_SERVER_ERROR, "created table could not be reloaded")
             }
@@ -207,7 +219,19 @@ pub async fn update_table(
     .await
     {
         Ok(_) => match load_table(&state.pool, &existing.name).await {
-            Ok(table) => (StatusCode::OK, Json(DataTableResponse { table: table.into() })).into_response(),
+            Ok(table) => {
+                let _ = crate::api::audit::record_audit_log(
+                    &state.pool,
+                    Some(crate::app_context::DEFAULT_APP_ID),
+                    &claims,
+                    "data.table.updated",
+                    "data_table",
+                    &table.name,
+                    serde_json::json!({ "display_name": table.display_name }),
+                )
+                .await;
+                (StatusCode::OK, Json(DataTableResponse { table: table.into() })).into_response()
+            }
             Err(LoadTableError::NotFound) => json_error(StatusCode::INTERNAL_SERVER_ERROR, "updated table could not be reloaded"),
             Err(LoadTableError::Invalid(message)) => json_error(StatusCode::INTERNAL_SERVER_ERROR, message),
             Err(LoadTableError::QueryFailed) => json_error(StatusCode::INTERNAL_SERVER_ERROR, "failed to reload updated data table"),
@@ -249,10 +273,22 @@ pub async fn delete_table(
         Ok(result) if result.rows_affected() == 0 => {
             json_error(StatusCode::NOT_FOUND, "data table not found")
         }
-        Ok(_) => json_message(
-            StatusCode::OK,
-            format!("deleted data table {}", existing.name),
-        ),
+        Ok(_) => {
+            let _ = crate::api::audit::record_audit_log(
+                &state.pool,
+                Some(crate::app_context::DEFAULT_APP_ID),
+                &claims,
+                "data.table.deleted",
+                "data_table",
+                &existing.name,
+                serde_json::json!({}),
+            )
+            .await;
+            json_message(
+                StatusCode::OK,
+                format!("deleted data table {}", existing.name),
+            )
+        }
         Err(_) => json_error(
             StatusCode::INTERNAL_SERVER_ERROR,
             "failed to delete data table",

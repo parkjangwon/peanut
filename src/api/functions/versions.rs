@@ -130,7 +130,19 @@ pub async fn rollback_function_version(
     }
 
     match load_function_by_name(&state.pool, &function.name).await {
-        Ok(function) => (StatusCode::OK, Json(FunctionResponse { function })).into_response(),
+        Ok(function) => {
+            let _ = crate::api::audit::record_audit_log(
+                &state.pool,
+                Some(crate::app_context::DEFAULT_APP_ID),
+                &claims,
+                "function.rolled_back",
+                "function",
+                &function.name,
+                serde_json::json!({ "version_number": version_number }),
+            )
+            .await;
+            (StatusCode::OK, Json(FunctionResponse { function })).into_response()
+        }
         Err(LoadFunctionError::NotFound) => json_error(
             StatusCode::INTERNAL_SERVER_ERROR,
             "rolled back function could not be reloaded",

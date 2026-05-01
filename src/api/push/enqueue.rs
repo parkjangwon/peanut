@@ -48,7 +48,19 @@ pub async fn enqueue_message(
     .execute(&state.pool)
     .await
     {
-        Ok(_) => json_message(StatusCode::CREATED, "queued push message"),
+        Ok(_) => {
+            let _ = crate::api::audit::record_audit_log(
+                &state.pool,
+                Some(crate::app_context::DEFAULT_APP_ID),
+                &claims,
+                "push.message.enqueued",
+                "push_message",
+                &target_user_id,
+                serde_json::json!({ "title": title }),
+            )
+            .await;
+            json_message(StatusCode::CREATED, "queued push message")
+        }
         Err(_) => json_error(StatusCode::INTERNAL_SERVER_ERROR, "failed to queue push message"),
     }
 }

@@ -113,7 +113,19 @@ pub async fn create_function(
     }
 
     match load_function_by_name(&state.pool, &validated.name).await {
-        Ok(function) => (StatusCode::CREATED, Json(FunctionResponse { function })).into_response(),
+        Ok(function) => {
+            let _ = crate::api::audit::record_audit_log(
+                &state.pool,
+                Some(crate::app_context::DEFAULT_APP_ID),
+                &claims,
+                "function.created",
+                "function",
+                &function.name,
+                serde_json::json!({ "endpoint_slug": function.endpoint_slug }),
+            )
+            .await;
+            (StatusCode::CREATED, Json(FunctionResponse { function })).into_response()
+        }
         Err(LoadFunctionError::NotFound) => json_error(
             StatusCode::INTERNAL_SERVER_ERROR,
             "created function could not be reloaded",
@@ -233,7 +245,19 @@ pub async fn update_function(
     }
 
     match load_function_by_name(&state.pool, &validated.name).await {
-        Ok(function) => (StatusCode::OK, Json(FunctionResponse { function })).into_response(),
+        Ok(function) => {
+            let _ = crate::api::audit::record_audit_log(
+                &state.pool,
+                Some(crate::app_context::DEFAULT_APP_ID),
+                &claims,
+                "function.updated",
+                "function",
+                &function.name,
+                serde_json::json!({ "active_version_number": function.active_version_number }),
+            )
+            .await;
+            (StatusCode::OK, Json(FunctionResponse { function })).into_response()
+        }
         Err(LoadFunctionError::NotFound) => json_error(
             StatusCode::INTERNAL_SERVER_ERROR,
             "updated function could not be reloaded",
@@ -272,10 +296,22 @@ pub async fn delete_function(
         Ok(result) if result.rows_affected() == 0 => {
             json_error(StatusCode::NOT_FOUND, "function not found")
         }
-        Ok(_) => json_message(
-            StatusCode::OK,
-            format!("deleted function {}", existing.name),
-        ),
+        Ok(_) => {
+            let _ = crate::api::audit::record_audit_log(
+                &state.pool,
+                Some(crate::app_context::DEFAULT_APP_ID),
+                &claims,
+                "function.deleted",
+                "function",
+                &existing.name,
+                serde_json::json!({}),
+            )
+            .await;
+            json_message(
+                StatusCode::OK,
+                format!("deleted function {}", existing.name),
+            )
+        }
         Err(_) => json_error(
             StatusCode::INTERNAL_SERVER_ERROR,
             "failed to delete function",
