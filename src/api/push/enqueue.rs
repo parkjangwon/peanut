@@ -40,6 +40,17 @@ pub async fn enqueue_message(
     if user_exists.is_none() {
         return json_error(StatusCode::NOT_FOUND, "target user not found");
     }
+    let workspace_id = match crate::api::workspaces::require_app_resource_available(
+        &state.pool,
+        &claims.app_id,
+        "push_sends_month",
+        1,
+    )
+    .await
+    {
+        Ok(workspace_id) => workspace_id,
+        Err(response) => return response,
+    };
 
     match sqlx::query(
         "INSERT INTO push_queue (app_id, user_id, title, body, status, retry_count, last_error) VALUES (?, ?, ?, ?, 'pending', 0, NULL)",
@@ -52,6 +63,14 @@ pub async fn enqueue_message(
     .await
     {
         Ok(_) => {
+            let _ = crate::api::workspaces::record_usage(
+                &state.pool,
+                &workspace_id,
+                Some(&claims.app_id),
+                "push_sends_month",
+                1,
+            )
+            .await;
             let _ = crate::api::audit::record_audit_log(
                 &state.pool,
                 Some(&claims.app_id),

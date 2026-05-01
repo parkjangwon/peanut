@@ -161,13 +161,74 @@ pub async fn upsert_workspace_member(
     Ok(())
 }
 
+pub async fn require_workspace_role(
+    pool: &sqlx::SqlitePool,
+    claims: &Claims,
+    workspace_id: &str,
+    required_role: &str,
+) -> Result<(), Response> {
+    if claims.is_admin {
+        if let Ok(Some(role)) = load_instance_admin_role(pool, &claims.sub).await {
+            if role_allows(&role, required_role) {
+                return Ok(());
+            }
+        }
+    }
+
+    match load_workspace_role(pool, workspace_id, &claims.sub).await {
+        Ok(Some(role)) if role_allows(&role, required_role) => Ok(()),
+        Ok(_) => Err(workspace_role_error(workspace_id, required_role)),
+        Err(_) => Err(json_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "failed to inspect workspace role",
+        )),
+    }
+}
+
+pub async fn can_view_workspace(
+    pool: &sqlx::SqlitePool,
+    claims: &Claims,
+    workspace_id: &str,
+) -> Result<(), Response> {
+    require_workspace_role(pool, claims, workspace_id, "viewer").await
+}
+
+pub async fn app_workspace_id(
+    pool: &sqlx::SqlitePool,
+    app_id: &str,
+) -> Result<Option<String>, sqlx::Error> {
+    sqlx::query_as::<_, (String,)>(
+        "SELECT workspace_id FROM apps WHERE id = ? AND deleted_at IS NULL",
+    )
+    .bind(app_id)
+    .fetch_optional(pool)
+    .await
+    .map(|row| row.map(|row| row.0))
+}
+
+pub async fn require_app_resource_available(
+    pool: &sqlx::SqlitePool,
+    app_id: &str,
+    resource_key: &str,
+    requested: i64,
+) -> Result<String, Response> {
+    let workspace_id = app_workspace_id(pool, app_id)
+        .await
+        .map_err(|_| {
+            json_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "failed to inspect app workspace",
+            )
+        })?
+        .ok_or_else(|| json_error(StatusCode::NOT_FOUND, "app not found"))?;
+    require_resource_limit_available(pool, &workspace_id, resource_key, requested).await?;
+    Ok(workspace_id)
+}
+
 pub async fn list_workspaces(
     State(state): State<crate::AppState>,
     Extension(claims): Extension<Claims>,
 ) -> Response {
-    if !claims.is_admin {
-        return json_error(StatusCode::FORBIDDEN, "admin access required");
-    }
     if ensure_default_workspace(&state.pool).await.is_err() {
         return json_error(
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -175,19 +236,30 @@ pub async fn list_workspaces(
         );
     }
 
-    let rows = sqlx::query_as::<_, WorkspaceSummary>(
-        r#"
+    let rows = if claims.is_admin {
+        sqlx::query_as::<_, WorkspaceSummary>(
+            r#"
+        SELECT id, name, display_name, created_by, created_at, updated_at, disabled_at, disabled_reason
+        FROM workspaces
+        ORDER BY created_at ASC, name ASC
+        "#,
+        )
+        .fetch_all(&state.pool)
+        .await
+    } else {
+        sqlx::query_as::<_, WorkspaceSummary>(
+            r#"
         SELECT DISTINCT o.id, o.name, o.display_name, o.created_by, o.created_at, o.updated_at, o.disabled_at, o.disabled_reason
         FROM workspaces o
-        LEFT JOIN workspace_members om ON om.workspace_id = o.id
-        WHERE om.user_id = ? OR ? = 1
+        JOIN workspace_members om ON om.workspace_id = o.id
+        WHERE om.user_id = ?
         ORDER BY o.created_at ASC, o.name ASC
         "#,
-    )
-    .bind(&claims.sub)
-    .bind(if claims.is_admin { 1_i64 } else { 0_i64 })
-    .fetch_all(&state.pool)
-    .await;
+        )
+        .bind(&claims.sub)
+        .fetch_all(&state.pool)
+        .await
+    };
 
     match rows {
         Ok(workspaces) => (StatusCode::OK, Json(WorkspacesResponse { workspaces })).into_response(),
@@ -372,7 +444,7 @@ pub async fn accept_workspace_invite(
     let insert_user = sqlx::query(
         r#"
         INSERT INTO users (id, app_id, email, password_hash, is_active, is_admin, admin_role)
-        VALUES (?, ?, ?, ?, TRUE, TRUE, 'viewer')
+        VALUES (?, ?, ?, ?, TRUE, FALSE, 'viewer')
         "#,
     )
     .bind(&user_id)
@@ -449,7 +521,7 @@ pub async fn accept_workspace_invite(
         app_id: crate::app_context::DEFAULT_APP_ID.to_string(),
         email,
         is_active: true,
-        is_admin: true,
+        is_admin: false,
         admin_role: "viewer".to_string(),
     };
     let login = match crate::api::auth::issue_login_response(
@@ -718,16 +790,39 @@ async fn resource_limit_summary(
     workspace_id: &str,
     resource_key: &str,
 ) -> Result<ResourceLimitSummary, sqlx::Error> {
-    let used = if resource_key == "apps" {
-        sqlx::query_as::<_, (i64,)>(
+    let used = match resource_key {
+        "apps" => sqlx::query_as::<_, (i64,)>(
             "SELECT COUNT(*) FROM apps WHERE workspace_id = ? AND deleted_at IS NULL",
         )
         .bind(workspace_id)
         .fetch_one(pool)
         .await?
-        .0
-    } else {
-        sqlx::query_as::<_, (Option<i64>,)>(
+        .0,
+        "app_users" => sqlx::query_as::<_, (i64,)>(
+            r#"
+            SELECT COUNT(*)
+            FROM users u
+            JOIN apps a ON a.id = u.app_id
+            WHERE a.workspace_id = ? AND a.deleted_at IS NULL
+            "#,
+        )
+        .bind(workspace_id)
+        .fetch_one(pool)
+        .await?
+        .0,
+        "data_rows" => sqlx::query_as::<_, (i64,)>(
+            r#"
+            SELECT COUNT(*)
+            FROM data_rows r
+            JOIN apps a ON a.id = r.app_id
+            WHERE a.workspace_id = ? AND a.deleted_at IS NULL
+            "#,
+        )
+        .bind(workspace_id)
+        .fetch_one(pool)
+        .await?
+        .0,
+        _ => sqlx::query_as::<_, (Option<i64>,)>(
             "SELECT used FROM usage_counters WHERE workspace_id = ? AND resource_key = ? AND period_start = 'all'",
         )
         .bind(workspace_id)
@@ -735,7 +830,7 @@ async fn resource_limit_summary(
         .fetch_optional(pool)
         .await?
         .and_then(|row| row.0)
-        .unwrap_or(0)
+        .unwrap_or(0),
     };
     let override_limit = sqlx::query_as::<_, (Option<i64>,)>(
         "SELECT resource_limit FROM usage_counters WHERE workspace_id = ? AND resource_key = ? AND period_start = 'all'",
@@ -930,6 +1025,60 @@ fn is_supported_resource_key(value: &str) -> bool {
             | "push_sends_month"
             | "api_requests_month"
     )
+}
+
+async fn load_instance_admin_role(
+    pool: &sqlx::SqlitePool,
+    user_id: &str,
+) -> Result<Option<String>, sqlx::Error> {
+    sqlx::query_as::<_, (String,)>("SELECT admin_role FROM users WHERE id = ? AND is_admin = TRUE")
+        .bind(user_id)
+        .fetch_optional(pool)
+        .await
+        .map(|row| row.map(|row| row.0))
+}
+
+async fn load_workspace_role(
+    pool: &sqlx::SqlitePool,
+    workspace_id: &str,
+    user_id: &str,
+) -> Result<Option<String>, sqlx::Error> {
+    sqlx::query_as::<_, (String,)>(
+        "SELECT role FROM workspace_members WHERE workspace_id = ? AND user_id = ?",
+    )
+    .bind(workspace_id)
+    .bind(user_id)
+    .fetch_optional(pool)
+    .await
+    .map(|row| row.map(|row| row.0))
+}
+
+fn role_allows(actual: &str, required: &str) -> bool {
+    role_level(actual) >= role_level(required)
+}
+
+fn role_level(role: &str) -> i64 {
+    match role {
+        "owner" => 30,
+        "developer" => 20,
+        "operator" => 10,
+        "viewer" => 0,
+        _ => -1,
+    }
+}
+
+fn workspace_role_error(workspace_id: &str, required_role: &str) -> Response {
+    (
+        StatusCode::FORBIDDEN,
+        Json(serde_json::json!({
+            "error": "workspace role required",
+            "code": "workspace_role_required",
+            "workspace_id": workspace_id,
+            "required_role": required_role,
+            "request_id": uuid::Uuid::new_v4().to_string(),
+        })),
+    )
+        .into_response()
 }
 
 fn normalize_slug(value: &str) -> Result<String, &'static str> {

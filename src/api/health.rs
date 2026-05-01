@@ -197,6 +197,68 @@ async fn platform_checks(state: &crate::AppState) -> Vec<Value> {
         "message": if default_app_exists { "default app exists" } else { "default app is missing" },
     }));
 
+    let default_workspace_exists =
+        sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM workspaces WHERE id = ?")
+            .bind(crate::api::workspaces::DEFAULT_WORKSPACE_ID)
+            .fetch_one(&state.pool)
+            .await
+            .map(|count| count > 0)
+            .unwrap_or(false);
+    checks.push(json!({
+        "name": "default_workspace",
+        "ok": default_workspace_exists,
+        "message": if default_workspace_exists { "default workspace exists" } else { "default workspace is missing" },
+    }));
+
+    let workspace_schema_ok = table_exists(&state.pool, "workspaces").await
+        && table_exists(&state.pool, "workspace_members").await
+        && table_exists(&state.pool, "workspace_setup_invites").await
+        && column_exists(&state.pool, "apps", "workspace_id").await
+        && column_exists(&state.pool, "apps", "disabled_at").await
+        && column_exists(&state.pool, "audit_logs", "workspace_id").await;
+    checks.push(json!({
+        "name": "workspace_schema",
+        "ok": workspace_schema_ok,
+        "message": if workspace_schema_ok { "workspace schema is present" } else { "workspace schema is incomplete" },
+    }));
+
+    let orphan_apps = sqlx::query_scalar::<_, i64>(
+        r#"
+        SELECT COUNT(*)
+        FROM apps a
+        LEFT JOIN workspaces w ON w.id = a.workspace_id
+        WHERE w.id IS NULL
+        "#,
+    )
+    .fetch_one(&state.pool)
+    .await
+    .unwrap_or(1);
+    checks.push(json!({
+        "name": "orphan_apps_without_workspace",
+        "ok": orphan_apps == 0,
+        "count": orphan_apps,
+        "message": if orphan_apps == 0 { "no orphan apps found" } else { "apps without a workspace found" },
+    }));
+
+    let orphan_workspace_members = sqlx::query_scalar::<_, i64>(
+        r#"
+        SELECT COUNT(*)
+        FROM workspace_members wm
+        LEFT JOIN workspaces w ON w.id = wm.workspace_id
+        LEFT JOIN users u ON u.id = wm.user_id
+        WHERE w.id IS NULL OR u.id IS NULL
+        "#,
+    )
+    .fetch_one(&state.pool)
+    .await
+    .unwrap_or(1);
+    checks.push(json!({
+        "name": "orphan_workspace_members",
+        "ok": orphan_workspace_members == 0,
+        "count": orphan_workspace_members,
+        "message": if orphan_workspace_members == 0 { "no orphan workspace members found" } else { "orphan workspace members found" },
+    }));
+
     for (table, column) in [
         ("users", "app_id"),
         ("refresh_tokens", "app_id"),
@@ -272,7 +334,28 @@ async fn platform_checks(state: &crate::AppState) -> Vec<Value> {
         }));
     }
 
+    for check in checks.iter_mut() {
+        if let Some(object) = check.as_object_mut() {
+            let ok = object.get("ok").and_then(Value::as_bool).unwrap_or(false);
+            object.insert(
+                "severity".to_string(),
+                Value::String(if ok { "info" } else { "critical" }.to_string()),
+            );
+        }
+    }
+
     checks
+}
+
+async fn table_exists(pool: &sqlx::SqlitePool, table: &str) -> bool {
+    sqlx::query_as::<_, (i64,)>(
+        "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = ?",
+    )
+    .bind(table)
+    .fetch_one(pool)
+    .await
+    .map(|row| row.0 == 1)
+    .unwrap_or(false)
 }
 
 async fn column_exists(pool: &sqlx::SqlitePool, table: &str, column: &str) -> bool {

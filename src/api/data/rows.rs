@@ -25,6 +25,17 @@ pub async fn create_row(
     if !can_write_table(&claims, &table.access_policy) {
         return json_error(StatusCode::FORBIDDEN, "write access denied");
     }
+    let workspace_id = match crate::api::workspaces::require_app_resource_available(
+        &state.pool,
+        &claims.app_id,
+        "data_rows",
+        1,
+    )
+    .await
+    {
+        Ok(workspace_id) => workspace_id,
+        Err(response) => return response,
+    };
 
     let normalized = match normalize_row_data(&table.schema, payload.data, false) {
         Ok(data) => data,
@@ -56,6 +67,14 @@ pub async fn create_row(
 
     match insert_result {
         Ok(_) => {
+            let _ = crate::api::workspaces::record_usage(
+                &state.pool,
+                &workspace_id,
+                Some(&claims.app_id),
+                "data_rows",
+                1,
+            )
+            .await;
             if let Ok(event_id) = record_row_event(
                 &state.pool,
                 &claims.app_id,

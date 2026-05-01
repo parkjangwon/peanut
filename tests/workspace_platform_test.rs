@@ -107,7 +107,91 @@ async fn workspace_invite_accept_requires_a_valid_invite_and_creates_a_workspace
     let body: Value = common::response_json(signup).await;
     assert_eq!(body["workspace"]["name"], "acorn-labs");
     assert_eq!(body["membership"]["role"], "owner");
+    assert_eq!(body["user"]["is_admin"], false);
     assert!(body["access_token"].as_str().unwrap().len() > 20);
+}
+
+#[tokio::test]
+async fn workspace_owner_can_create_apps_only_inside_their_workspace() {
+    let (app, _dir) = common::make_app_without_seeded_key().await;
+    let admin_token = bootstrap_admin(&app).await;
+
+    let invite = json_request(
+        &app,
+        Method::POST,
+        "/api/admin/workspace-invites",
+        Some(&admin_token),
+        serde_json::json!({
+            "label": "workspace owner",
+            "max_uses": 1
+        }),
+    )
+    .await;
+    assert_eq!(invite.status(), StatusCode::CREATED);
+    let invite_body: Value = common::response_json(invite).await;
+    let code = invite_body["invite_code"].as_str().unwrap();
+
+    let accept = json_request(
+        &app,
+        Method::POST,
+        "/api/workspace-invites/accept",
+        None,
+        serde_json::json!({
+            "invite_code": code,
+            "workspace_name": "Internal Tools",
+            "email": "owner@internal.test",
+            "password": "secret123"
+        }),
+    )
+    .await;
+    assert_eq!(accept.status(), StatusCode::CREATED);
+    let body: Value = common::response_json(accept).await;
+    let owner_token = body["access_token"].as_str().unwrap();
+    let workspace_id = body["workspace"]["id"].as_str().unwrap();
+
+    let list = json_request(
+        &app,
+        Method::GET,
+        "/api/workspaces",
+        Some(owner_token),
+        serde_json::json!({}),
+    )
+    .await;
+    assert_eq!(list.status(), StatusCode::OK);
+    let list_body: Value = common::response_json(list).await;
+    assert_eq!(list_body["workspaces"].as_array().unwrap().len(), 1);
+    assert_eq!(list_body["workspaces"][0]["id"], workspace_id);
+
+    let own_create = json_request(
+        &app,
+        Method::POST,
+        "/api/apps",
+        Some(owner_token),
+        serde_json::json!({
+            "workspace_id": workspace_id,
+            "name": "internal-tools",
+            "display_name": "Internal Tools"
+        }),
+    )
+    .await;
+    assert_eq!(own_create.status(), StatusCode::CREATED);
+
+    let cross_workspace_create = json_request(
+        &app,
+        Method::POST,
+        "/api/apps",
+        Some(owner_token),
+        serde_json::json!({
+            "workspace_id": "default",
+            "name": "forbidden-default",
+            "display_name": "Forbidden Default"
+        }),
+    )
+    .await;
+    assert_eq!(cross_workspace_create.status(), StatusCode::FORBIDDEN);
+    let error: Value = common::response_json(cross_workspace_create).await;
+    assert_eq!(error["code"], "workspace_role_required");
+    assert_eq!(error["required_role"], "owner");
 }
 
 #[tokio::test]
@@ -160,6 +244,62 @@ async fn resource_limit_exceeded_blocks_app_creation_with_stable_error_code() {
     let body: Value = common::response_json(create).await;
     assert_eq!(body["code"], "resource_limit_exceeded");
     assert_eq!(body["resource_key"], "apps");
+}
+
+#[tokio::test]
+async fn app_user_resource_limit_blocks_registration() {
+    let (app, _dir) = common::make_app_without_seeded_key().await;
+    let admin_token = bootstrap_admin(&app).await;
+
+    let limit = json_request(
+        &app,
+        Method::POST,
+        "/api/workspaces/default/resource-limits",
+        Some(&admin_token),
+        serde_json::json!({
+            "resource_key": "app_users",
+            "limit": 0
+        }),
+    )
+    .await;
+    assert_eq!(limit.status(), StatusCode::OK);
+
+    let key_response = json_request(
+        &app,
+        Method::POST,
+        "/api/apps/default/keys",
+        Some(&admin_token),
+        serde_json::json!({
+            "name": "server",
+            "key_type": "server"
+        }),
+    )
+    .await;
+    assert_eq!(key_response.status(), StatusCode::CREATED);
+    let key_body: Value = common::response_json(key_response).await;
+    let server_key = key_body["key"].as_str().unwrap();
+
+    let request = Request::builder()
+        .method(Method::POST)
+        .uri("/api/apps/default/auth/register")
+        .header("content-type", "application/json")
+        .header("x-peanut-api-key", server_key)
+        .extension(ConnectInfo::<SocketAddr>(
+            "127.0.0.1:12345".parse().unwrap(),
+        ))
+        .body(Body::from(
+            serde_json::to_vec(&serde_json::json!({
+                "email": "limited@example.com",
+                "password": "password123"
+            }))
+            .unwrap(),
+        ))
+        .unwrap();
+    let response = app.clone().oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    let body: Value = common::response_json(response).await;
+    assert_eq!(body["code"], "resource_limit_exceeded");
+    assert_eq!(body["resource_key"], "app_users");
 }
 
 #[tokio::test]

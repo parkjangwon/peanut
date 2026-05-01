@@ -37,6 +37,27 @@ pub async fn register_for_app(
     let admin_role = if is_admin { "owner" } else { "viewer" };
     let is_active = is_admin;
 
+    let workspace_id = match crate::api::workspaces::app_workspace_id(pool, app_id).await {
+        Ok(Some(workspace_id)) => workspace_id,
+        Ok(None) => return json_error(StatusCode::NOT_FOUND, "app not found"),
+        Err(_) => {
+            return json_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "failed to inspect app workspace",
+            )
+        }
+    };
+    if let Err(response) = crate::api::workspaces::require_resource_limit_available(
+        pool,
+        &workspace_id,
+        "app_users",
+        1,
+    )
+    .await
+    {
+        return response;
+    }
+
     let result = sqlx::query(
         "INSERT INTO users (id, app_id, email, password_hash, is_active, is_admin, admin_role) VALUES (?, ?, ?, ?, ?, ?, ?)",
     )
@@ -52,6 +73,14 @@ pub async fn register_for_app(
 
     match result {
         Ok(_) => {
+            let _ = crate::api::workspaces::record_usage(
+                pool,
+                &workspace_id,
+                Some(app_id),
+                "app_users",
+                1,
+            )
+            .await;
             let _ = record_auth_event(pool, app_id, &id, Some(&id), "user_registered", None).await;
             (
                 StatusCode::CREATED,

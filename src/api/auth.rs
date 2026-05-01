@@ -1332,6 +1332,24 @@ mod tests {
     #[tokio::test]
     async fn test_same_email_can_register_in_different_apps() {
         let (state, _dir) = test_support::make_test_state().await;
+        let workspace_id = crate::api::workspaces::ensure_default_workspace(&state.pool)
+            .await
+            .unwrap();
+        for app_id in ["app_a", "app_b"] {
+            sqlx::query(
+                r#"
+                INSERT INTO apps (id, workspace_id, name, display_name, created_at, updated_at)
+                VALUES (?, ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ','now'), strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+                "#,
+            )
+            .bind(app_id)
+            .bind(&workspace_id)
+            .bind(app_id)
+            .bind(app_id)
+            .execute(&state.pool)
+            .await
+            .unwrap();
+        }
 
         let first = register_for_app(
             &state,

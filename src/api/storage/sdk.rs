@@ -161,6 +161,17 @@ pub async fn put_sdk_object(
     if !mime_allowed(&policy, content_type) {
         return json_error(StatusCode::BAD_REQUEST, "content type is not allowed");
     }
+    let workspace_id = match crate::api::workspaces::require_app_resource_available(
+        &state.pool,
+        &app_id,
+        "storage_bytes",
+        body.len() as i64,
+    )
+    .await
+    {
+        Ok(workspace_id) => workspace_id,
+        Err(response) => return response,
+    };
 
     match state
         .storage
@@ -173,6 +184,14 @@ pub async fn put_sdk_object(
         .await
     {
         Ok(metadata) => {
+            let _ = crate::api::workspaces::record_usage(
+                &state.pool,
+                &workspace_id,
+                Some(&app_id),
+                "storage_bytes",
+                metadata.content_length as i64,
+            )
+            .await;
             let fallback_claims = crate::auth::jwt::Claims {
                 sub: auth.principal.actor_id.clone(),
                 app_id: app_id.clone(),

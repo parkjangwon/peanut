@@ -144,6 +144,17 @@ pub(crate) async fn run_function_invocation_with_version(
     retry_count: i64,
     parent_invocation_id: Option<String>,
 ) -> Response {
+    let workspace_id = match crate::api::workspaces::require_app_resource_available(
+        &state.pool,
+        app_id,
+        "function_invocations_month",
+        1,
+    )
+    .await
+    {
+        Ok(workspace_id) => workspace_id,
+        Err(response) => return response,
+    };
     let invocation_id = Uuid::new_v4().to_string();
     let request_json = match serde_json::to_string(&input) {
         Ok(value) => value,
@@ -183,6 +194,14 @@ pub(crate) async fn run_function_invocation_with_version(
     {
         return json_error(StatusCode::INTERNAL_SERVER_ERROR, "failed to create invocation log");
     }
+    let _ = crate::api::workspaces::record_usage(
+        &state.pool,
+        &workspace_id,
+        Some(app_id),
+        "function_invocations_month",
+        1,
+    )
+    .await;
 
     emit_function_event(
         state,

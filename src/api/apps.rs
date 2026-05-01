@@ -53,21 +53,36 @@ pub async fn list_apps(
     State(state): State<crate::AppState>,
     Extension(claims): Extension<Claims>,
 ) -> Response {
-    if !claims.is_admin {
-        return json_error(StatusCode::FORBIDDEN, "admin access required");
-    }
-
-    match sqlx::query_as::<_, AppSummary>(
-        r#"
+    let result = if claims.is_admin {
+        sqlx::query_as::<_, AppSummary>(
+            r#"
         SELECT id, workspace_id, name, display_name, created_by, created_at, updated_at, deleted_at, disabled_at, disabled_reason
         FROM apps
         WHERE deleted_at IS NULL
         ORDER BY created_at ASC, name ASC
         "#,
-    )
-    .fetch_all(&state.pool)
-    .await
-    {
+        )
+        .fetch_all(&state.pool)
+        .await
+    } else {
+        sqlx::query_as::<_, AppSummary>(
+            r#"
+        SELECT DISTINCT a.id, a.workspace_id, a.name, a.display_name, a.created_by, a.created_at, a.updated_at, a.deleted_at, a.disabled_at, a.disabled_reason
+        FROM apps a
+        LEFT JOIN workspace_members wm ON wm.workspace_id = a.workspace_id AND wm.user_id = ?
+        LEFT JOIN app_members am ON am.app_id = a.id AND am.user_id = ?
+        WHERE a.deleted_at IS NULL
+          AND (wm.user_id IS NOT NULL OR am.user_id IS NOT NULL)
+        ORDER BY a.created_at ASC, a.name ASC
+        "#,
+        )
+        .bind(&claims.sub)
+        .bind(&claims.sub)
+        .fetch_all(&state.pool)
+        .await
+    };
+
+    match result {
         Ok(apps) => (StatusCode::OK, Json(AppsResponse { apps })).into_response(),
         Err(_) => json_error(StatusCode::INTERNAL_SERVER_ERROR, "failed to list apps"),
     }
@@ -78,10 +93,6 @@ pub async fn create_app(
     Extension(claims): Extension<Claims>,
     Json(payload): Json<CreateAppRequest>,
 ) -> Response {
-    if !claims.is_admin {
-        return json_error(StatusCode::FORBIDDEN, "admin access required");
-    }
-
     let name = match normalize_app_name(&payload.name) {
         Ok(name) => name,
         Err(error) => return json_error(StatusCode::BAD_REQUEST, error),
@@ -97,6 +108,13 @@ pub async fn create_app(
         .filter(|value| !value.is_empty())
         .unwrap_or(crate::api::workspaces::DEFAULT_WORKSPACE_ID)
         .to_string();
+
+    if let Err(response) =
+        crate::api::workspaces::require_workspace_role(&state.pool, &claims, &workspace_id, "owner")
+            .await
+    {
+        return response;
+    }
 
     if let Err(response) = crate::api::workspaces::require_resource_limit_available(
         &state.pool,
@@ -140,6 +158,16 @@ pub async fn create_app(
 
     match result {
         Ok(_) => {
+            let _ = sqlx::query(
+                r#"
+                INSERT OR IGNORE INTO app_members (app_id, user_id, role)
+                VALUES (?, ?, 'owner')
+                "#,
+            )
+            .bind(&app.id)
+            .bind(&claims.sub)
+            .execute(&state.pool)
+            .await;
             let _ = crate::api::workspaces::record_usage(
                 &state.pool,
                 &app.workspace_id,
@@ -172,12 +200,16 @@ pub async fn get_app(
     Extension(claims): Extension<Claims>,
     Path(app_id): Path<String>,
 ) -> Response {
-    if !claims.is_admin {
-        return json_error(StatusCode::FORBIDDEN, "admin access required");
-    }
-
     match load_app(&state.pool, &app_id).await {
-        Ok(Some(app)) => (StatusCode::OK, Json(AppResponse { app })).into_response(),
+        Ok(Some(app)) => {
+            if let Err(response) =
+                crate::api::workspaces::can_view_workspace(&state.pool, &claims, &app.workspace_id)
+                    .await
+            {
+                return response;
+            }
+            (StatusCode::OK, Json(AppResponse { app })).into_response()
+        }
         Ok(None) => json_error(StatusCode::NOT_FOUND, "app not found"),
         Err(_) => json_error(StatusCode::INTERNAL_SERVER_ERROR, "failed to load app"),
     }
@@ -189,10 +221,6 @@ pub async fn update_app(
     Path(app_id): Path<String>,
     Json(payload): Json<UpdateAppRequest>,
 ) -> Response {
-    if !claims.is_admin {
-        return json_error(StatusCode::FORBIDDEN, "admin access required");
-    }
-
     let display_name = match payload.display_name {
         Some(value) => match normalize_display_name(&value) {
             Ok(display_name) => Some(display_name),
@@ -203,6 +231,22 @@ pub async fn update_app(
 
     if display_name.is_none() {
         return json_error(StatusCode::BAD_REQUEST, "display_name is required");
+    }
+
+    let app = match load_app(&state.pool, &app_id).await {
+        Ok(Some(app)) => app,
+        Ok(None) => return json_error(StatusCode::NOT_FOUND, "app not found"),
+        Err(_) => return json_error(StatusCode::INTERNAL_SERVER_ERROR, "failed to load app"),
+    };
+    if let Err(response) = crate::api::workspaces::require_workspace_role(
+        &state.pool,
+        &claims,
+        &app.workspace_id,
+        "owner",
+    )
+    .await
+    {
+        return response;
     }
 
     let result = sqlx::query(
@@ -247,11 +291,23 @@ pub async fn delete_app(
     Extension(claims): Extension<Claims>,
     Path(app_id): Path<String>,
 ) -> Response {
-    if !claims.is_admin {
-        return json_error(StatusCode::FORBIDDEN, "admin access required");
-    }
     if app_id == DEFAULT_APP_ID {
         return json_error(StatusCode::BAD_REQUEST, "default app cannot be deleted");
+    }
+    let app = match load_app(&state.pool, &app_id).await {
+        Ok(Some(app)) => app,
+        Ok(None) => return json_error(StatusCode::NOT_FOUND, "app not found"),
+        Err(_) => return json_error(StatusCode::INTERNAL_SERVER_ERROR, "failed to load app"),
+    };
+    if let Err(response) = crate::api::workspaces::require_workspace_role(
+        &state.pool,
+        &claims,
+        &app.workspace_id,
+        "owner",
+    )
+    .await
+    {
+        return response;
     }
 
     match sqlx::query(
