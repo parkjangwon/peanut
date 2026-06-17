@@ -1,28 +1,50 @@
 # Peanut
 
-<img width="1376" height="768" alt="image" src="https://github.com/user-attachments/assets/ae31aa2a-4793-4465-b58c-e19b3bebf2db" />
+<img width="1376" height="768" alt="Peanut admin console" src="https://github.com/user-attachments/assets/ae31aa2a-4793-4465-b58c-e19b3bebf2db" />
 
 Peanut is a self-hosted BaaS packaged as a Rust single binary. It serves the
-backend API and the embedded admin console from the same process, using SQLite
-and local filesystem storage by default.
+backend API and an embedded Next.js admin console from the same process, using
+SQLite and local filesystem storage by default.
 
-Peanut is not a SaaS product. It is designed for teams that want a small,
+Peanut is not a SaaS product. It is built for teams that want a small,
 inspectable backend platform they can run themselves, while still keeping
 workspace and app isolation for internal teams or multiple projects.
 
 ## What Peanut Provides
 
 - App-scoped Auth with isolated user namespaces
-- App-scoped Data tables and rows
-- App-scoped Storage buckets and objects
-- App-scoped Functions powered by Deno
-- App-scoped Push subscriptions, queue, and diagnostics
+- App-scoped Data tables, rows, import/export, query presets, and row events
+- App-scoped Storage buckets and objects backed by the local filesystem
+- App-scoped Functions powered by a local Deno runtime
+- App-scoped Push subscriptions, queue, diagnostics, and test messages
 - API keys with client, server, and admin scopes
 - Workspace setup invites, membership, resource limits, and usage counters
-- Platform admin roles: owner, developer, operator, viewer
+- Platform admin roles: owner, developer, operator, and viewer
 - Backup, restore-pending, readiness, diagnostics, and ops metrics
 - Embedded Next.js admin console with English and Korean locales
 - Docker Compose production gate for self-hosted release verification
+
+## Architecture
+
+Peanut is a layered monolith:
+
+- `src/main.rs` loads configuration, applies pending restores, initializes
+  SQLite, configures local storage, starts background workers, and serves Axum.
+- `src/app.rs` mounts the HTTP surface and keeps legacy global application
+  routes out of the runtime API.
+- `src/api/` contains the app, workspace, auth, data, storage, functions, push,
+  backup, audit, and ops handlers.
+- `src/middleware/` enforces bearer auth, SDK app-key auth, app mismatch checks,
+  request IDs, rate limits, function availability, and auth client policy.
+- `src/storage/local/` owns local object storage behavior.
+- `src/functions/` runs trusted admin-managed functions through Deno.
+- `console/` contains the Next.js admin console. `console/out` is embedded into
+  the Rust binary with `rust-embed`.
+- `sdks/` contains client SDKs and examples for app-scoped API usage.
+
+SQLite is the source of truth for platform data. Object bytes live under the
+configured storage directory. Background work such as push delivery, multipart
+cleanup, and scheduled backups runs inside the same process.
 
 ## API Shape
 
@@ -39,11 +61,12 @@ Application calls require `X-Peanut-Api-Key`. User-protected calls also require
 `Authorization: Bearer <access_token>`. JWTs include `app_id`, and Peanut rejects
 bearer tokens used against a different app path.
 
-Legacy global application routes are not part of the runtime API surface.
+Platform operation routes remain behind admin bearer auth. Legacy global
+application routes are not part of the runtime API surface.
 
 ## Local Development
 
-Build the embedded console and run the Rust service:
+Build the embedded console first, then run the Rust service:
 
 ```bash
 cd console
@@ -57,6 +80,16 @@ cargo run
 
 Open `http://127.0.0.1:3000` and create the first platform admin from the
 console.
+
+For a backend-only release build:
+
+```bash
+scripts/build.sh
+```
+
+`scripts/build.sh` currently builds the Rust binary only. If the embedded
+console needs to be fresh, run `npm run build` in `console/` before packaging or
+use the Docker build path below.
 
 ## Docker Compose
 
@@ -72,6 +105,10 @@ Start Peanut:
 ```bash
 docker compose up -d
 ```
+
+The Dockerfile builds the console, copies `console/out` into the Rust build
+stage, installs Deno in the runtime image, and serves everything from the Peanut
+binary.
 
 Open `http://127.0.0.1:3000`, create or sign in as a platform admin, then run
 the production gate before trusting a deployment:
@@ -99,6 +136,28 @@ same-email-per-app auth, cross-app denial for Data/Storage/Functions, disabled
 app block/re-enable behavior, Data CRUD, Storage CRUD, Function lint/create/invoke,
 Push diagnostics/test message, backup download, restore scheduling, restore
 marker clearing, and clean readiness after restore-pending is cleared.
+
+CI also runs Rust formatting, Clippy, compiled tests, full tests, console lint,
+console build, OpenAPI checks, release smoke checks, and the Docker Compose gate.
+
+## Runtime Boundaries
+
+Peanut is designed for small self-hosted deployments, not horizontally scaled
+multi-node infrastructure. SQLite and local filesystem storage keep operations
+simple, but they also make volume backup and single-node availability part of
+the operator's responsibility.
+
+Peanut Functions are trusted admin-managed extensions. They use a local Deno
+subprocess with bounded host bindings and configurable limits. This is
+process-level hardening, not a hostile-tenant sandbox. Installations that do not
+need Functions should set:
+
+```bash
+FUNCTIONS_ENABLED=false
+```
+
+`FUNCTIONS_ALLOW_NETWORK=false` keeps common network APIs unavailable, and
+`FUNCTIONS_MAX_CONCURRENT` caps simultaneous function invocations.
 
 ## Core Docs
 
