@@ -21,20 +21,24 @@ const LocaleContext = createContext<{
   setLocale: () => undefined,
 });
 
-function detectLocale(): ConsoleLocale {
-  if (typeof window === "undefined") return "en";
+function storedLocale(): ConsoleLocale {
   const stored = window.localStorage.getItem(LOCALE_STORAGE_KEY);
   if (stored === "en" || stored === "ko") return stored;
   return "en";
 }
 
 export function ConsoleI18nProvider({ children }: { children: React.ReactNode }) {
-  const [locale, setLocaleState] = useState<ConsoleLocale>(() => detectLocale());
+  const [locale, setLocaleState] = useState<ConsoleLocale>("en");
 
   const setLocale = useCallback((nextLocale: ConsoleLocale) => {
     setLocaleState(nextLocale);
     window.localStorage.setItem(LOCALE_STORAGE_KEY, nextLocale);
     document.documentElement.lang = nextLocale;
+  }, []);
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => setLocaleState(storedLocale()), 0);
+    return () => window.clearTimeout(timer);
   }, []);
 
   useEffect(() => {

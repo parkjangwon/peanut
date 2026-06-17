@@ -193,11 +193,39 @@ pub struct DataFieldSpec {
     pub max_length: Option<usize>,
     #[serde(default)]
     pub default: Option<Value>,
+    #[serde(default)]
+    pub unique: bool,
+    #[serde(default)]
+    pub reference: Option<DataFieldReference>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct DataFieldReference {
+    pub table: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AccessPolicy {
     pub mode: String,
+    #[serde(default)]
+    pub rules: Option<AccessRules>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AccessRules {
+    #[serde(default)]
+    pub read: Option<AccessRule>,
+    #[serde(default)]
+    pub create: Option<AccessRule>,
+    #[serde(default)]
+    pub update: Option<AccessRule>,
+    #[serde(default)]
+    pub delete: Option<AccessRule>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AccessRule {
+    pub allow: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]

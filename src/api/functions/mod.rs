@@ -586,7 +586,12 @@ async fn load_function_secrets(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use axum::{http::HeaderMap, Extension};
+    use axum::{
+        body::Bytes,
+        extract::Query,
+        http::{HeaderMap, Method},
+        Extension,
+    };
 
     use crate::{
         api::{auth, data, push},
@@ -613,6 +618,36 @@ mod tests {
         )
         .await;
         test_support::response_json(admin).await
+    }
+
+    async fn invoke_function(
+        State(state): State<crate::AppState>,
+        claims: Option<Extension<Claims>>,
+        headers: HeaderMap,
+        Path(endpoint_slug): Path<String>,
+        Json(payload): Json<InvokeFunctionRequest>,
+    ) -> Response {
+        let mut body = serde_json::Map::new();
+        body.insert("input".to_string(), payload.input);
+        if let Some(api_key) = payload.api_key {
+            body.insert("api_key".to_string(), Value::String(api_key));
+        }
+        if let Some(async_invoke) = payload.async_invoke {
+            body.insert("async_invoke".to_string(), Value::Bool(async_invoke));
+        }
+        let body = Bytes::from(
+            serde_json::to_vec(&Value::Object(body)).expect("serialize invoke payload"),
+        );
+        super::invoke_function(
+            State(state),
+            claims,
+            headers,
+            Path(endpoint_slug),
+            Method::POST,
+            Query(BTreeMap::new()),
+            body,
+        )
+        .await
     }
 
     fn deno_available() -> bool {
@@ -966,6 +1001,8 @@ export default async function handler(ctx) {
                 required: true,
                 max_length: Some(200),
                 default: None,
+                unique: false,
+                reference: None,
             },
         );
         fields.insert(
@@ -975,6 +1012,8 @@ export default async function handler(ctx) {
                 required: false,
                 max_length: None,
                 default: Some(serde_json::json!(false)),
+                unique: false,
+                reference: None,
             },
         );
 
@@ -987,6 +1026,7 @@ export default async function handler(ctx) {
                 schema: data::DataTableSchema { fields },
                 access_policy: data::AccessPolicy {
                     mode: "owner_private".to_string(),
+                    rules: None,
                 },
             }),
         )

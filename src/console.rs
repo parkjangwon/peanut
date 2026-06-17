@@ -184,6 +184,9 @@ mod tests {
 
     #[test]
     fn test_next_static_assets_are_revalidated() {
-        assert_eq!(cache_control_for_path("_next/static/chunks/app.js"), "no-cache");
+        assert_eq!(
+            cache_control_for_path("_next/static/chunks/app.js"),
+            "no-cache"
+        );
     }
 }

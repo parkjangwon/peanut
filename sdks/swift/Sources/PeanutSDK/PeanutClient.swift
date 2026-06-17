@@ -358,6 +358,11 @@ public final class PeanutDataClient: @unchecked Sendable {
         _ = try await client.requestJSON(EmptyResponse.self, method: "DELETE", path: client.appPath("/data/tables/\(PeanutClient.segment(table))/rows/\(PeanutClient.segment(rowId))"))
     }
 
+    public func executeSql(_ sql: String) async throws -> PeanutJSONObject {
+        let client = requireClient()
+        return try await client.requestJSON(PeanutJSONObject.self, method: "POST", path: client.appPath("/data/query"), body: ["sql": PeanutJSONValue.string(sql)])
+    }
+
     private func requireClient() -> PeanutClient {
         guard let client else { preconditionFailure("PeanutDataClient is not attached") }
         return client

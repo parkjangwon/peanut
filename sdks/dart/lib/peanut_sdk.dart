@@ -291,6 +291,14 @@ class PeanutDataClient {
       ),
     );
   }
+
+  Future<JsonMap> executeSql(String sql) {
+    return _client.requestJson<JsonMap>(
+      'POST',
+      _client.appPath('/data/query'),
+      body: {'sql': sql},
+    );
+  }
 }
 
 class PeanutStorageClient {

@@ -28,7 +28,10 @@ mod sql;
 mod tables;
 mod types;
 
-pub(crate) use access::{can_access_row, can_read_table, can_write_table};
+pub(crate) use access::{
+    can_create_row, can_delete_row, can_read_row, can_read_table, can_update_row,
+    is_owner_scoped_read,
+};
 pub use events::{get_row_event_checkpoint, list_row_events, stream_row_events};
 pub use import_export::{export_table, import_rows};
 pub use presets::{
@@ -47,6 +50,7 @@ pub use types::*;
 const POLICY_ADMIN_ONLY: &str = "admin_only";
 const POLICY_OWNER_PRIVATE: &str = "owner_private";
 const POLICY_AUTHENTICATED_SHARED_RW: &str = "authenticated_shared_rw";
+const POLICY_CUSTOM: &str = "custom";
 const MAX_LIST_ROWS: i64 = 50;
 const TABLE_EXPORT_VERSION: &str = "peanut.table-export.v1";
 
@@ -281,6 +285,23 @@ fn validate_schema(schema: &DataTableSchema) -> Result<(), String> {
             "string" | "integer" | "number" | "boolean" | "datetime" | "json" => {}
             _ => return Err(format!("field '{}' has unsupported type", field_name)),
         }
+        if field.unique && field.field_type == "json" {
+            return Err(format!(
+                "field '{}' cannot be unique when type is json",
+                field_name
+            ));
+        }
+        if let Some(reference) = &field.reference {
+            if field.field_type != "string" {
+                return Err(format!(
+                    "field '{}' must be a string to reference another table",
+                    field_name
+                ));
+            }
+            let reference_table = reference.table.trim().to_lowercase();
+            validate_table_name(&reference_table)
+                .map_err(|_| format!("field '{}' has invalid reference table", field_name))?;
+        }
         if let Some(default_value) = &field.default {
             validate_field_value(field_name, field, default_value)?;
         }
@@ -292,6 +313,26 @@ fn validate_schema(schema: &DataTableSchema) -> Result<(), String> {
 fn validate_access_policy(policy: &AccessPolicy) -> Result<(), String> {
     match policy.mode.as_str() {
         POLICY_ADMIN_ONLY | POLICY_OWNER_PRIVATE | POLICY_AUTHENTICATED_SHARED_RW => Ok(()),
+        POLICY_CUSTOM => {
+            let Some(rules) = &policy.rules else {
+                return Err("access_policy.rules is required for custom mode".to_string());
+            };
+            for (operation, rule) in [
+                ("read", rules.read.as_ref()),
+                ("create", rules.create.as_ref()),
+                ("update", rules.update.as_ref()),
+                ("delete", rules.delete.as_ref()),
+            ] {
+                let Some(rule) = rule else {
+                    return Err(format!("access_policy.rules.{operation} is required"));
+                };
+                match rule.allow.as_str() {
+                    "admin" | "authenticated" | "owner" => {}
+                    _ => return Err(format!("access_policy.rules.{operation}.allow is invalid")),
+                }
+            }
+            Ok(())
+        }
         _ => Err("access_policy.mode is invalid".to_string()),
     }
 }
@@ -320,6 +361,141 @@ async fn validate_rows_against_schema(
     }
 
     Ok(())
+}
+
+async fn validate_table_constraints_for_existing_rows(
+    pool: &sqlx::SqlitePool,
+    app_id: &str,
+    table: &LoadedTable,
+    schema: &DataTableSchema,
+) -> Result<(), String> {
+    let rows = sqlx::query_as::<_, DataRowRecord>(
+        "SELECT id, owner_user_id, data_json, created_at, updated_at FROM data_rows WHERE table_id = ?",
+    )
+    .bind(&table.id)
+    .fetch_all(pool)
+    .await
+    .map_err(|_| "failed to validate existing rows against constraints".to_string())?;
+
+    for row in rows {
+        let value = parse_json(&row.data_json)?;
+        let normalized = normalize_row_data(schema, value, false)?;
+        let candidate = LoadedTable {
+            schema: schema.clone(),
+            ..table.clone()
+        };
+        validate_row_constraints(pool, app_id, &candidate, &normalized, Some(&row.id)).await?;
+    }
+
+    Ok(())
+}
+
+async fn validate_row_constraints(
+    pool: &sqlx::SqlitePool,
+    app_id: &str,
+    table: &LoadedTable,
+    data: &Value,
+    exclude_row_id: Option<&str>,
+) -> Result<(), String> {
+    let data_object = data
+        .as_object()
+        .ok_or_else(|| "data must be a JSON object".to_string())?;
+
+    for (field_name, field) in &table.schema.fields {
+        let Some(value) = data_object.get(field_name) else {
+            continue;
+        };
+        if field.unique {
+            validate_unique_field(pool, table, field_name, value, exclude_row_id).await?;
+        }
+    }
+
+    validate_row_references(pool, app_id, table, data).await
+}
+
+async fn validate_row_references(
+    pool: &sqlx::SqlitePool,
+    app_id: &str,
+    table: &LoadedTable,
+    data: &Value,
+) -> Result<(), String> {
+    let data = data
+        .as_object()
+        .ok_or_else(|| "data must be a JSON object".to_string())?;
+
+    for (field_name, field) in &table.schema.fields {
+        let Some(value) = data.get(field_name) else {
+            continue;
+        };
+        let Some(reference) = &field.reference else {
+            continue;
+        };
+        validate_reference_field(pool, app_id, field_name, reference, value).await?;
+    }
+
+    Ok(())
+}
+
+async fn validate_unique_field(
+    pool: &sqlx::SqlitePool,
+    table: &LoadedTable,
+    field_name: &str,
+    value: &Value,
+    exclude_row_id: Option<&str>,
+) -> Result<(), String> {
+    let rows = sqlx::query_as::<_, DataRowRecord>(
+        "SELECT id, owner_user_id, data_json, created_at, updated_at FROM data_rows WHERE table_id = ?",
+    )
+    .bind(&table.id)
+    .fetch_all(pool)
+    .await
+    .map_err(|_| "failed to validate unique field".to_string())?;
+
+    for row in rows {
+        if exclude_row_id == Some(row.id.as_str()) {
+            continue;
+        }
+        let existing = parse_json(&row.data_json)?;
+        if existing.get(field_name) == Some(value) {
+            return Err(format!("field '{}' must be unique", field_name));
+        }
+    }
+
+    Ok(())
+}
+
+async fn validate_reference_field(
+    pool: &sqlx::SqlitePool,
+    app_id: &str,
+    field_name: &str,
+    reference: &DataFieldReference,
+    value: &Value,
+) -> Result<(), String> {
+    let Some(row_id) = value.as_str().filter(|value| !value.trim().is_empty()) else {
+        return Err(format!(
+            "field '{}' must contain a referenced row id",
+            field_name
+        ));
+    };
+    let reference_table = load_table(pool, app_id, &reference.table)
+        .await
+        .map_err(|error| match error {
+            LoadTableError::NotFound => format!(
+                "field '{}' references missing table '{}'",
+                field_name, reference.table
+            ),
+            LoadTableError::Invalid(message) => message,
+            LoadTableError::QueryFailed => "failed to validate reference field".to_string(),
+        })?;
+
+    match load_row(pool, &reference_table.id, row_id).await {
+        Ok(_) => Ok(()),
+        Err(LoadRowError::NotFound) => Err(format!(
+            "field '{}' references missing row '{}'",
+            field_name, row_id
+        )),
+        Err(LoadRowError::QueryFailed) => Err("failed to validate reference field".to_string()),
+    }
 }
 
 async fn count_table_rows(pool: &sqlx::SqlitePool, table_id: &str) -> Result<i64, String> {
@@ -413,8 +589,24 @@ fn owner_user_id_for_new_row(claims: &Claims, policy: &AccessPolicy) -> Option<S
     match policy.mode.as_str() {
         POLICY_OWNER_PRIVATE => Some(claims.sub.clone()),
         POLICY_AUTHENTICATED_SHARED_RW => Some(claims.sub.clone()),
+        POLICY_CUSTOM if policy_uses_owner_rule(policy) => Some(claims.sub.clone()),
         _ => None,
     }
+}
+
+fn policy_uses_owner_rule(policy: &AccessPolicy) -> bool {
+    let Some(rules) = &policy.rules else {
+        return false;
+    };
+    [
+        rules.read.as_ref(),
+        rules.create.as_ref(),
+        rules.update.as_ref(),
+        rules.delete.as_ref(),
+    ]
+    .into_iter()
+    .flatten()
+    .any(|rule| rule.allow == "owner")
 }
 
 fn normalize_import_owner_user_id(
@@ -432,6 +624,14 @@ fn normalize_import_owner_user_id(
         POLICY_AUTHENTICATED_SHARED_RW => {
             Ok(owner_user_id.filter(|value| !value.trim().is_empty()))
         }
+        POLICY_CUSTOM if policy_uses_owner_rule(policy) => owner_user_id
+            .filter(|value| !value.trim().is_empty())
+            .map(Some)
+            .ok_or_else(|| {
+                "owner_user_id is required when importing rows into owner-scoped custom tables"
+                    .to_string()
+            }),
+        POLICY_CUSTOM => Ok(owner_user_id.filter(|value| !value.trim().is_empty())),
         POLICY_ADMIN_ONLY => Ok(None),
         _ => Err("access_policy.mode is invalid".to_string()),
     }
@@ -640,6 +840,8 @@ mod tests {
                             required: false,
                             max_length: None,
                             default: Some(Value::Bool(false)),
+                            unique: false,
+                            reference: None,
                         },
                     ),
                     (
@@ -649,12 +851,15 @@ mod tests {
                             required: true,
                             max_length: Some(200),
                             default: None,
+                            unique: false,
+                            reference: None,
                         },
                     ),
                 ]),
             },
             access_policy: AccessPolicy {
                 mode: POLICY_OWNER_PRIVATE.to_string(),
+                rules: None,
             },
         }
     }
@@ -748,6 +953,8 @@ mod tests {
                                 required: false,
                                 max_length: None,
                                 default: Some(Value::Bool(false)),
+                                unique: false,
+                                reference: None,
                             },
                         ),
                         (
@@ -757,6 +964,8 @@ mod tests {
                                 required: false,
                                 max_length: None,
                                 default: Some(json!(1)),
+                                unique: false,
+                                reference: None,
                             },
                         ),
                         (
@@ -766,12 +975,15 @@ mod tests {
                                 required: true,
                                 max_length: Some(200),
                                 default: None,
+                                unique: false,
+                                reference: None,
                             },
                         ),
                     ]),
                 }),
                 access_policy: Some(AccessPolicy {
                     mode: POLICY_AUTHENTICATED_SHARED_RW.to_string(),
+                    rules: None,
                 }),
             }),
         )
@@ -841,6 +1053,8 @@ mod tests {
                                 required: false,
                                 max_length: None,
                                 default: Some(Value::Bool(false)),
+                                unique: false,
+                                reference: None,
                             },
                         ),
                         (
@@ -850,6 +1064,8 @@ mod tests {
                                 required: true,
                                 max_length: None,
                                 default: None,
+                                unique: false,
+                                reference: None,
                             },
                         ),
                     ]),
@@ -895,6 +1111,8 @@ mod tests {
                                 required: false,
                                 max_length: None,
                                 default: Some(Value::Bool(false)),
+                                unique: false,
+                                reference: None,
                             },
                         ),
                         (
@@ -904,6 +1122,8 @@ mod tests {
                                 required: true,
                                 max_length: None,
                                 default: None,
+                                unique: false,
+                                reference: None,
                             },
                         ),
                     ]),
@@ -953,6 +1173,8 @@ mod tests {
                             required: true,
                             max_length: Some(200),
                             default: None,
+                            unique: false,
+                            reference: None,
                         },
                     )]),
                 }),
@@ -1008,6 +1230,8 @@ mod tests {
                                 required: false,
                                 max_length: None,
                                 default: Some(Value::Bool(false)),
+                                unique: false,
+                                reference: None,
                             },
                         ),
                         (
@@ -1017,6 +1241,8 @@ mod tests {
                                 required: true,
                                 max_length: None,
                                 default: None,
+                                unique: false,
+                                reference: None,
                             },
                         ),
                         (
@@ -1026,6 +1252,8 @@ mod tests {
                                 required: true,
                                 max_length: Some(200),
                                 default: None,
+                                unique: false,
+                                reference: None,
                             },
                         ),
                     ]),
@@ -1123,6 +1351,319 @@ mod tests {
         )
         .await;
         assert_eq!(forbidden_get.status(), StatusCode::FORBIDDEN);
+    }
+
+    #[tokio::test]
+    async fn test_custom_access_rules_can_scope_read_update_and_delete_by_operation() {
+        let (state, _dir) = test_support::make_test_state().await;
+        let admin = register_user(state.clone(), "admin@example.com").await;
+        let user_one = register_user(state.clone(), "one@example.com").await;
+        let user_two = register_user(state.clone(), "two@example.com").await;
+
+        for user in [&user_one, &user_two] {
+            let response = crate::api::admin::activate_user(
+                State(state.clone()),
+                Extension(claims(&admin.user.id, true)),
+                axum::extract::Path(user.user.id.clone()),
+            )
+            .await;
+            assert_eq!(response.status(), StatusCode::OK);
+        }
+
+        let create_table_response = create_table(
+            State(state.clone()),
+            Extension(claims(&admin.user.id, true)),
+            Json(CreateTableRequest {
+                name: "private_notes".to_string(),
+                display_name: "Private Notes".to_string(),
+                schema: DataTableSchema {
+                    fields: BTreeMap::from([(
+                        "title".to_string(),
+                        DataFieldSpec {
+                            field_type: "string".to_string(),
+                            required: true,
+                            max_length: Some(200),
+                            default: None,
+                            unique: false,
+                            reference: None,
+                        },
+                    )]),
+                },
+                access_policy: AccessPolicy {
+                    mode: "custom".to_string(),
+                    rules: Some(AccessRules {
+                        read: Some(AccessRule {
+                            allow: "owner".to_string(),
+                        }),
+                        create: Some(AccessRule {
+                            allow: "authenticated".to_string(),
+                        }),
+                        update: Some(AccessRule {
+                            allow: "owner".to_string(),
+                        }),
+                        delete: Some(AccessRule {
+                            allow: "admin".to_string(),
+                        }),
+                    }),
+                },
+            }),
+        )
+        .await;
+        assert_eq!(create_table_response.status(), StatusCode::CREATED);
+
+        let create_row_response = create_row(
+            State(state.clone()),
+            Extension(claims(&user_one.user.id, false)),
+            axum::extract::Path("private_notes".to_string()),
+            Json(CreateRowRequest {
+                data: json!({ "title": "secret" }),
+            }),
+        )
+        .await;
+        assert_eq!(create_row_response.status(), StatusCode::CREATED);
+        let created_row: DataRowResponse = test_support::response_json(create_row_response).await;
+
+        let list_user_two = list_rows(
+            State(state.clone()),
+            Extension(claims(&user_two.user.id, false)),
+            axum::extract::Path("private_notes".to_string()),
+            axum::extract::Query(ListRowsParams::default()),
+        )
+        .await;
+        assert_eq!(list_user_two.status(), StatusCode::OK);
+        let list_user_two: DataRowsResponse = test_support::response_json(list_user_two).await;
+        assert!(list_user_two.rows.is_empty());
+
+        let update_user_two = update_row(
+            State(state.clone()),
+            Extension(claims(&user_two.user.id, false)),
+            axum::extract::Path(("private_notes".to_string(), created_row.id.clone())),
+            Json(CreateRowRequest {
+                data: json!({ "title": "stolen" }),
+            }),
+        )
+        .await;
+        assert_eq!(update_user_two.status(), StatusCode::FORBIDDEN);
+
+        let delete_user_one = delete_row(
+            State(state.clone()),
+            Extension(claims(&user_one.user.id, false)),
+            axum::extract::Path(("private_notes".to_string(), created_row.id.clone())),
+        )
+        .await;
+        assert_eq!(delete_user_one.status(), StatusCode::FORBIDDEN);
+
+        let delete_admin = delete_row(
+            State(state),
+            Extension(claims(&admin.user.id, true)),
+            axum::extract::Path(("private_notes".to_string(), created_row.id)),
+        )
+        .await;
+        assert_eq!(delete_admin.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn test_sql_select_respects_custom_owner_scoped_reads() {
+        let (state, _dir) = test_support::make_test_state().await;
+        let admin = register_user(state.clone(), "admin@example.com").await;
+        let user_one = register_user(state.clone(), "one@example.com").await;
+        let user_two = register_user(state.clone(), "two@example.com").await;
+
+        for user in [&user_one, &user_two] {
+            let response = crate::api::admin::activate_user(
+                State(state.clone()),
+                Extension(claims(&admin.user.id, true)),
+                axum::extract::Path(user.user.id.clone()),
+            )
+            .await;
+            assert_eq!(response.status(), StatusCode::OK);
+        }
+
+        let create_table_response = create_table(
+            State(state.clone()),
+            Extension(claims(&admin.user.id, true)),
+            Json(CreateTableRequest {
+                name: "private_notes".to_string(),
+                display_name: "Private Notes".to_string(),
+                schema: DataTableSchema {
+                    fields: BTreeMap::from([(
+                        "title".to_string(),
+                        DataFieldSpec {
+                            field_type: "string".to_string(),
+                            required: true,
+                            max_length: Some(200),
+                            default: None,
+                            unique: false,
+                            reference: None,
+                        },
+                    )]),
+                },
+                access_policy: AccessPolicy {
+                    mode: "custom".to_string(),
+                    rules: Some(AccessRules {
+                        read: Some(AccessRule {
+                            allow: "owner".to_string(),
+                        }),
+                        create: Some(AccessRule {
+                            allow: "authenticated".to_string(),
+                        }),
+                        update: Some(AccessRule {
+                            allow: "owner".to_string(),
+                        }),
+                        delete: Some(AccessRule {
+                            allow: "admin".to_string(),
+                        }),
+                    }),
+                },
+            }),
+        )
+        .await;
+        assert_eq!(create_table_response.status(), StatusCode::CREATED);
+
+        let create_row_response = create_row(
+            State(state.clone()),
+            Extension(claims(&user_one.user.id, false)),
+            axum::extract::Path("private_notes".to_string()),
+            Json(CreateRowRequest {
+                data: json!({ "title": "secret" }),
+            }),
+        )
+        .await;
+        assert_eq!(create_row_response.status(), StatusCode::CREATED);
+
+        let hidden_response = execute_sql(
+            State(state.clone()),
+            Extension(claims(&user_two.user.id, false)),
+            Json(SqlRequest {
+                sql: "select title from private_notes".to_string(),
+            }),
+        )
+        .await;
+        assert_eq!(hidden_response.status(), StatusCode::OK);
+        let hidden_body: Value = test_support::response_json(hidden_response).await;
+        assert_eq!(hidden_body["rows"].as_array().unwrap().len(), 0);
+
+        let owner_response = execute_sql(
+            State(state),
+            Extension(claims(&user_one.user.id, false)),
+            Json(SqlRequest {
+                sql: "select title from private_notes".to_string(),
+            }),
+        )
+        .await;
+        assert_eq!(owner_response.status(), StatusCode::OK);
+        let owner_body: Value = test_support::response_json(owner_response).await;
+        assert_eq!(owner_body["rows"].as_array().unwrap().len(), 1);
+        assert_eq!(owner_body["rows"][0]["title"], json!("secret"));
+    }
+
+    #[tokio::test]
+    async fn test_unique_fields_and_row_references_are_enforced() {
+        let (state, _dir) = test_support::make_test_state().await;
+        let admin = register_user(state.clone(), "admin@example.com").await;
+
+        let accounts_response = create_table(
+            State(state.clone()),
+            Extension(claims(&admin.user.id, true)),
+            Json(CreateTableRequest {
+                name: "accounts".to_string(),
+                display_name: "Accounts".to_string(),
+                schema: DataTableSchema {
+                    fields: BTreeMap::from([(
+                        "email".to_string(),
+                        DataFieldSpec {
+                            field_type: "string".to_string(),
+                            required: true,
+                            max_length: Some(320),
+                            default: None,
+                            unique: true,
+                            reference: None,
+                        },
+                    )]),
+                },
+                access_policy: AccessPolicy {
+                    mode: POLICY_AUTHENTICATED_SHARED_RW.to_string(),
+                    rules: None,
+                },
+            }),
+        )
+        .await;
+        assert_eq!(accounts_response.status(), StatusCode::CREATED);
+
+        let first_account = create_row(
+            State(state.clone()),
+            Extension(claims(&admin.user.id, true)),
+            axum::extract::Path("accounts".to_string()),
+            Json(CreateRowRequest {
+                data: json!({ "email": "a@example.com" }),
+            }),
+        )
+        .await;
+        assert_eq!(first_account.status(), StatusCode::CREATED);
+        let first_account: DataRowResponse = test_support::response_json(first_account).await;
+
+        let duplicate_account = create_row(
+            State(state.clone()),
+            Extension(claims(&admin.user.id, true)),
+            axum::extract::Path("accounts".to_string()),
+            Json(CreateRowRequest {
+                data: json!({ "email": "a@example.com" }),
+            }),
+        )
+        .await;
+        assert_eq!(duplicate_account.status(), StatusCode::CONFLICT);
+
+        let orders_response = create_table(
+            State(state.clone()),
+            Extension(claims(&admin.user.id, true)),
+            Json(CreateTableRequest {
+                name: "orders".to_string(),
+                display_name: "Orders".to_string(),
+                schema: DataTableSchema {
+                    fields: BTreeMap::from([(
+                        "account_id".to_string(),
+                        DataFieldSpec {
+                            field_type: "string".to_string(),
+                            required: true,
+                            max_length: None,
+                            default: None,
+                            unique: false,
+                            reference: Some(DataFieldReference {
+                                table: "accounts".to_string(),
+                            }),
+                        },
+                    )]),
+                },
+                access_policy: AccessPolicy {
+                    mode: POLICY_AUTHENTICATED_SHARED_RW.to_string(),
+                    rules: None,
+                },
+            }),
+        )
+        .await;
+        assert_eq!(orders_response.status(), StatusCode::CREATED);
+
+        let valid_order = create_row(
+            State(state.clone()),
+            Extension(claims(&admin.user.id, true)),
+            axum::extract::Path("orders".to_string()),
+            Json(CreateRowRequest {
+                data: json!({ "account_id": first_account.id }),
+            }),
+        )
+        .await;
+        assert_eq!(valid_order.status(), StatusCode::CREATED);
+
+        let invalid_order = create_row(
+            State(state),
+            Extension(claims(&admin.user.id, true)),
+            axum::extract::Path("orders".to_string()),
+            Json(CreateRowRequest {
+                data: json!({ "account_id": "missing-row" }),
+            }),
+        )
+        .await;
+        assert_eq!(invalid_order.status(), StatusCode::BAD_REQUEST);
     }
 
     #[tokio::test]
@@ -1725,6 +2266,8 @@ mod tests {
                                     required: false,
                                     max_length: None,
                                     default: Some(Value::Bool(false)),
+                                    unique: false,
+                                    reference: None,
                                 },
                             ),
                             (
@@ -1734,6 +2277,8 @@ mod tests {
                                     required: true,
                                     max_length: None,
                                     default: Some(json!(1)),
+                                    unique: false,
+                                    reference: None,
                                 },
                             ),
                             (
@@ -1743,12 +2288,15 @@ mod tests {
                                     required: true,
                                     max_length: Some(200),
                                     default: None,
+                                    unique: false,
+                                    reference: None,
                                 },
                             ),
                         ]),
                     },
                     access_policy: AccessPolicy {
                         mode: POLICY_AUTHENTICATED_SHARED_RW.to_string(),
+                        rules: None,
                     },
                     created_by: None,
                     created_at: None,
@@ -1798,6 +2346,125 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_import_validates_unique_and_reference_constraints() {
+        let (state, _dir) = test_support::make_test_state().await;
+        let admin = register_user(state.clone(), "admin@example.com").await;
+
+        let accounts_response = create_table(
+            State(state.clone()),
+            Extension(claims(&admin.user.id, true)),
+            Json(CreateTableRequest {
+                name: "accounts".to_string(),
+                display_name: "Accounts".to_string(),
+                schema: DataTableSchema {
+                    fields: BTreeMap::from([(
+                        "email".to_string(),
+                        DataFieldSpec {
+                            field_type: "string".to_string(),
+                            required: true,
+                            max_length: Some(320),
+                            default: None,
+                            unique: true,
+                            reference: None,
+                        },
+                    )]),
+                },
+                access_policy: AccessPolicy {
+                    mode: POLICY_AUTHENTICATED_SHARED_RW.to_string(),
+                    rules: None,
+                },
+            }),
+        )
+        .await;
+        assert_eq!(accounts_response.status(), StatusCode::CREATED);
+
+        let duplicate_import = import_rows(
+            State(state.clone()),
+            Extension(claims(&admin.user.id, true)),
+            axum::extract::Path("accounts".to_string()),
+            Json(TableImportRequest {
+                mode: Some("replace".to_string()),
+                dry_run: Some(true),
+                restore_table: None,
+                metadata: None,
+                verify_checksum: None,
+                table: None,
+                rows: vec![
+                    ImportRowRequest {
+                        id: None,
+                        owner_user_id: Some(admin.user.id.clone()),
+                        data: json!({ "email": "a@example.com" }),
+                        created_at: None,
+                        updated_at: None,
+                    },
+                    ImportRowRequest {
+                        id: None,
+                        owner_user_id: Some(admin.user.id.clone()),
+                        data: json!({ "email": "a@example.com" }),
+                        created_at: None,
+                        updated_at: None,
+                    },
+                ],
+            }),
+        )
+        .await;
+        assert_eq!(duplicate_import.status(), StatusCode::CONFLICT);
+
+        let orders_response = create_table(
+            State(state.clone()),
+            Extension(claims(&admin.user.id, true)),
+            Json(CreateTableRequest {
+                name: "orders".to_string(),
+                display_name: "Orders".to_string(),
+                schema: DataTableSchema {
+                    fields: BTreeMap::from([(
+                        "account_id".to_string(),
+                        DataFieldSpec {
+                            field_type: "string".to_string(),
+                            required: true,
+                            max_length: None,
+                            default: None,
+                            unique: false,
+                            reference: Some(DataFieldReference {
+                                table: "accounts".to_string(),
+                            }),
+                        },
+                    )]),
+                },
+                access_policy: AccessPolicy {
+                    mode: POLICY_AUTHENTICATED_SHARED_RW.to_string(),
+                    rules: None,
+                },
+            }),
+        )
+        .await;
+        assert_eq!(orders_response.status(), StatusCode::CREATED);
+
+        let bad_reference_import = import_rows(
+            State(state),
+            Extension(claims(&admin.user.id, true)),
+            axum::extract::Path("orders".to_string()),
+            Json(TableImportRequest {
+                mode: Some("replace".to_string()),
+                dry_run: Some(true),
+                restore_table: None,
+                metadata: None,
+                verify_checksum: None,
+                table: None,
+                rows: vec![ImportRowRequest {
+                    id: None,
+                    owner_user_id: Some(admin.user.id),
+                    data: json!({ "account_id": "missing-row" }),
+                    created_at: None,
+                    updated_at: None,
+                }],
+            }),
+        )
+        .await;
+        assert_eq!(bad_reference_import.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
     async fn test_import_dry_run_does_not_mutate_rows_and_reports_preview() {
         let (state, _dir) = test_support::make_test_state().await;
         let admin = register_user(state.clone(), "admin@example.com").await;
@@ -1832,6 +2499,8 @@ mod tests {
                                     required: false,
                                     max_length: None,
                                     default: Some(Value::Bool(false)),
+                                    unique: false,
+                                    reference: None,
                                 },
                             ),
                             (
@@ -1841,6 +2510,8 @@ mod tests {
                                     required: false,
                                     max_length: None,
                                     default: Some(json!(1)),
+                                    unique: false,
+                                    reference: None,
                                 },
                             ),
                             (
@@ -1850,6 +2521,8 @@ mod tests {
                                     required: true,
                                     max_length: Some(200),
                                     default: None,
+                                    unique: false,
+                                    reference: None,
                                 },
                             ),
                         ]),

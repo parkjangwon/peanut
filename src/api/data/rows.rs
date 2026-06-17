@@ -22,7 +22,7 @@ pub async fn create_row(
         }
     };
 
-    if !can_write_table(&claims, &table.access_policy) {
+    if !can_create_row(&claims, &table.access_policy) {
         return json_error(StatusCode::FORBIDDEN, "write access denied");
     }
     let workspace_id = match crate::api::workspaces::require_app_resource_available(
@@ -41,6 +41,16 @@ pub async fn create_row(
         Ok(data) => data,
         Err(message) => return json_error(StatusCode::BAD_REQUEST, message),
     };
+    if let Err(message) =
+        validate_row_constraints(&state.pool, &claims.app_id, &table, &normalized, None).await
+    {
+        let status = if message.contains("must be unique") {
+            StatusCode::CONFLICT
+        } else {
+            StatusCode::BAD_REQUEST
+        };
+        return json_error(status, message);
+    }
 
     let row_id = Uuid::new_v4().to_string();
     let owner_user_id = owner_user_id_for_new_row(&claims, &table.access_policy);
@@ -167,7 +177,7 @@ pub(crate) async fn execute_list_rows(
         return json_error(StatusCode::BAD_REQUEST, message);
     }
 
-    let owner_user_id = if table.access_policy.mode == POLICY_OWNER_PRIVATE && !claims.is_admin {
+    let owner_user_id = if is_owner_scoped_read(claims, &table.access_policy) {
         Some(claims.sub.as_str())
     } else {
         None
@@ -245,7 +255,7 @@ pub async fn get_row(
         }
     };
 
-    if !can_access_row(
+    if !can_read_row(
         &claims,
         &table.access_policy,
         record.owner_user_id.as_deref(),
@@ -289,7 +299,7 @@ pub async fn update_row(
         }
     };
 
-    if !can_access_row(
+    if !can_update_row(
         &claims,
         &table.access_policy,
         existing.owner_user_id.as_deref(),
@@ -316,6 +326,22 @@ pub async fn update_row(
         Ok(data) => data,
         Err(message) => return json_error(StatusCode::BAD_REQUEST, message),
     };
+    if let Err(message) = validate_row_constraints(
+        &state.pool,
+        &claims.app_id,
+        &table,
+        &normalized,
+        Some(&row_id),
+    )
+    .await
+    {
+        let status = if message.contains("must be unique") {
+            StatusCode::CONFLICT
+        } else {
+            StatusCode::BAD_REQUEST
+        };
+        return json_error(status, message);
+    }
     let data_json = match serde_json::to_string(&normalized) {
         Ok(value) => value,
         Err(_) => {
@@ -391,7 +417,7 @@ pub async fn delete_row(
         }
     };
 
-    if !can_access_row(
+    if !can_delete_row(
         &claims,
         &table.access_policy,
         existing.owner_user_id.as_deref(),

@@ -1,4 +1,5 @@
 use super::*;
+use std::collections::BTreeSet;
 
 pub async fn export_table(
     State(state): State<crate::AppState>,
@@ -230,15 +231,49 @@ pub async fn import_rows(
         effective_table.access_policy = restore_spec.access_policy.clone();
     }
 
+    let mut import_unique_values = BTreeSet::new();
     for row in &payload.rows {
-        if let Err(message) = normalize_row_data(&effective_table.schema, row.data.clone(), false) {
-            return json_error(StatusCode::BAD_REQUEST, message);
-        }
+        let normalized = match normalize_row_data(&effective_table.schema, row.data.clone(), false)
+        {
+            Ok(data) => data,
+            Err(message) => return json_error(StatusCode::BAD_REQUEST, message),
+        };
         if let Err(message) = normalize_import_owner_user_id(
             &effective_table.access_policy,
             row.owner_user_id.clone(),
         ) {
             return json_error(StatusCode::BAD_REQUEST, message);
+        }
+        if let Err(message) = validate_import_unique_values(
+            &effective_table.schema,
+            &normalized,
+            &mut import_unique_values,
+        ) {
+            return json_error(StatusCode::CONFLICT, message);
+        }
+        if let Err(message) =
+            validate_row_references(&state.pool, &claims.app_id, &effective_table, &normalized)
+                .await
+        {
+            return json_error(StatusCode::BAD_REQUEST, message);
+        }
+        if mode == "append" {
+            if let Err(message) = validate_row_constraints(
+                &state.pool,
+                &claims.app_id,
+                &effective_table,
+                &normalized,
+                row.id.as_deref(),
+            )
+            .await
+            {
+                let status = if message.contains("must be unique") {
+                    StatusCode::CONFLICT
+                } else {
+                    StatusCode::BAD_REQUEST
+                };
+                return json_error(status, message);
+            }
         }
     }
 
@@ -307,6 +342,22 @@ pub async fn import_rows(
                 Ok(owner_user_id) => owner_user_id,
                 Err(message) => return json_error(StatusCode::BAD_REQUEST, message),
             };
+        if let Err(message) = validate_row_constraints(
+            &state.pool,
+            &claims.app_id,
+            &table,
+            &normalized,
+            row.id.as_deref(),
+        )
+        .await
+        {
+            let status = if message.contains("must be unique") {
+                StatusCode::CONFLICT
+            } else {
+                StatusCode::BAD_REQUEST
+            };
+            return json_error(status, message);
+        }
 
         let row_id = row.id.unwrap_or_else(|| Uuid::new_v4().to_string());
         let data_json = match serde_json::to_string(&normalized) {
@@ -372,4 +423,28 @@ pub async fn import_rows(
         }),
     )
         .into_response()
+}
+
+fn validate_import_unique_values(
+    schema: &DataTableSchema,
+    data: &Value,
+    seen: &mut BTreeSet<(String, String)>,
+) -> Result<(), String> {
+    let Some(data) = data.as_object() else {
+        return Ok(());
+    };
+    for (field_name, field) in &schema.fields {
+        if !field.unique {
+            continue;
+        }
+        let Some(value) = data.get(field_name) else {
+            continue;
+        };
+        let encoded = serde_json::to_string(value)
+            .map_err(|_| "failed to validate import unique field".to_string())?;
+        if !seen.insert((field_name.clone(), encoded)) {
+            return Err(format!("field '{}' must be unique", field_name));
+        }
+    }
+    Ok(())
 }

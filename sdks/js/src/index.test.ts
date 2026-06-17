@@ -61,3 +61,29 @@ test("request does not retry client errors", async () => {
   await assert.rejects(client.data.listTables(), PeanutError);
   assert.equal(attempts, 1);
 });
+
+test("data executeSql posts to app query endpoint", async () => {
+  let seenUrl = "";
+  let seenBody: unknown;
+  const client = new PeanutClient({
+    baseUrl: "https://peanut.test",
+    appId: "app_1",
+    apiKey: "pk_test",
+    fetch: async (url, init) => {
+      seenUrl = String(url);
+      seenBody = JSON.parse(String(init?.body));
+      return Response.json({
+        statement: "select",
+        table: "notes",
+        columns: ["title"],
+        rows: [{ title: "hello" }],
+      });
+    },
+  });
+
+  const result = await client.data.executeSql("select title from notes");
+
+  assert.equal(seenUrl, "https://peanut.test/api/apps/app_1/data/query");
+  assert.deepEqual(seenBody, { sql: "select title from notes" });
+  assert.deepEqual(result.rows, [{ title: "hello" }]);
+});

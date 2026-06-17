@@ -195,6 +195,21 @@ pub async fn update_table(
     if let Err(message) = validate_rows_against_schema(&state.pool, &existing.id, &schema).await {
         return json_error(StatusCode::BAD_REQUEST, message);
     }
+    if let Err(message) = validate_table_constraints_for_existing_rows(
+        &state.pool,
+        &claims.app_id,
+        &existing,
+        &schema,
+    )
+    .await
+    {
+        let status = if message.contains("must be unique") {
+            StatusCode::CONFLICT
+        } else {
+            StatusCode::BAD_REQUEST
+        };
+        return json_error(status, message);
+    }
 
     let schema_json = match serde_json::to_string(&schema) {
         Ok(value) => value,

@@ -38,7 +38,10 @@ pub async fn execute_sql(
         Err(_) => return json_error(StatusCode::BAD_REQUEST, "sql could not be parsed"),
     };
     let [statement] = statements.as_slice() else {
-        return json_error(StatusCode::BAD_REQUEST, "exactly one SQL statement is required");
+        return json_error(
+            StatusCode::BAD_REQUEST,
+            "exactly one SQL statement is required",
+        );
     };
 
     match statement {
@@ -68,11 +71,7 @@ pub async fn execute_sql(
     }
 }
 
-async fn execute_select(
-    state: &crate::AppState,
-    claims: &Claims,
-    query: &Query,
-) -> Response {
+async fn execute_select(state: &crate::AppState, claims: &Claims, query: &Query) -> Response {
     if query.with.is_some()
         || !query.limit_by.is_empty()
         || query.fetch.is_some()
@@ -90,9 +89,18 @@ async fn execute_select(
     };
     let table = match load_table(&state.pool, &claims.app_id, &table_name).await {
         Ok(table) => table,
-        Err(LoadTableError::NotFound) => return json_error(StatusCode::NOT_FOUND, "data table not found"),
-        Err(LoadTableError::Invalid(message)) => return json_error(StatusCode::INTERNAL_SERVER_ERROR, message),
-        Err(LoadTableError::QueryFailed) => return json_error(StatusCode::INTERNAL_SERVER_ERROR, "failed to load data table"),
+        Err(LoadTableError::NotFound) => {
+            return json_error(StatusCode::NOT_FOUND, "data table not found")
+        }
+        Err(LoadTableError::Invalid(message)) => {
+            return json_error(StatusCode::INTERNAL_SERVER_ERROR, message)
+        }
+        Err(LoadTableError::QueryFailed) => {
+            return json_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "failed to load data table",
+            )
+        }
     };
     if !can_read_table(claims, &table.access_policy) {
         return json_error(StatusCode::FORBIDDEN, "read access denied");
@@ -108,12 +116,18 @@ async fn execute_select(
         Ok(columns) => columns,
         Err(message) => return json_error(StatusCode::BAD_REQUEST, message),
     };
-    let owner_user_id = if table.access_policy.mode == POLICY_OWNER_PRIVATE && !claims.is_admin {
+    let owner_user_id = if is_owner_scoped_read(claims, &table.access_policy) {
         Some(claims.sub.as_str())
     } else {
         None
     };
-    let row_query = build_row_query(&params, &table.schema, &table.app_id, &table.id, owner_user_id);
+    let row_query = build_row_query(
+        &params,
+        &table.schema,
+        &table.app_id,
+        &table.id,
+        owner_user_id,
+    );
     let sql = format!(
         "SELECT id, owner_user_id, data_json, created_at, updated_at FROM data_rows WHERE {} {} LIMIT ? OFFSET ?",
         row_query.where_clauses.join(" AND "),
@@ -135,7 +149,12 @@ async fn execute_select(
         .await
     {
         Ok(records) => records,
-        Err(_) => return json_error(StatusCode::INTERNAL_SERVER_ERROR, "failed to execute SELECT"),
+        Err(_) => {
+            return json_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "failed to execute SELECT",
+            )
+        }
     };
     let mut rows = Vec::with_capacity(records.len());
     for record in records {
@@ -182,10 +201,16 @@ async fn execute_insert(
         return json_error(StatusCode::BAD_REQUEST, "INSERT requires VALUES");
     };
     let [row] = values.rows.as_slice() else {
-        return json_error(StatusCode::BAD_REQUEST, "INSERT supports exactly one VALUES row");
+        return json_error(
+            StatusCode::BAD_REQUEST,
+            "INSERT supports exactly one VALUES row",
+        );
     };
     if row.len() != insert.columns.len() {
-        return json_error(StatusCode::BAD_REQUEST, "INSERT columns and values must match");
+        return json_error(
+            StatusCode::BAD_REQUEST,
+            "INSERT columns and values must match",
+        );
     }
     let table = match object_name(&insert.table_name) {
         Ok(table) => table,
@@ -193,10 +218,13 @@ async fn execute_insert(
     };
     let mut data = Map::new();
     for (column, expr) in insert.columns.iter().zip(row.iter()) {
-        data.insert(column.value.clone(), match literal_value(expr) {
-            Ok(value) => value,
-            Err(message) => return json_error(StatusCode::BAD_REQUEST, message),
-        });
+        data.insert(
+            column.value.clone(),
+            match literal_value(expr) {
+                Ok(value) => value,
+                Err(message) => return json_error(StatusCode::BAD_REQUEST, message),
+            },
+        );
     }
     super::create_row(
         State(state),
@@ -227,16 +255,22 @@ async fn execute_update(
     let mut data = Map::new();
     for assignment in assignments {
         let AssignmentTarget::ColumnName(name) = &assignment.target else {
-            return json_error(StatusCode::BAD_REQUEST, "UPDATE supports simple column assignments");
+            return json_error(
+                StatusCode::BAD_REQUEST,
+                "UPDATE supports simple column assignments",
+            );
         };
         let column = match object_name(name) {
             Ok(column) => column,
             Err(message) => return json_error(StatusCode::BAD_REQUEST, message),
         };
-        data.insert(column, match literal_value(&assignment.value) {
-            Ok(value) => value,
-            Err(message) => return json_error(StatusCode::BAD_REQUEST, message),
-        });
+        data.insert(
+            column,
+            match literal_value(&assignment.value) {
+                Ok(value) => value,
+                Err(message) => return json_error(StatusCode::BAD_REQUEST, message),
+            },
+        );
     }
     super::update_row(
         State(state),
@@ -260,7 +294,10 @@ async fn execute_delete(
         || !delete.order_by.is_empty()
         || delete.limit.is_some()
     {
-        return json_error(StatusCode::BAD_REQUEST, "DELETE supports FROM table WHERE id = ... only");
+        return json_error(
+            StatusCode::BAD_REQUEST,
+            "DELETE supports FROM table WHERE id = ... only",
+        );
     }
     let tables = match &delete.from {
         FromTable::WithFromKeyword(tables) | FromTable::WithoutKeyword(tables) => tables,
@@ -341,7 +378,14 @@ fn select_params(select: &Select, query: &Query) -> Result<ListRowsParams, &'sta
             return Err("ORDER BY supports one column");
         };
         params.order_by = Some(column_expr(&order.expr)?);
-        params.order = Some(if order.asc.unwrap_or(false) { "asc" } else { "desc" }.to_string());
+        params.order = Some(
+            if order.asc.unwrap_or(false) {
+                "asc"
+            } else {
+                "desc"
+            }
+            .to_string(),
+        );
     }
     if let Some(limit) = &query.limit {
         params.limit = Some(positive_usize(limit, "LIMIT")?);
@@ -362,20 +406,35 @@ fn apply_filter(expr: &Expr, params: &mut ListRowsParams) -> Result<(), &'static
             let field = column_expr(left)?;
             let value = literal_string(right)?;
             params.filter_field = Some(field);
-            params.filter_op = Some(match op {
-                BinaryOperator::Eq => "eq",
-                BinaryOperator::NotEq => "ne",
-                BinaryOperator::Gt => "gt",
-                BinaryOperator::GtEq => "gte",
-                BinaryOperator::Lt => "lt",
-                BinaryOperator::LtEq => "lte",
-                _ => return Err("WHERE supports =, !=, <, <=, >, >=, LIKE, and AND"),
-            }.to_string());
+            params.filter_op = Some(
+                match op {
+                    BinaryOperator::Eq => "eq",
+                    BinaryOperator::NotEq => "ne",
+                    BinaryOperator::Gt => "gt",
+                    BinaryOperator::GtEq => "gte",
+                    BinaryOperator::Lt => "lt",
+                    BinaryOperator::LtEq => "lte",
+                    _ => return Err("WHERE supports =, !=, <, <=, >, >=, LIKE, and AND"),
+                }
+                .to_string(),
+            );
             params.filter_value = Some(value);
             Ok(())
         }
-        Expr::Like { negated, any, expr, pattern, escape_char }
-        | Expr::ILike { negated, any, expr, pattern, escape_char } => {
+        Expr::Like {
+            negated,
+            any,
+            expr,
+            pattern,
+            escape_char,
+        }
+        | Expr::ILike {
+            negated,
+            any,
+            expr,
+            pattern,
+            escape_char,
+        } => {
             if *negated || *any || escape_char.is_some() {
                 return Err("LIKE supports a single positive pattern");
             }

@@ -44,6 +44,13 @@ export interface PeanutObjectSummary {
   updated_at: string;
 }
 
+export interface PeanutSqlResponse {
+  statement: string;
+  table?: string;
+  columns?: string[];
+  rows?: unknown[];
+}
+
 export class PeanutError extends Error {
   readonly status: number;
   readonly body: unknown;
@@ -273,6 +280,12 @@ export class PeanutDataClient {
 
   deleteRow(table: string, rowId: string): Promise<void> {
     return this.client.request("DELETE", this.client.appPath(`/data/tables/${encodePath(table)}/rows/${encodePath(rowId)}`));
+  }
+
+  executeSql(sql: string): Promise<PeanutSqlResponse> {
+    return this.client.request("POST", this.client.appPath("/data/query"), {
+      body: { sql },
+    });
   }
 }
 

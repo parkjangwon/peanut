@@ -194,6 +194,11 @@ export class PeanutDataClient {
     deleteRow(table, rowId) {
         return this.client.request("DELETE", this.client.appPath(`/data/tables/${encodePath(table)}/rows/${encodePath(rowId)}`));
     }
+    executeSql(sql) {
+        return this.client.request("POST", this.client.appPath("/data/query"), {
+            body: { sql },
+        });
+    }
 }
 export class PeanutStorageClient {
     client;

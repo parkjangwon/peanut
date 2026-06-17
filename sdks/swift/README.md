@@ -13,6 +13,8 @@ let peanut = PeanutClient(
 
 let session = try await peanut.auth.login(email: "me@example.com", password: "password123")
 let rows = try await peanut.data.listRows("notes", params: ["limit": "10"])
+_ = try await peanut.data.createRow("notes", data: .object(["title": .string("Ship Peanut"), "done": .bool(false)]))
+let result = try await peanut.data.executeSql("select title from notes limit 10")
 _ = try await peanut.storage.putObject(
     bucket: "assets",
     key: "hello.txt",

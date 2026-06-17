@@ -495,6 +495,8 @@ mod tests {
             required: false,
             max_length: None,
             default: None,
+            unique: false,
+            reference: None,
         }
     }
 
@@ -504,6 +506,8 @@ mod tests {
             required: false,
             max_length: None,
             default: None,
+            unique: false,
+            reference: None,
         }
     }
 
@@ -513,6 +517,8 @@ mod tests {
             required: false,
             max_length: None,
             default: None,
+            unique: false,
+            reference: None,
         }
     }
 

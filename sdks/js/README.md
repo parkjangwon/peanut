@@ -13,8 +13,14 @@ const peanut = new PeanutClient({
 
 const session = await peanut.auth.login("me@example.com", "password123");
 const rows = await peanut.data.listRows("notes", { limit: 10 });
+await peanut.data.createRow("notes", { title: "Ship Peanut", done: false });
+const result = await peanut.data.executeSql("select title from notes limit 10");
 await peanut.storage.putObject("assets", "hello.txt", new Blob(["hi"]), "text/plain");
 await peanut.functions.invoke("hello", { name: "Peanut" });
 ```
 
 The SDK works in runtimes with `fetch`: browsers, Node 18+, React Native, workers, and edge runtimes.
+
+Database tables can use `unique` fields, row references, and custom CRUD rules.
+Those rules are enforced equally through `listRows`/`createRow`/`updateRow` and
+`executeSql`.

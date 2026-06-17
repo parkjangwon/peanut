@@ -34,6 +34,12 @@ export interface PeanutObjectSummary {
     etag: string;
     updated_at: string;
 }
+export interface PeanutSqlResponse {
+    statement: string;
+    table?: string;
+    columns?: string[];
+    rows?: unknown[];
+}
 export declare class PeanutError extends Error {
     readonly status: number;
     readonly body: unknown;
@@ -94,6 +100,7 @@ export declare class PeanutDataClient {
     getRow(table: string, rowId: string): Promise<unknown>;
     updateRow(table: string, rowId: string, data: JsonValue): Promise<unknown>;
     deleteRow(table: string, rowId: string): Promise<void>;
+    executeSql(sql: string): Promise<PeanutSqlResponse>;
 }
 export declare class PeanutStorageClient {
     private readonly client;

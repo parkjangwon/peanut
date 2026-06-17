@@ -6,6 +6,7 @@ final class PeanutClientTests: XCTestCase {
     override func setUp() {
         super.setUp()
         MockURLProtocol.requests = []
+        MockURLProtocol.bodies = []
         MockURLProtocol.responses = []
     }
 
@@ -46,6 +47,27 @@ final class PeanutClientTests: XCTestCase {
         XCTAssertEqual(MockURLProtocol.requests.count, 2)
     }
 
+    func testDataExecuteSqlPostsToAppQueryEndpoint() async throws {
+        MockURLProtocol.responses = [
+            (200, Data(#"{"statement":"select","table":"notes","columns":["title"],"rows":[{"title":"hello"}]}"#.utf8))
+        ]
+        let peanut = PeanutClient(
+            baseURL: URL(string: "https://peanut.test")!,
+            appId: "app_1",
+            apiKey: "pk_test",
+            session: makeSession()
+        )
+
+        _ = try await peanut.data.executeSql("select title from notes")
+
+        let request = try XCTUnwrap(MockURLProtocol.requests.first)
+        XCTAssertEqual(request.url?.absoluteString, "https://peanut.test/api/apps/app_1/data/query")
+        XCTAssertEqual(request.httpMethod, "POST")
+        let body = try XCTUnwrap(MockURLProtocol.bodies.first)
+        let payload = try JSONSerialization.jsonObject(with: body) as? [String: String]
+        XCTAssertEqual(payload?["sql"], "select title from notes")
+    }
+
     private func makeSession() -> URLSession {
         let configuration = URLSessionConfiguration.ephemeral
         configuration.protocolClasses = [MockURLProtocol.self]
@@ -55,6 +77,7 @@ final class PeanutClientTests: XCTestCase {
 
 final class MockURLProtocol: URLProtocol {
     nonisolated(unsafe) static var requests: [URLRequest] = []
+    nonisolated(unsafe) static var bodies: [Data] = []
     nonisolated(unsafe) static var responses: [(Int, Data)] = []
 
     override class func canInit(with request: URLRequest) -> Bool {
@@ -67,6 +90,7 @@ final class MockURLProtocol: URLProtocol {
 
     override func startLoading() {
         Self.requests.append(request)
+        Self.bodies.append(Self.bodyData(from: request))
         let (status, body) = Self.responses.isEmpty
             ? (500, Data())
             : Self.responses.removeFirst()
@@ -82,4 +106,27 @@ final class MockURLProtocol: URLProtocol {
     }
 
     override func stopLoading() {}
+
+    private static func bodyData(from request: URLRequest) -> Data {
+        if let body = request.httpBody {
+            return body
+        }
+        guard let stream = request.httpBodyStream else {
+            return Data()
+        }
+        stream.open()
+        defer { stream.close() }
+        var data = Data()
+        let bufferSize = 1024
+        let buffer = UnsafeMutablePointer<UInt8>.allocate(capacity: bufferSize)
+        defer { buffer.deallocate() }
+        while stream.hasBytesAvailable {
+            let count = stream.read(buffer, maxLength: bufferSize)
+            if count <= 0 {
+                break
+            }
+            data.append(buffer, count: count)
+        }
+        return data
+    }
 }

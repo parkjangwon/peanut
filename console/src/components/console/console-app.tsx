@@ -113,14 +113,57 @@ const navItems: Array<{ view: View; labelKey: string; icon: React.ComponentType<
   { view: "ops", labelKey: "ops", icon: Wrench },
 ];
 
+const schemaTemplates: Record<string, unknown> = {
+  basic: {
+    fields: {
+      title: { type: "string", required: true, max_length: 200, unique: false },
+    },
+  },
+  unique: {
+    fields: {
+      email: { type: "string", required: true, max_length: 320, unique: true },
+    },
+  },
+  reference: {
+    fields: {
+      account_id: { type: "string", required: true, reference: { table: "accounts" } },
+    },
+  },
+};
+
+const policyTemplates: Record<string, unknown> = {
+  adminOnly: { mode: "admin_only" },
+  ownerPrivate: { mode: "owner_private" },
+  sharedRw: { mode: "authenticated_shared_rw" },
+  customOwner: {
+    mode: "custom",
+    rules: {
+      read: { allow: "owner" },
+      create: { allow: "authenticated" },
+      update: { allow: "owner" },
+      delete: { allow: "admin" },
+    },
+  },
+};
+
+function formatJsonTemplate(value: unknown): string {
+  return JSON.stringify(value ?? {}, null, 2);
+}
+
 export function ConsoleApp() {
-  const [user, setUser] = useState<PeanutUser | null>(() => storedUser());
+  const [user, setUser] = useState<PeanutUser | null>(null);
   const [bootstrapping, setBootstrapping] = useState(false);
-  const [view, setView] = useState<View>(() =>
-    typeof window === "undefined" ? "overview" : viewFromPath(window.location.pathname),
-  );
+  const [view, setView] = useState<View>("overview");
   const [selectedAppId, setSelectedAppId] = useState<string>("");
   const queryClient = useQueryClient();
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      setUser(storedUser());
+      setView(viewFromPath(window.location.pathname));
+    }, 0);
+    return () => window.clearTimeout(timer);
+  }, []);
 
   const meQuery = useQuery({
     queryKey: ["admin", "me"],
@@ -167,7 +210,7 @@ export function ConsoleApp() {
         onModeChange={setBootstrapping}
         onAuthenticated={(session) => {
           setUser(session.user);
-            queryClient.invalidateQueries();
+          queryClient.invalidateQueries();
         }}
       />
     );
@@ -1051,6 +1094,13 @@ function AuthView({ app }: { app: AppSummary }) {
   const [password, setPassword] = useState("password123");
   const [isActive, setIsActive] = useState("true");
   const [isAdmin, setIsAdmin] = useState("false");
+  const [provider, setProvider] = useState("google");
+  const [providerEnabled, setProviderEnabled] = useState("true");
+  const [providerClientId, setProviderClientId] = useState("");
+  const [providerClientSecret, setProviderClientSecret] = useState("");
+  const [providerRedirectUri, setProviderRedirectUri] = useState("");
+  const [providerConfigJson, setProviderConfigJson] = useState(formatJsonTemplate({ scopes: ["openid", "email", "profile"] }));
+  const [providerDiagnostics, setProviderDiagnostics] = useState<unknown>(null);
   const users = useQuery({
     queryKey: ["auth", "users", app.id],
     queryFn: async () =>
@@ -1086,6 +1136,34 @@ function AuthView({ app }: { app: AppSummary }) {
     onSuccess: () => {
       toast.success(t("createdUser"));
       queryClient.invalidateQueries({ queryKey: ["auth", "users", app.id] });
+    },
+    onError: (error: Error) => toast.error(error.message),
+  });
+  const saveProvider = useMutation({
+    mutationFn: () =>
+      apiFetch(`/api/apps/${app.id}/auth/providers/${provider}`, {
+        method: "PUT",
+        body: JSON.stringify({
+          enabled: providerEnabled === "true",
+          client_id: providerClientId.trim() || null,
+          client_secret: providerClientSecret.trim() || null,
+          redirect_uri: providerRedirectUri.trim() || null,
+          config: parseJsonInput(providerConfigJson, common("inputJsonInvalid")),
+        }),
+      }),
+    onSuccess: () => {
+      toast.success(t("providerSaved"));
+      setProviderClientSecret("");
+      queryClient.invalidateQueries({ queryKey: ["auth", "providers", app.id] });
+    },
+    onError: (error: Error) => toast.error(error.message),
+  });
+  const runProviderDiagnostics = useMutation({
+    mutationFn: () =>
+      apiFetch<unknown>(`/api/apps/${app.id}/auth/providers/${provider}/diagnostics`),
+    onSuccess: (result) => {
+      setProviderDiagnostics(result);
+      toast.success(t("providerDiagnosticsLoaded"));
     },
     onError: (error: Error) => toast.error(error.message),
   });
@@ -1163,7 +1241,58 @@ function AuthView({ app }: { app: AppSummary }) {
             ])}
           />
         </TabsContent>
-        <TabsContent value="providers"><JsonBlock value={providers.data ?? { status: common("loading") }} /></TabsContent>
+        <TabsContent value="providers" className="space-y-4">
+          <Panel title={t("providerSettings")}>
+            <div className="grid gap-3 lg:grid-cols-[160px_140px_minmax(0,1fr)_minmax(0,1fr)]">
+              <Select value={provider} onValueChange={setProvider}>
+                <SelectTrigger><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  {["google", "github", "apple", "kakao", "naver", "oidc"].map((name) => (
+                    <SelectItem key={name} value={name}>{name}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <Select value={providerEnabled} onValueChange={setProviderEnabled}>
+                <SelectTrigger><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="true">{common("enabled")}</SelectItem>
+                  <SelectItem value="false">{common("disabled")}</SelectItem>
+                </SelectContent>
+              </Select>
+              <Input value={providerClientId} onChange={(event) => setProviderClientId(event.target.value)} placeholder={t("clientId")} />
+              <Input value={providerClientSecret} onChange={(event) => setProviderClientSecret(event.target.value)} placeholder={t("clientSecret")} type="password" />
+            </div>
+            <div className="mt-3 grid gap-3 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto_auto]">
+              <Input value={providerRedirectUri} onChange={(event) => setProviderRedirectUri(event.target.value)} placeholder={t("redirectUri")} />
+              <Textarea
+                aria-label={t("providerConfigJson")}
+                value={providerConfigJson}
+                onChange={(event) => setProviderConfigJson(event.target.value)}
+                className="min-h-24 font-mono text-xs"
+              />
+              <Button onClick={() => saveProvider.mutate()} disabled={saveProvider.isPending}>
+                <Save className="h-4 w-4" /> {common("save")}
+              </Button>
+              <Button variant="outline" onClick={() => runProviderDiagnostics.mutate()} disabled={runProviderDiagnostics.isPending}>
+                <Wrench className="h-4 w-4" /> {common("diagnostics")}
+              </Button>
+            </div>
+          </Panel>
+          <DataTableView
+            loading={providers.isLoading}
+            columns={[t("provider"), common("enabled"), t("clientId"), t("redirectUri"), t("created")]}
+            rows={((providers.data as { providers?: Array<Record<string, unknown>> } | undefined)?.providers ?? []).map((item) => [
+              String(item.provider ?? ""),
+              item.enabled ? common("yes") : common("no"),
+              String(item.client_id ?? ""),
+              String(item.redirect_uri ?? ""),
+              String(item.created_at ?? ""),
+            ])}
+            emptyTitle={t("emptyProvidersTitle")}
+            emptyDescription={t("emptyProvidersDescription")}
+          />
+          <JsonBlock value={providerDiagnostics ?? providers.data ?? { status: common("loading") }} />
+        </TabsContent>
       </Tabs>
     </Section>
   );
@@ -1301,6 +1430,8 @@ function DataView({ app }: { app: AppSummary }) {
     enabled: Boolean(activeTable),
   });
   const [name, setName] = useState("notes");
+  const [createSchemaJson, setCreateSchemaJson] = useState(formatJsonTemplate(schemaTemplates.basic));
+  const [createPolicyJson, setCreatePolicyJson] = useState(formatJsonTemplate(policyTemplates.adminOnly));
   const [rowJson, setRowJson] = useState('{\n  "title": "Hello Peanut"\n}');
   const [sql, setSql] = useState("select * from notes order by created_at desc limit 20;");
   const [sqlResult, setSqlResult] = useState<unknown>(null);
@@ -1311,8 +1442,8 @@ function DataView({ app }: { app: AppSummary }) {
         body: JSON.stringify({
           name,
           display_name: name,
-          schema: { fields: { title: { type: "string", required: true } } },
-          access_policy: { mode: "admin_only" },
+          schema: parseJsonInput(createSchemaJson, common("inputJsonInvalid")),
+          access_policy: parseJsonInput(createPolicyJson, common("inputJsonInvalid")),
         }),
     }),
     onSuccess: () => {
@@ -1349,9 +1480,54 @@ function DataView({ app }: { app: AppSummary }) {
   return (
     <Section title={t("title")} description={t("description")}>
       <Panel title={t("createTable")}>
-        <div className="flex gap-3">
+        <div className="grid gap-3 lg:grid-cols-[220px_minmax(0,1fr)_minmax(0,1fr)_auto]">
           <Input value={name} onChange={(event) => setName(event.target.value)} />
-          <Button onClick={() => createTable.mutate()} disabled={createTable.isPending}>{common("create")}</Button>
+          <div className="grid gap-2">
+            <Select
+              defaultValue="basic"
+              onValueChange={(value) => setCreateSchemaJson(formatJsonTemplate(schemaTemplates[value]))}
+            >
+              <SelectTrigger className="w-full">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="basic">{t("schemaTemplateBasic")}</SelectItem>
+                <SelectItem value="unique">{t("schemaTemplateUnique")}</SelectItem>
+                <SelectItem value="reference">{t("schemaTemplateReference")}</SelectItem>
+              </SelectContent>
+            </Select>
+            <Textarea
+              aria-label={t("schemaJson")}
+              value={createSchemaJson}
+              onChange={(event) => setCreateSchemaJson(event.target.value)}
+              className="min-h-32 font-mono text-xs"
+            />
+          </div>
+          <div className="grid gap-2">
+            <Select
+              defaultValue="adminOnly"
+              onValueChange={(value) => setCreatePolicyJson(formatJsonTemplate(policyTemplates[value]))}
+            >
+              <SelectTrigger className="w-full">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="adminOnly">{t("policyTemplateAdminOnly")}</SelectItem>
+                <SelectItem value="ownerPrivate">{t("policyTemplateOwnerPrivate")}</SelectItem>
+                <SelectItem value="sharedRw">{t("policyTemplateSharedRw")}</SelectItem>
+                <SelectItem value="customOwner">{t("policyTemplateCustomOwner")}</SelectItem>
+              </SelectContent>
+            </Select>
+            <Textarea
+              aria-label={t("policyJson")}
+              value={createPolicyJson}
+              onChange={(event) => setCreatePolicyJson(event.target.value)}
+              className="min-h-32 font-mono text-xs"
+            />
+          </div>
+          <Button onClick={() => createTable.mutate()} disabled={createTable.isPending}>
+            {common("create")}
+          </Button>
         </div>
       </Panel>
       <Panel title={t("sqlConsole")}>
@@ -1440,7 +1616,7 @@ function DataTableActions({ appId, tableName }: { appId: string; tableName: stri
   const [loadingDraft, setLoadingDraft] = useState(false);
   const [displayName, setDisplayName] = useState(tableName);
   const [schemaJson, setSchemaJson] = useState("");
-  const [policyMode, setPolicyMode] = useState("admin_only");
+  const [policyJson, setPolicyJson] = useState(formatJsonTemplate(policyTemplates.adminOnly));
 
   const openEditor = async () => {
     setOpen(true);
@@ -1451,8 +1627,7 @@ function DataTableActions({ appId, tableName }: { appId: string; tableName: stri
       );
       setDisplayName(String(response.table.display_name ?? tableName));
       setSchemaJson(JSON.stringify(response.table.schema ?? { fields: {} }, null, 2));
-      const policy = response.table.access_policy as { mode?: string } | undefined;
-      setPolicyMode(policy?.mode ?? "admin_only");
+      setPolicyJson(JSON.stringify(response.table.access_policy ?? { mode: "admin_only" }, null, 2));
     } catch (error) {
       toast.error((error as Error).message);
     } finally {
@@ -1467,7 +1642,7 @@ function DataTableActions({ appId, tableName }: { appId: string; tableName: stri
         body: JSON.stringify({
           display_name: displayName,
           schema: parseJsonInput(schemaJson, common("inputJsonInvalid")),
-          access_policy: { mode: policyMode },
+          access_policy: parseJsonInput(policyJson, common("inputJsonInvalid")),
         }),
       }),
     onSuccess: () => {
@@ -1510,15 +1685,39 @@ function DataTableActions({ appId, tableName }: { appId: string; tableName: stri
           </DialogHeader>
           <div className="grid gap-3">
             <Input value={displayName} onChange={(event) => setDisplayName(event.target.value)} />
-            <Select value={policyMode} onValueChange={setPolicyMode}>
-              <SelectTrigger><SelectValue /></SelectTrigger>
+            <Select onValueChange={(value) => setSchemaJson(formatJsonTemplate(schemaTemplates[value]))}>
+              <SelectTrigger className="w-full">
+                <SelectValue placeholder={t("schemaTemplate")} />
+              </SelectTrigger>
               <SelectContent>
-                <SelectItem value="admin_only">admin_only</SelectItem>
-                <SelectItem value="owner_private">owner_private</SelectItem>
-                <SelectItem value="authenticated_shared_rw">authenticated_shared_rw</SelectItem>
+                <SelectItem value="basic">{t("schemaTemplateBasic")}</SelectItem>
+                <SelectItem value="unique">{t("schemaTemplateUnique")}</SelectItem>
+                <SelectItem value="reference">{t("schemaTemplateReference")}</SelectItem>
               </SelectContent>
             </Select>
-            <Textarea value={schemaJson} onChange={(event) => setSchemaJson(event.target.value)} className="min-h-56 font-mono text-xs" />
+            <Textarea
+              aria-label={t("schemaJson")}
+              value={schemaJson}
+              onChange={(event) => setSchemaJson(event.target.value)}
+              className="min-h-56 font-mono text-xs"
+            />
+            <Select onValueChange={(value) => setPolicyJson(formatJsonTemplate(policyTemplates[value]))}>
+              <SelectTrigger className="w-full">
+                <SelectValue placeholder={t("policyTemplate")} />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="adminOnly">{t("policyTemplateAdminOnly")}</SelectItem>
+                <SelectItem value="ownerPrivate">{t("policyTemplateOwnerPrivate")}</SelectItem>
+                <SelectItem value="sharedRw">{t("policyTemplateSharedRw")}</SelectItem>
+                <SelectItem value="customOwner">{t("policyTemplateCustomOwner")}</SelectItem>
+              </SelectContent>
+            </Select>
+            <Textarea
+              aria-label={t("policyJson")}
+              value={policyJson}
+              onChange={(event) => setPolicyJson(event.target.value)}
+              className="min-h-40 font-mono text-xs"
+            />
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setOpen(false)}>{common("cancel")}</Button>
@@ -1893,7 +2092,11 @@ function FunctionsView({ app }: { app: AppSummary }) {
   const [queryJson, setQueryJson] = useState('{\n}');
   const [inputJson, setInputJson] = useState('{\n  "input": {\n    "message": "Hello Peanut"\n  }\n}');
   const [output, setOutput] = useState<Record<string, unknown> | null>(null);
-  const [browserOrigin] = useState(() => (typeof window === "undefined" ? "" : window.location.origin));
+  const [browserOrigin, setBrowserOrigin] = useState("");
+  useEffect(() => {
+    const timer = window.setTimeout(() => setBrowserOrigin(window.location.origin), 0);
+    return () => window.clearTimeout(timer);
+  }, []);
   const metrics = useQuery({
     queryKey: ["ops", "metrics"],
     queryFn: () => apiFetch<OpsMetrics>("/api/admin/ops/metrics"),

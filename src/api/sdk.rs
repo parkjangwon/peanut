@@ -636,6 +636,8 @@ mod tests {
                             required: true,
                             max_length: None,
                             default: None,
+                            unique: false,
+                            reference: None,
                         },
                     )]
                     .into_iter()
@@ -643,6 +645,7 @@ mod tests {
                 },
                 access_policy: crate::api::data::AccessPolicy {
                     mode: "authenticated_shared_rw".to_string(),
+                    rules: None,
                 },
             }),
         )
