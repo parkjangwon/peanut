@@ -24,6 +24,7 @@ mod import_export;
 mod presets;
 mod query;
 mod rows;
+mod sql;
 mod tables;
 mod types;
 
@@ -38,6 +39,7 @@ pub(crate) use query::{
     build_row_query, validate_list_rows_params, validate_schema_evolution, RowQueryBind,
 };
 pub use rows::{create_row, delete_row, get_row, list_rows, update_row};
+pub use sql::{execute_sql, SqlRequest};
 
 pub use tables::{create_table, delete_table, get_table, list_tables, update_table};
 pub use types::*;

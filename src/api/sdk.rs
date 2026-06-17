@@ -205,6 +205,24 @@ pub async fn get_data_table(
     crate::api::data::get_table(State(state), Extension(claims), Path(table)).await
 }
 
+pub async fn execute_data_sql(
+    State(state): State<crate::AppState>,
+    Extension(auth): Extension<SdkAuthContext>,
+    Json(payload): Json<crate::api::data::SqlRequest>,
+) -> Response {
+    let statement = payload.sql.trim_start().to_ascii_lowercase();
+    let required_scope = if statement.starts_with("select") {
+        "data:read"
+    } else {
+        "data:write"
+    };
+    let claims = match scoped_actor_claims(&auth, required_scope) {
+        Ok(claims) => claims,
+        Err(response) => return response,
+    };
+    crate::api::data::execute_sql(State(state), Extension(claims), Json(payload)).await
+}
+
 pub async fn list_data_rows(
     State(state): State<crate::AppState>,
     Extension(auth): Extension<SdkAuthContext>,

@@ -322,6 +322,10 @@ fn build_sdk_routes(state: crate::AppState, max_upload_bytes: usize) -> Router<c
             get(crate::api::sdk::get_data_table),
         )
         .route(
+            "/apps/:app_id/data/query",
+            post(crate::api::sdk::execute_data_sql),
+        )
+        .route(
             "/apps/:app_id/data/tables/:table/rows",
             get(crate::api::sdk::list_data_rows),
         )

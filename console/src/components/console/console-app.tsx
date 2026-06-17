@@ -1302,6 +1302,8 @@ function DataView({ app }: { app: AppSummary }) {
   });
   const [name, setName] = useState("notes");
   const [rowJson, setRowJson] = useState('{\n  "title": "Hello Peanut"\n}');
+  const [sql, setSql] = useState("select * from notes order by created_at desc limit 20;");
+  const [sqlResult, setSqlResult] = useState<unknown>(null);
   const createTable = useMutation({
     mutationFn: () =>
       apiFetch(`/api/apps/${app.id}/data/tables`, {
@@ -1331,6 +1333,19 @@ function DataView({ app }: { app: AppSummary }) {
     },
     onError: (error: Error) => toast.error(error.message),
   });
+  const executeSql = useMutation({
+    mutationFn: () =>
+      apiFetch<unknown>(`/api/apps/${app.id}/data/query`, {
+        method: "POST",
+        body: JSON.stringify({ sql }),
+      }),
+    onSuccess: (result) => {
+      setSqlResult(result);
+      toast.success(t("sqlExecuted"));
+      queryClient.invalidateQueries({ queryKey: ["data", "rows", app.id] });
+    },
+    onError: (error: Error) => toast.error(error.message),
+  });
   return (
     <Section title={t("title")} description={t("description")}>
       <Panel title={t("createTable")}>
@@ -1338,6 +1353,24 @@ function DataView({ app }: { app: AppSummary }) {
           <Input value={name} onChange={(event) => setName(event.target.value)} />
           <Button onClick={() => createTable.mutate()} disabled={createTable.isPending}>{common("create")}</Button>
         </div>
+      </Panel>
+      <Panel title={t("sqlConsole")}>
+        <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_260px]">
+          <Textarea
+            value={sql}
+            onChange={(event) => setSql(event.target.value)}
+            className="min-h-36 font-mono text-xs"
+          />
+          <div className="space-y-3">
+            <Button onClick={() => executeSql.mutate()} disabled={executeSql.isPending || !sql.trim()}>
+              <Play className="h-4 w-4" /> {t("runSql")}
+            </Button>
+            <div className="rounded-md border bg-muted/20 p-3 text-xs leading-5 text-muted-foreground">
+              {t("sqlHelp")}
+            </div>
+          </div>
+        </div>
+        <JsonBlock value={sqlResult ?? { status: t("sqlEmptyResult") }} minHeight={180} />
       </Panel>
       <Tabs defaultValue="tables">
         <TabsList>
