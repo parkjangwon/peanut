@@ -25,7 +25,7 @@ function detectLocale(): ConsoleLocale {
   if (typeof window === "undefined") return "en";
   const stored = window.localStorage.getItem(LOCALE_STORAGE_KEY);
   if (stored === "en" || stored === "ko") return stored;
-  return window.navigator.language.toLowerCase().startsWith("ko") ? "ko" : "en";
+  return "en";
 }
 
 export function ConsoleI18nProvider({ children }: { children: React.ReactNode }) {

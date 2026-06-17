@@ -65,6 +65,7 @@ import {
 } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import { useConsoleLocale } from "@/i18n/provider";
+import type { ConsoleLocale } from "@/i18n/provider";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -220,9 +221,20 @@ function AuthScreen({
   onAuthenticated: (session: Awaited<ReturnType<typeof loginAdmin>>) => void;
 }) {
   const t = useTranslations("auth");
+  const common = useTranslations("common");
+  const { locale, setLocale } = useConsoleLocale();
   const [email, setEmail] = useState("admin@peanut.local");
   const [password, setPassword] = useState("");
   const [rememberMe, setRememberMe] = useState(true);
+  const initializedAuthLocale = useRef(false);
+
+  useEffect(() => {
+    if (initializedAuthLocale.current) return;
+    initializedAuthLocale.current = true;
+    if (locale !== "en") {
+      setLocale("en");
+    }
+  }, [locale, setLocale]);
 
   const mutation = useMutation({
     mutationFn: () =>
@@ -246,35 +258,46 @@ function AuthScreen({
 
   return (
     <div className="min-h-screen bg-[radial-gradient(circle_at_top_left,color-mix(in_oklch,var(--primary),white_70%),transparent_38%),linear-gradient(180deg,var(--background),white)]">
-      <div className="mx-auto grid min-h-screen w-full max-w-6xl grid-cols-1 items-center gap-10 px-5 py-10 lg:grid-cols-[1.05fr_0.95fr]">
-        <section className="space-y-8">
+      <div className="mx-auto flex min-h-screen w-full max-w-[1360px] flex-col px-5 py-8">
+        <div className="mb-8 flex items-center justify-between gap-4">
           <PeanutLogo />
-          <div className="max-w-2xl space-y-5">
-            <Badge className="bg-primary/10 text-primary hover:bg-primary/10">
-              {t("badge")}
-            </Badge>
-            <h1 className="text-4xl font-semibold tracking-tight text-foreground sm:text-6xl">
-              {t("headline")}
-            </h1>
-            <p className="max-w-xl text-lg leading-8 text-muted-foreground">
-              {t("description")}
-            </p>
-          </div>
-          <div className="grid max-w-2xl grid-cols-1 gap-3 sm:grid-cols-3">
-            <Signal icon={ShieldCheck} label={t("signalIsolation")} />
-            <Signal icon={Database} label={t("signalData")} />
-            <Signal icon={Cloud} label={t("signalOps")} />
-          </div>
-          <div className="grid max-w-2xl grid-cols-1 gap-3 sm:grid-cols-2">
-            <FeatureSignal icon={Users} title={t("featureAuth")} description={t("featureAuthDescription")} />
-            <FeatureSignal icon={Database} title={t("featureData")} description={t("featureDataDescription")} />
-            <FeatureSignal icon={Archive} title={t("featureStorage")} description={t("featureStorageDescription")} />
-            <FeatureSignal icon={Code2} title={t("featureFunctions")} description={t("featureFunctionsDescription")} />
-            <FeatureSignal icon={Bell} title={t("featurePush")} description={t("featurePushDescription")} />
-            <FeatureSignal icon={Wrench} title={t("featureOps")} description={t("featureOpsDescription")} />
-          </div>
-        </section>
-        <section className="rounded-lg border bg-card p-6 shadow-sm">
+          <LocaleSelect
+            locale={locale}
+            onChange={setLocale}
+            label={common("language")}
+            english={common("english")}
+            korean={common("korean")}
+            className="bg-card"
+          />
+        </div>
+        <div className="grid flex-1 grid-cols-1 items-center gap-10 xl:grid-cols-[minmax(0,1.4fr)_minmax(440px,0.6fr)]">
+          <section className="space-y-7">
+            <div className="max-w-3xl space-y-5">
+              <Badge className="bg-primary/10 text-primary hover:bg-primary/10">
+                {t("badge")}
+              </Badge>
+              <h1 className="max-w-3xl whitespace-pre-line text-balance text-4xl font-semibold tracking-tight text-foreground sm:text-5xl xl:text-6xl">
+                {t("headline")}
+              </h1>
+              <p className="max-w-3xl whitespace-pre-line text-pretty text-lg leading-8 text-muted-foreground">
+                {t("description")}
+              </p>
+            </div>
+            <div className="grid max-w-3xl grid-cols-1 gap-3 sm:grid-cols-3">
+              <Signal icon={ShieldCheck} label={t("signalIsolation")} />
+              <Signal icon={Database} label={t("signalData")} />
+              <Signal icon={Cloud} label={t("signalOps")} />
+            </div>
+            <div className="grid max-w-[900px] grid-cols-1 gap-3 sm:grid-cols-2">
+              <FeatureSignal icon={Users} title={t("featureAuth")} description={t("featureAuthDescription")} />
+              <FeatureSignal icon={Database} title={t("featureData")} description={t("featureDataDescription")} />
+              <FeatureSignal icon={Archive} title={t("featureStorage")} description={t("featureStorageDescription")} />
+              <FeatureSignal icon={Code2} title={t("featureFunctions")} description={t("featureFunctionsDescription")} />
+              <FeatureSignal icon={Bell} title={t("featurePush")} description={t("featurePushDescription")} />
+              <FeatureSignal icon={Wrench} title={t("featureOps")} description={t("featureOpsDescription")} />
+            </div>
+          </section>
+          <section className="w-full max-w-[520px] justify-self-center rounded-lg border bg-card p-6 shadow-sm xl:justify-self-end">
           <div className="mb-6 flex items-center justify-between gap-4">
             <div>
               <h2 className="text-xl font-semibold">
@@ -335,7 +358,8 @@ function AuthScreen({
           >
             {bootstrapping ? t("alreadyHaveAdmin") : t("setUpFresh")}
           </Button>
-        </section>
+          </section>
+        </div>
       </div>
     </div>
   );
@@ -359,6 +383,38 @@ function FeatureSignal({
       <div className="mt-1 text-sm leading-6 text-muted-foreground">{description}</div>
     </div>
   );
+}
+
+function LocaleSelect({
+  locale,
+  onChange,
+  label,
+  english,
+  korean,
+  className,
+}: {
+  locale: ConsoleLocale;
+  onChange: (locale: ConsoleLocale) => void;
+  label: string;
+  english: string;
+  korean: string;
+  className?: string;
+}) {
+  return (
+    <Select value={locale} onValueChange={(value) => onChange(parseLocale(value))}>
+      <SelectTrigger className={cn("w-[128px]", className)} aria-label={label}>
+        <SelectValue />
+      </SelectTrigger>
+      <SelectContent>
+        <SelectItem value="en">{english}</SelectItem>
+        <SelectItem value="ko">{korean}</SelectItem>
+      </SelectContent>
+    </Select>
+  );
+}
+
+function parseLocale(value: string): ConsoleLocale {
+  return value === "ko" ? "ko" : "en";
 }
 
 function ConsoleHeader({
@@ -410,15 +466,14 @@ function ConsoleHeader({
           </Select>
         </div>
         <div className="flex items-center gap-3">
-          <Select value={locale} onValueChange={(value) => setLocale(value as "en" | "ko")}>
-            <SelectTrigger className="h-9 w-[116px] bg-card" aria-label={t("language")}>
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="en">{t("english")}</SelectItem>
-              <SelectItem value="ko">{t("korean")}</SelectItem>
-            </SelectContent>
-          </Select>
+          <LocaleSelect
+            locale={locale}
+            onChange={setLocale}
+            label={t("language")}
+            english={t("english")}
+            korean={t("korean")}
+            className="h-9 bg-card"
+          />
           <div className="hidden text-right text-sm sm:block">
             <div className="font-medium">{user.email}</div>
             <div className="text-xs text-muted-foreground">{t("platformRole", { role: user.admin_role })}</div>
