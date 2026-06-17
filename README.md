@@ -96,8 +96,13 @@ use the Docker build path below.
 Create `.env` next to `docker-compose.yml`:
 
 ```env
+PEANUT_HOST_PORT=3492
 JWT_SECRET=replace-with-a-long-random-secret
 FUNCTIONS_SECRETS_MASTER_KEY=replace-with-a-different-long-random-secret
+DATABASE_URL=sqlite://data/peanut.db
+STORAGE_DIR=data/storage
+BIND_ADDR=0.0.0.0:3000
+PASSWORD_RESET_DELIVERY=log
 ```
 
 Start Peanut:
@@ -110,7 +115,9 @@ The Dockerfile builds the console, copies `console/out` into the Rust build
 stage, installs Deno in the runtime image, and serves everything from the Peanut
 binary.
 
-Open `http://127.0.0.1:3000`, create or sign in as a platform admin, then run
+Docker Compose publishes host port `3492` by default while the app listens on
+container port `3000`. Open `http://127.0.0.1:3492`, create or sign in as a
+platform admin, then run
 the production gate before trusting a deployment:
 
 ```bash

@@ -17,8 +17,8 @@ Build the image from the current checkout:
 docker compose -f docker-compose.yml -f docker-compose.build.yml up -d --build
 ```
 
-The default service is named `peanut`, exposes port `3000`, and persists state
-under `./data`.
+The default service is named `peanut`, publishes host port `3492`, and persists
+state under `./data`. The app still listens on container port `3000`.
 
 ## Required `.env`
 
@@ -26,11 +26,13 @@ Create `.env` next to `docker-compose.yml`:
 
 ```env
 PEANUT_IMAGE=ghcr.io/parkjangwon/peanut:latest
+PEANUT_HOST_PORT=3492
 JWT_SECRET=replace-with-a-long-random-secret
 FUNCTIONS_SECRETS_MASTER_KEY=replace-with-a-different-long-random-secret
 DATABASE_URL=sqlite://data/peanut.db
 STORAGE_DIR=data/storage
 BIND_ADDR=0.0.0.0:3000
+PASSWORD_RESET_DELIVERY=log
 MAX_UPLOAD_BYTES=5242880
 FUNCTIONS_ENABLED=true
 FUNCTIONS_ALLOW_NETWORK=false
@@ -68,13 +70,13 @@ docker compose logs -f peanut
 Check readiness:
 
 ```bash
-curl -fsS http://127.0.0.1:3000/api/ready
+curl -fsS http://127.0.0.1:3492/api/ready
 ```
 
 Open:
 
 ```text
-http://127.0.0.1:3000
+http://127.0.0.1:3492
 ```
 
 ## First Admin
@@ -82,7 +84,7 @@ http://127.0.0.1:3000
 Use the console setup flow, or bootstrap by API:
 
 ```bash
-curl -s -X POST "http://127.0.0.1:3000/api/bootstrap/admin" \
+curl -s -X POST "http://127.0.0.1:3492/api/bootstrap/admin" \
   -H "content-type: application/json" \
   --data '{"email":"owner@example.com","password":"password123"}'
 ```

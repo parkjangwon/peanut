@@ -7,6 +7,7 @@ command -v jq >/dev/null 2>&1 || {
 }
 
 : "${BASE_URL:=http://127.0.0.1:3000}"
+: "${APP_ID:=default}"
 : "${TABLE_NAME:=ops_todos}"
 : "${STORAGE_BUCKET:=assets}"
 : "${STORAGE_KEY:=ops/hello.txt}"

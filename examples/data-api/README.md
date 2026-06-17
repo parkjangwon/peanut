@@ -21,15 +21,22 @@ Example:
 
 ```bash
 export BASE_URL=http://127.0.0.1:3000
+export APP_ID=default
+export APP_KEY='<PASTE_APP_API_KEY>'
 export TOKEN='<PASTE_ACCESS_TOKEN>'
 
-curl -s -X POST "$BASE_URL/api/data/tables" \
+curl -s -X POST "$BASE_URL/api/apps/$APP_ID/data/tables" \
+  -H "x-peanut-api-key: $APP_KEY" \
   -H "authorization: Bearer $TOKEN" \
   -H 'content-type: application/json' \
   --data @examples/data-api/todos/create-table.json
 
-curl -s -X POST "$BASE_URL/api/data/tables/todos/rows" \
+curl -s -X POST "$BASE_URL/api/apps/$APP_ID/data/tables/todos/rows" \
+  -H "x-peanut-api-key: $APP_KEY" \
   -H "authorization: Bearer $TOKEN" \
   -H 'content-type: application/json' \
   --data @examples/data-api/todos/create-row-buy-milk.json
 ```
+
+Use `http://127.0.0.1:3492` for `BASE_URL` when using the default Docker
+Compose package.

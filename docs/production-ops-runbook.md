@@ -32,6 +32,10 @@ PEANUT_BOOTSTRAP_PASSWORD=password123 \
 scripts/verify-compose.sh
 ```
 
+The verifier uses `http://127.0.0.1:3492` by default, matching the packaged
+Compose host port. Override `BASE_URL` only when you publish a different
+`PEANUT_HOST_PORT` or verify through a reverse proxy.
+
 Without `PEANUT_ADMIN_TOKEN` or bootstrap credentials, the verifier only checks
 compose startup, readiness, and Deno availability. A production gate run must
 include either `PEANUT_ADMIN_TOKEN` or `PEANUT_BOOTSTRAP_EMAIL` plus

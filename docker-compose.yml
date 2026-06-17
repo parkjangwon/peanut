@@ -3,15 +3,28 @@ services:
     image: ${PEANUT_IMAGE:-ghcr.io/parkjangwon/peanut:latest}
     container_name: peanut
     ports:
-      - "3000:3000"
+      - "${PEANUT_HOST_PORT:-3492}:3000"
     volumes:
       - ./data:/app/data
     restart: always
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "deno",
+          "eval",
+          "const r = await fetch('http://127.0.0.1:3000/api/ready'); Deno.exit(r.ok ? 0 : 1);",
+        ]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
     environment:
       DATABASE_URL: ${DATABASE_URL:-sqlite://data/peanut.db}
       STORAGE_DIR: ${STORAGE_DIR:-data/storage}
       BIND_ADDR: ${BIND_ADDR:-0.0.0.0:3000}
       JWT_SECRET: ${JWT_SECRET:?set JWT_SECRET in your shell or .env file}
+      PASSWORD_RESET_DELIVERY: ${PASSWORD_RESET_DELIVERY:-log}
       MAX_UPLOAD_BYTES: ${MAX_UPLOAD_BYTES:-5242880}
       FUNCTIONS_ENABLED: ${FUNCTIONS_ENABLED:-true}
       FUNCTIONS_ALLOW_NETWORK: ${FUNCTIONS_ALLOW_NETWORK:-false}
@@ -25,4 +38,6 @@ services:
       TRUST_PROXY_HEADERS: ${TRUST_PROXY_HEADERS:-false}
       MULTIPART_STALE_HOURS: ${MULTIPART_STALE_HOURS:-24}
       MULTIPART_CLEANUP_INTERVAL_SECONDS: ${MULTIPART_CLEANUP_INTERVAL_SECONDS:-3600}
+      AUTH_ALLOWED_ORIGINS: ${AUTH_ALLOWED_ORIGINS:-}
+      AUTH_ALLOWED_CLIENT_IDS: ${AUTH_ALLOWED_CLIENT_IDS:-}
       RUST_LOG: ${RUST_LOG:-info}

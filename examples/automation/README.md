@@ -27,6 +27,8 @@ PEANUT_ENV_FILE=/opt/peanut/peanut.env \
 
 Notes:
 - the env file is intentionally not committed with real secrets
+- `peanut.env.sample` targets the default Docker Compose host port, `3492`; use `3000` for direct local `cargo run`
+- automation API calls are app-scoped; set `APP_ID` when you are not using the default app
 - prefer one service token per automation purpose
 - rotate tokens by minting a new one, updating the env file, verifying one run, then revoking the old token
 - for the broader guidance, see `../../docs/automation-runbook.md`

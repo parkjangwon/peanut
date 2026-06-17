@@ -43,13 +43,19 @@ Use the committed sample as a starting point:
 Example machine-local file:
 
 ```bash
-BASE_URL=http://127.0.0.1:3000
+BASE_URL=http://127.0.0.1:3492
+APP_ID=default
 SERVICE_TOKEN=pst_replace_me
 TABLE_NAME=ops_todos
 STORAGE_BUCKET=assets
 STORAGE_KEY=ops/hello.txt
 AUTOMATION_OUT_DIR=/opt/peanut/backups
 ```
+
+Use `http://127.0.0.1:3000` instead when automating against a direct local
+`cargo run` process instead of the default Docker Compose package.
+Set `APP_ID` to the app whose Data and Storage resources the automation should
+operate on.
 
 ## Runnable automation examples
 

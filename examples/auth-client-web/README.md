@@ -20,7 +20,7 @@ It demonstrates:
 
 1. Start Peanut locally.
 2. Open `index.html` directly in a browser, or serve this directory with a static file server.
-3. Set the Peanut base URL, usually `http://127.0.0.1:3000`.
+3. Set the Peanut base URL, usually `http://127.0.0.1:3000` for direct local development or `http://127.0.0.1:3492` for the default Docker Compose package.
 4. Set the app id, usually `default` for a fresh local install.
 5. Create a client or server app key in the Peanut console/API and paste it into the app key field.
 6. If Peanut uses `AUTH_ALLOWED_CLIENT_IDS`, also set the client id field before using auth routes.

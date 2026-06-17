@@ -25,6 +25,10 @@ PEANUT_BOOTSTRAP_PASSWORD=password123 \
 scripts/verify-compose.sh
 ```
 
+검증 스크립트의 기본 URL은 패키징된 Compose 호스트 포트와 맞춘
+`http://127.0.0.1:3492`입니다. `PEANUT_HOST_PORT`를 바꾸거나 reverse proxy를
+통해 검증할 때만 `BASE_URL`을 덮어씁니다.
+
 이미 운영 중인 인스턴스에서는 admin token을 사용합니다.
 
 ```bash

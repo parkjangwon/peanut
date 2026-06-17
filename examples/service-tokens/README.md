@@ -9,6 +9,9 @@ Recommended flow:
 4. use the service token as Bearer auth on protected admin routes
 5. revoke the token when the automation is no longer needed
 
+The examples default to direct local development on `http://127.0.0.1:3000`.
+Use `http://127.0.0.1:3492` when talking to the default Docker Compose package.
+
 Files included:
 - `create-token.json`
 - `create-token.sh`

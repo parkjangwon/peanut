@@ -13,6 +13,7 @@ fi
 source "$PEANUT_ENV_FILE"
 
 : "${BASE_URL:?Set BASE_URL in the env file}"
+: "${APP_ID:=default}"
 : "${SERVICE_TOKEN:?Set SERVICE_TOKEN in the env file}"
 : "${TABLE_NAME:=ops_todos}"
 : "${AUTOMATION_OUT_DIR:=/opt/peanut/backups}"
@@ -20,7 +21,7 @@ source "$PEANUT_ENV_FILE"
 TIMESTAMP=$(date +%F-%H%M%S)
 mkdir -p "$AUTOMATION_OUT_DIR"
 
-curl -fsS "$BASE_URL/api/data/tables/$TABLE_NAME/export" \
+curl -fsS "$BASE_URL/api/apps/$APP_ID/data/tables/$TABLE_NAME/export" \
   -H "authorization: Bearer $SERVICE_TOKEN" \
   > "$AUTOMATION_OUT_DIR/$TABLE_NAME-$TIMESTAMP.json"
 

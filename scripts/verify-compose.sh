@@ -2,7 +2,7 @@
 set -euo pipefail
 
 COMPOSE_FILES="${COMPOSE_FILES:-${COMPOSE_FILE:-docker-compose.yml}}"
-BASE_URL="${BASE_URL:-http://127.0.0.1:3000}"
+BASE_URL="${BASE_URL:-http://127.0.0.1:3492}"
 SERVICE="${SERVICE:-peanut}"
 ADMIN_TOKEN="${PEANUT_ADMIN_TOKEN:-}"
 APP_ID="${PEANUT_VERIFY_APP_ID:-default}"

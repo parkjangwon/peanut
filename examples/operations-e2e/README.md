@@ -37,6 +37,7 @@ Files included:
 
 Environment variables used:
 - `BASE_URL` default: `http://127.0.0.1:3000`
+- `APP_ID` optional, default `default`
 - `ADMIN_JWT` required for service-token creation
 - `SERVICE_TOKEN` required for Data API + storage steps
 - `TABLE_NAME` optional, default `ops_todos`
@@ -50,6 +51,7 @@ Minimal flow:
 
 ```bash
 export BASE_URL=http://127.0.0.1:3000
+export APP_ID=default
 export ADMIN_JWT='<PASTE_ADMIN_JWT>'
 
 ./examples/operations-e2e/create-service-token.sh
@@ -72,6 +74,7 @@ One-command happy path with `jq`:
 
 ```bash
 export BASE_URL=http://127.0.0.1:3000
+export APP_ID=default
 export ADMIN_JWT='<PASTE_ADMIN_JWT>'
 
 ./examples/operations-e2e/run-happy-path.sh
@@ -81,6 +84,7 @@ If you already have a plaintext service token, skip admin token creation:
 
 ```bash
 export BASE_URL=http://127.0.0.1:3000
+export APP_ID=default
 export SERVICE_TOKEN='pst_...'
 
 ./examples/operations-e2e/run-happy-path.sh
@@ -90,6 +94,7 @@ If `jq` is installed, you can bootstrap the service token and print the next com
 
 ```bash
 export BASE_URL=http://127.0.0.1:3000
+export APP_ID=default
 export ADMIN_JWT='<PASTE_ADMIN_JWT>'
 
 ./examples/operations-e2e/bootstrap-service-token-jq.sh
@@ -105,6 +110,8 @@ Practical event-sync pattern:
 Notes:
 - if you want to turn this into cron/systemd/CI automation, see `../automation/` and `../../docs/automation-runbook.md`
 - for machine-local secret storage, start from `../automation/peanut.env.sample`
+- the script defaults target direct local development on port `3000`; export `BASE_URL=http://127.0.0.1:3492` for the default Docker Compose package
+- API calls are app-scoped; export `APP_ID=<your-app-id>` when you are not using the default app
 - these examples intentionally use explicit placeholders instead of shell JSON parsing tricks
 - the service token acts as the backing admin user on protected APIs
 - the storage object still lands in the current authenticated user's scoped storage namespace

@@ -43,13 +43,18 @@
 예시 로컬 파일:
 
 ```bash
-BASE_URL=http://127.0.0.1:3000
+BASE_URL=http://127.0.0.1:3492
+APP_ID=default
 SERVICE_TOKEN=pst_replace_me
 TABLE_NAME=ops_todos
 STORAGE_BUCKET=assets
 STORAGE_KEY=ops/hello.txt
 AUTOMATION_OUT_DIR=/opt/peanut/backups
 ```
+
+Docker Compose 기본 패키징이 아니라 `cargo run`으로 직접 띄운 로컬 프로세스를
+자동화한다면 `http://127.0.0.1:3000`을 사용합니다.
+`APP_ID`에는 자동화가 접근할 Data와 Storage 리소스의 앱 ID를 넣습니다.
 
 ## 바로 실행 가능한 automation 예제
 

@@ -17,9 +17,11 @@ ghcr.io/parkjangwon/peanut:<version>
 ## Required `.env` checklist
 
 - `JWT_SECRET`: long random secret
+- `PEANUT_HOST_PORT`: host port published by Docker Compose, default `3492`
 - `DATABASE_URL`: usually `sqlite://data/peanut.db` in Docker
 - `STORAGE_DIR`: usually `data/storage` in Docker
 - `BIND_ADDR`: `0.0.0.0:3000` in Docker
+- `PASSWORD_RESET_DELIVERY`: use `log` for operator-managed installs
 - `TRUST_PROXY_HEADERS`: `true` only behind a trusted reverse proxy
 - `FUNCTIONS_ENABLED`: set `false` when runtime extensions are not needed
 - `FUNCTIONS_ALLOW_NETWORK`: keep `false` unless trusted admin functions need outbound network access
@@ -34,7 +36,14 @@ ghcr.io/parkjangwon/peanut:<version>
 
 - `GET /api/ready` checks SQLite, storage writability, pending restore markers, and the Functions runtime when enabled.
 - `GET /api/admin/ops/metrics` returns admin-only operational counters for database size/page stats, storage object totals, stale multipart uploads, push backlog, Function failures/timeouts, and process uptime.
-- In Docker or reverse-proxy deployments, monitor `/api/ready` from outside the container and alert when `status` is `not_ready`.
+- In default Docker Compose deployments, monitor `http://127.0.0.1:3492/api/ready` from the host or `/api/ready` through the reverse proxy and alert when `status` is `not_ready`.
+
+## OCI VM Notes
+
+- Open the OCI security list or NSG for the host port you publish with `PEANUT_HOST_PORT`, default `3492`, or place Peanut behind a TLS reverse proxy on `80/443`.
+- Keep `JWT_SECRET` and `FUNCTIONS_SECRETS_MASTER_KEY` stable and backed up outside the VM.
+- Back up the full `./data` directory, not only the SQLite database, because local object storage also lives there.
+- Set `TRUST_PROXY_HEADERS=true` only when Peanut is reachable exclusively through a trusted reverse proxy.
 
 ## Upgrade
 

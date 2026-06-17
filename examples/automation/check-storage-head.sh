@@ -13,11 +13,12 @@ fi
 source "$PEANUT_ENV_FILE"
 
 : "${BASE_URL:?Set BASE_URL in the env file}"
+: "${APP_ID:=default}"
 : "${SERVICE_TOKEN:?Set SERVICE_TOKEN in the env file}"
 : "${STORAGE_BUCKET:=assets}"
 : "${STORAGE_KEY:=ops/hello.txt}"
 
-curl -fsSI "$BASE_URL/api/s3/$STORAGE_BUCKET/$STORAGE_KEY" \
+curl -fsSI "$BASE_URL/api/apps/$APP_ID/storage/buckets/$STORAGE_BUCKET/objects/$STORAGE_KEY" \
   -H "authorization: Bearer $SERVICE_TOKEN"
 
 echo "storage HEAD check passed for s3://$STORAGE_BUCKET/$STORAGE_KEY"
