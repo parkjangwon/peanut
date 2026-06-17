@@ -1,7 +1,7 @@
 {
   "nav": {
     "overview": "Overview",
-    "apps": "Apps",
+    "apps": "Projects",
     "keys": "API Keys",
     "auth": "Auth",
     "data": "Data",
@@ -14,12 +14,12 @@
   "auth": {
     "badge": "Self-hosted backend platform",
     "headline": "Install small. Run your backend with confidence.",
-    "description": "Peanut brings the backend pieces your apps need into one place: auth, data, files, functions, push, and operations on infrastructure you control.",
-    "signalIsolation": "Safely separate teams and apps",
+    "description": "Peanut brings the backend pieces your projects need into one place: auth, data, files, functions, push, and operations on infrastructure you control.",
+    "signalIsolation": "Safely separate teams and projects",
     "signalData": "Manage data and files together",
     "signalOps": "See operational health at a glance",
     "featureAuth": "Auth",
-    "featureAuthDescription": "Manage users, sessions, and social login per app.",
+    "featureAuthDescription": "Manage users, sessions, and social login per project.",
     "featureData": "Data",
     "featureDataDescription": "Create and edit JSON tables and rows directly from the console.",
     "featureStorage": "Storage",
@@ -49,7 +49,9 @@
     "adminExists": "An admin already exists. Please sign in."
   },
   "common": {
-    "selectApp": "Select app",
+    "selectApp": "Select project",
+    "openNavigation": "Open navigation",
+    "signOut": "Sign out",
     "adminConsole": "Admin Console",
     "platformRole": "Platform {role}",
     "language": "Language",
@@ -75,7 +77,7 @@
     "activate": "Activate",
     "revoke": "Revoke",
     "rotate": "Rotate",
-    "newApp": "New app",
+    "newApp": "New project",
     "checking": "checking",
     "needsAttention": "needs attention",
     "loaded": "loaded",
@@ -98,33 +100,56 @@
   "overview": {
     "title": "Platform overview",
     "description": "A quick read on isolation, runtime readiness, and recent activity.",
-    "apps": "Apps",
-    "selectedApp": "Selected app",
+    "apps": "Projects",
+    "selectedApp": "Selected project",
     "ready": "Ready",
     "diagnostics": "Diagnostics",
     "recentActivity": "Recent activity",
-    "platformSignal": "Platform status"
+    "platformSignal": "Platform status",
+    "quickstart": "Quickstart",
+    "quickstartKeys": "Issue a server key",
+    "quickstartKeysDescription": "Create a least-privilege key for a local service or compact backend.",
+    "quickstartData": "Create a table",
+    "quickstartDataDescription": "Start with a JSON table such as notes and insert rows immediately.",
+    "quickstartStorage": "Prepare file storage",
+    "quickstartStorageDescription": "Create an assets bucket and choose public reads or upload policy.",
+    "quickstartFunctions": "Check Functions runtime",
+    "quickstartFunctionsDescription": "Write a small server function exposed as an HTTP endpoint.",
+    "functionsDisabledDescription": "The Functions runtime is disabled. Enable it before editing or testing functions.",
+    "openKeys": "Open API keys",
+    "openData": "Open Data",
+    "openStorage": "Open Storage",
+    "openFunctions": "Open Functions",
+    "projectStatus": "Project status",
+    "database": "Database",
+    "storage": "Storage",
+    "functionsRuntime": "Functions runtime",
+    "diagnosticWarnings": "Warnings",
+    "projectId": "Project ID",
+    "operatorNotes": "Connection info",
+    "operatorNotesDescription": "Connect clients, server keys, and local tools from this project-scoped API path.",
+    "viewDiagnostics": "View raw diagnostics"
   },
   "apps": {
-    "emptyTitle": "Create your first app",
-    "emptyDescription": "Peanut isolates Auth, Data, Storage, Functions, and Push by app.",
-    "title": "Apps",
-    "description": "Each app has isolated users, tables, buckets, functions, push subscriptions, and keys.",
-    "createTitle": "Create app",
+    "emptyTitle": "Create your first project",
+    "emptyDescription": "Peanut isolates Auth, Data, Storage, Functions, and Push by project.",
+    "title": "Projects",
+    "description": "Each project has isolated users, tables, buckets, functions, push subscriptions, and keys.",
+    "createTitle": "Create project",
     "namePlaceholder": "name, e.g. mobile-prod",
     "displayNamePlaceholder": "Display name",
-    "created": "App created",
+    "created": "Project created",
     "columnsDisplay": "Display name",
     "columnsName": "Name",
     "columnsId": "ID",
     "columnsCreated": "Created",
     "columnsUpdated": "Updated",
     "columnsActions": "Actions",
-    "editTitle": "Edit app",
-    "editDescription": "Change the app display name. The app ID and internal name stay the same.",
-    "updated": "App updated",
-    "deleted": "App deleted",
-    "confirmDelete": "Delete {name}? This cannot be undone."
+    "editTitle": "Edit project",
+    "editDescription": "Change the project display name. The project ID and internal name stay the same.",
+    "updated": "Project updated",
+    "deleted": "Project deleted",
+    "confirmDelete": "Delete project {name}? This cannot be undone."
   },
   "keys": {
     "title": "API keys",
@@ -147,11 +172,13 @@
     "revoked": "Key revoked",
     "confirmRevoke": "Revoke {name}? Revoked keys cannot be used again.",
     "rotated": "Key rotated. Use the copy button to retrieve the full key.",
-    "confirmRotate": "Rotate {name}? The existing key value changes immediately."
+    "confirmRotate": "Rotate {name}? The existing key value changes immediately.",
+    "emptyTitle": "No API keys yet",
+    "emptyDescription": "Create a server key from the form above so a local backend or dev tool can call this project API."
   },
   "authView": {
     "title": "Auth",
-    "description": "Manage app-scoped users, sessions, OIDC providers, and security events.",
+    "description": "Manage project-scoped users, sessions, OIDC providers, and security events.",
     "users": "Users",
     "sessions": "Sessions",
     "providers": "Providers",
@@ -178,7 +205,7 @@
   },
   "dataView": {
     "title": "Data",
-    "description": "Create JSON-backed tables for the app and inspect row data.",
+    "description": "Create JSON-backed tables for the project and inspect row data.",
     "createTable": "Create table",
     "tableCreated": "Table created",
     "rowCreated": "Row created",
@@ -203,11 +230,17 @@
     "policyMode": "Access policy",
     "confirmDeleteTable": "Delete table {name}?",
     "confirmDeleteRow": "Delete this row?",
-    "export": "Export"
+    "export": "Export",
+    "emptyTablesTitle": "No tables yet",
+    "emptyTablesDescription": "Create a notes table from the form above, then start storing JSON rows.",
+    "emptyRowsTitle": "No rows yet",
+    "emptyRowsDescription": "Paste JSON in the row editor and create the first record.",
+    "emptyRowsNoTableTitle": "Create a table first",
+    "emptyRowsNoTableDescription": "The rows tab shows data for the selected table. Start with a table such as notes."
   },
   "storageView": {
     "title": "Storage",
-    "description": "Manage bucket policies and objects for app-scoped files.",
+    "description": "Manage bucket policies and objects for project-scoped files.",
     "createBucket": "Create bucket",
     "bucketCreated": "Bucket created",
     "objectUploaded": "Object uploaded",
@@ -234,11 +267,17 @@
     "confirmDeleteObject": "Delete object {key}?",
     "objectBody": "Body",
     "overwriteObject": "Overwrite object",
-    "columnsActions": "Actions"
+    "columnsActions": "Actions",
+    "emptyBucketsTitle": "No buckets yet",
+    "emptyBucketsDescription": "Create an assets bucket, then choose public reads, client uploads, and MIME limits.",
+    "emptyObjectsTitle": "No objects yet",
+    "emptyObjectsDescription": "Upload a small file such as hello.txt to confirm storage is wired up.",
+    "emptyObjectsNoBucketTitle": "Create a bucket first",
+    "emptyObjectsNoBucketDescription": "Object rows appear after a bucket is selected."
   },
   "functionsView": {
     "title": "Functions",
-    "description": "Create, test, invoke, restore versions, and retry app-scoped functions.",
+    "description": "Create, test, invoke, restore versions, and retry project-scoped functions.",
     "functions": "Functions",
     "editor": "Editor",
     "inputOutput": "Input / output",
@@ -318,7 +357,17 @@
     "columnsStatus": "Status",
     "columnsMode": "Mode",
     "columnsDuration": "Duration",
-    "columnsRetry": "Retry"
+    "columnsRetry": "Retry",
+    "runtimeDisabledTitle": "Functions runtime is disabled",
+    "runtimeDisabledDescription": "This server is running with FUNCTIONS_ENABLED=false. Create, save, lint, dry-run, invoke, restore, and retry actions are disabled.",
+    "runtimeDisabledEmptyTitle": "Enable the runtime to use this",
+    "runtimeDisabledEmptyDescription": "Restart the server with FUNCTIONS_ENABLED=true and a functions work directory to enable function lists and test tools.",
+    "emptyFunctionsTitle": "No functions yet",
+    "emptyFunctionsDescription": "Create a small HTTP function such as hello_console and call it from its endpoint.",
+    "emptyVersionsTitle": "No versions yet",
+    "emptyVersionsDescription": "Saving a function creates version history that can be restored from here.",
+    "emptyInvocationsTitle": "No invocations yet",
+    "emptyInvocationsDescription": "Dry-runs and endpoint calls will show status, duration, and retry history here."
   },
   "pushView": {
     "title": "Push",
@@ -335,13 +384,79 @@
     "columnsKind": "Kind",
     "columnsTopic": "Topic",
     "columnsEndpoint": "Endpoint",
-    "columnsCreated": "Created"
+    "columnsCreated": "Created",
+    "columnsTitle": "Title",
+    "columnsStatus": "Status",
+    "columnsRetry": "Retry",
+    "queuedTotal": "Total",
+    "queuedPending": "Pending",
+    "queuedFailed": "Failed",
+    "queuedSent": "Sent",
+    "emptySubscriptionsTitle": "No push subscriptions yet",
+    "emptySubscriptionsDescription": "Register a browser or device subscription, then test delivery from this project.",
+    "emptyQueueTitle": "No queued push work",
+    "emptyQueueDescription": "Send a test message to see queued, retried, and failed deliveries here.",
+    "rawQueue": "View raw queue response"
   },
   "activityView": {
     "title": "Activity",
-    "description": "A single app-scoped feed for auth, data, storage, functions, push, and key changes.",
+    "description": "A single project-scoped feed for auth, data, storage, functions, push, and key changes.",
     "emptyTitle": "No activity yet",
-    "emptyDescription": "Changes will appear here as the app is used."
+    "emptyDescription": "Changes will appear here as the project is used.",
+    "actions": {
+      "keyCreated": "API key created",
+      "keyRotated": "API key rotated",
+      "keyRevoked": "API key revoked",
+      "userCreated": "User created",
+      "userDeleted": "User deleted",
+      "userActivated": "User activated",
+      "userDeactivated": "User deactivated",
+      "providerUpdated": "Auth provider updated",
+      "tableCreated": "Data table created",
+      "tableUpdated": "Data table updated",
+      "tableDeleted": "Data table deleted",
+      "rowCreated": "Data row created",
+      "rowUpdated": "Data row updated",
+      "rowDeleted": "Data row deleted",
+      "bucketCreated": "Storage bucket created",
+      "bucketUpdated": "Storage bucket updated",
+      "bucketDeleted": "Storage bucket deleted",
+      "objectUploaded": "Storage object uploaded",
+      "objectDeleted": "Storage object deleted",
+      "functionCreated": "Function created",
+      "functionUpdated": "Function updated",
+      "functionDeleted": "Function deleted",
+      "functionRolledBack": "Function version restored",
+      "pushQueued": "Push message queued",
+      "restoreScheduled": "Backup restore scheduled",
+      "workspaceInviteCreated": "Workspace invite created",
+      "workspaceDisabled": "Workspace disabled",
+      "workspaceEnabled": "Workspace enabled",
+      "projectCreated": "Project created",
+      "projectUpdated": "Project updated",
+      "projectDeleted": "Project deleted",
+      "projectDisabled": "Project disabled",
+      "projectEnabled": "Project enabled",
+      "adminRoleUpdated": "Admin role updated",
+      "projectEvent": "Project event"
+    },
+    "resource": {
+      "projectEvent": "Project event",
+      "apiKey": "API key",
+      "user": "User",
+      "provider": "Auth provider",
+      "table": "Data table",
+      "row": "Data row",
+      "bucket": "Storage bucket",
+      "object": "Storage object",
+      "function": "Function",
+      "pushMessage": "Push message",
+      "backup": "Backup",
+      "workspace": "Workspace",
+      "workspaceInvite": "Workspace invite",
+      "project": "Project",
+      "adminRole": "Admin role"
+    }
   },
   "opsView": {
     "title": "Operations",
@@ -383,6 +498,55 @@
     "columnsName": "Name",
     "columnsSize": "Size",
     "columnsModified": "Modified",
-    "columnsActions": "Actions"
+    "columnsActions": "Actions",
+    "rawPayloads": "View raw responses",
+    "emptyUsageTitle": "No usage data",
+    "emptyUsageDescription": "Workspace limits and usage appear here after workspaces are available.",
+    "emptyBackupsTitle": "No backups yet",
+    "emptyBackupsDescription": "Create a manual backup to enable download and restore scheduling.",
+    "diagnostic": {
+      "okDetail": "No action needed.",
+      "needsAttentionDetail": "Needs attention.",
+      "schema": {
+        "label": "Database schema",
+        "description": "Migration and schema version checks are complete. {detail}"
+      },
+      "defaultProject": {
+        "label": "Default project",
+        "description": "The install-time default project is present and usable. {detail}"
+      },
+      "workspace": {
+        "label": "Workspace records",
+        "description": "{count} workspace structure and membership checks are complete. {detail}"
+      },
+      "projectLinks": {
+        "label": "Project-workspace links",
+        "description": "Projects are linked to a workspace instead of floating unowned. {detail}"
+      },
+      "projectIsolation": {
+        "label": "Project data isolation",
+        "description": "{count} tables that need project scoping have the required project column. {detail}"
+      },
+      "uniqueConstraints": {
+        "label": "Project unique constraints",
+        "description": "{count} project-scoped indexes protect names from cross-project collisions. {detail}"
+      },
+      "duplicates": {
+        "label": "Duplicate name guards",
+        "description": "Workspace and project duplicate-name checks are complete. {detail}"
+      },
+      "passwordReset": {
+        "label": "Password reset delivery",
+        "description": "Password reset delivery is configured for operations. {detail}"
+      },
+      "cors": {
+        "label": "CORS allowed origins",
+        "description": "Browser call origin policy has been checked. {detail}"
+      },
+      "other": {
+        "label": "Other checks",
+        "description": "{count} additional operational checks are complete. {detail}"
+      }
+    }
   }
 }

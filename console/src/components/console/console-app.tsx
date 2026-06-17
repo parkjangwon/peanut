@@ -14,6 +14,7 @@ import {
   Download,
   FlaskConical,
   History,
+  Info,
   KeyRound,
   LayoutDashboard,
   LogOut,
@@ -200,6 +201,7 @@ export function ConsoleApp() {
               apps={apps}
               appsLoading={appsQuery.isLoading}
               selectedApp={selectedApp}
+              onViewChange={setView}
             />
           </div>
         </main>
@@ -384,7 +386,7 @@ function ConsoleHeader({
         <div className="flex min-w-0 items-center gap-3">
           <Sheet>
             <SheetTrigger asChild>
-              <Button size="icon" variant="ghost" className="lg:hidden">
+              <Button size="icon" variant="ghost" className="lg:hidden" aria-label={t("openNavigation")}>
                 <Menu className="h-5 w-5" />
               </Button>
             </SheetTrigger>
@@ -395,13 +397,13 @@ function ConsoleHeader({
             </SheetContent>
           </Sheet>
           <Select value={selectedAppId} onValueChange={onAppChange}>
-            <SelectTrigger className="w-[230px] max-w-[58vw] bg-card">
+            <SelectTrigger className="w-[230px] max-w-[58vw] bg-card" aria-label={t("selectApp")}>
               <SelectValue placeholder={t("selectApp")} />
             </SelectTrigger>
             <SelectContent>
               {apps.map((app) => (
                 <SelectItem key={app.id} value={app.id}>
-                  {app.display_name}
+                  {displayProjectName(app)}
                 </SelectItem>
               ))}
             </SelectContent>
@@ -421,7 +423,7 @@ function ConsoleHeader({
             <div className="font-medium">{user.email}</div>
             <div className="text-xs text-muted-foreground">{t("platformRole", { role: user.admin_role })}</div>
           </div>
-          <Button size="icon" variant="outline" onClick={onLogout}>
+          <Button size="icon" variant="outline" onClick={onLogout} aria-label={t("signOut")}>
             <LogOut className="h-4 w-4" />
           </Button>
         </div>
@@ -459,11 +461,13 @@ function ViewContent({
   apps,
   appsLoading,
   selectedApp,
+  onViewChange,
 }: {
   view: View;
   apps: AppSummary[];
   appsLoading: boolean;
   selectedApp?: AppSummary;
+  onViewChange: (view: View) => void;
 }) {
   const t = useTranslations("apps");
   if (appsLoading) return <Skeleton className="h-80 w-full" />;
@@ -497,11 +501,19 @@ function ViewContent({
     case "ops":
       return <OpsView />;
     default:
-      return <OverviewView apps={apps} app={selectedApp!} />;
+      return <OverviewView apps={apps} app={selectedApp!} onViewChange={onViewChange} />;
   }
 }
 
-function OverviewView({ apps, app }: { apps: AppSummary[]; app: AppSummary }) {
+function OverviewView({
+  apps,
+  app,
+  onViewChange,
+}: {
+  apps: AppSummary[];
+  app: AppSummary;
+  onViewChange: (view: View) => void;
+}) {
   const t = useTranslations("overview");
   const common = useTranslations("common");
   const ready = useQuery({
@@ -512,15 +524,28 @@ function OverviewView({ apps, app }: { apps: AppSummary[]; app: AppSummary }) {
     queryKey: ["ops", "diagnostics"],
     queryFn: () => apiFetch<Record<string, unknown>>("/api/admin/ops/diagnostics"),
   });
+  const metrics = useQuery({
+    queryKey: ["ops", "metrics"],
+    queryFn: () => apiFetch<OpsMetrics>("/api/admin/ops/metrics"),
+  });
   const activity = useQuery({
     queryKey: ["activity", app.id],
-    queryFn: async () =>
-      (await apiFetch<{ events?: ActivityEvent[]; activity?: ActivityEvent[] }>(
+    queryFn: async () => {
+      const response = await apiFetch<{ events?: ActivityEvent[]; activity?: ActivityEvent[] }>(
         `/api/apps/${app.id}/activity`,
-      )).events ?? (await apiFetch<{ events?: ActivityEvent[]; activity?: ActivityEvent[] }>(
-        `/api/apps/${app.id}/activity`,
-      )).activity ?? [],
+      );
+      return response.events ?? response.activity ?? [];
+    },
   });
+  const platform = diagnostics.data as { checks?: DiagnosticCheck[] } | undefined;
+  const platformChecks = platform?.checks ?? [];
+  const failedChecks = platformChecks.filter((check) => !check.ok).length;
+  const warningChecks = platformChecks.filter((check) => check.ok && check.severity === "warning").length;
+  const functionsEnabled = metrics.data?.functions.enabled ?? true;
+  const navigateTo = (nextView: View) => {
+    onViewChange(nextView);
+    window.history.replaceState(null, "", pathForView(nextView));
+  };
 
   return (
     <Section
@@ -530,16 +555,73 @@ function OverviewView({ apps, app }: { apps: AppSummary[]; app: AppSummary }) {
     >
       <div className="grid gap-4 md:grid-cols-4">
         <Metric label={t("apps")} value={apps.length} icon={Boxes} />
-        <Metric label={t("selectedApp")} value={app.display_name} icon={ShieldCheck} />
+        <Metric label={t("selectedApp")} value={displayProjectName(app)} icon={ShieldCheck} />
         <Metric label={t("ready")} value={ready.data?.status?.toString() ?? common("checking")} icon={CheckCircle2} />
-        <Metric label={t("diagnostics")} value={diagnostics.isError ? common("needsAttention") : common("loaded")} icon={Wrench} />
+        <Metric label={t("diagnostics")} value={failedChecks || diagnostics.isError ? common("needsAttention") : common("ok")} icon={Wrench} />
+      </div>
+      <div className="grid gap-4 lg:grid-cols-[1.2fr_0.8fr]">
+        <Panel title={t("quickstart")}>
+          <div className="grid gap-3 md:grid-cols-2">
+            <ActionCard
+              icon={KeyRound}
+              title={t("quickstartKeys")}
+              description={t("quickstartKeysDescription")}
+              action={t("openKeys")}
+              onClick={() => navigateTo("keys")}
+            />
+            <ActionCard
+              icon={Database}
+              title={t("quickstartData")}
+              description={t("quickstartDataDescription")}
+              action={t("openData")}
+              onClick={() => navigateTo("data")}
+            />
+            <ActionCard
+              icon={Archive}
+              title={t("quickstartStorage")}
+              description={t("quickstartStorageDescription")}
+              action={t("openStorage")}
+              onClick={() => navigateTo("storage")}
+            />
+            <ActionCard
+              icon={Code2}
+              title={t("quickstartFunctions")}
+              description={functionsEnabled ? t("quickstartFunctionsDescription") : t("functionsDisabledDescription")}
+              action={t("openFunctions")}
+              onClick={() => navigateTo("functions")}
+            />
+          </div>
+        </Panel>
+        <Panel title={t("projectStatus")}>
+          <div className="space-y-3">
+            <HealthRow label={t("database")} value={formatBytes(metrics.data?.database.size_bytes ?? 0)} ok={!failedChecks} />
+            <HealthRow label={t("storage")} value={metrics.data?.storage.root ?? common("checking")} ok={metrics.data?.storage.ok ?? true} />
+            <HealthRow label={t("functionsRuntime")} value={functionsEnabled ? common("enabled") : common("disabled")} ok={functionsEnabled} />
+            <HealthRow label={t("diagnosticWarnings")} value={String(warningChecks)} ok={warningChecks === 0} muted />
+            <div className="rounded-md border bg-muted/30 p-3">
+              <div className="text-xs font-medium text-muted-foreground">{t("projectId")}</div>
+              <div className="mt-1 truncate font-mono text-xs">{app.id}</div>
+            </div>
+          </div>
+        </Panel>
       </div>
       <div className="grid gap-4 lg:grid-cols-[1.2fr_0.8fr]">
         <Panel title={t("recentActivity")}>
           <ActivityList events={activity.data ?? []} />
         </Panel>
-        <Panel title={t("platformSignal")}>
-          <JsonBlock value={diagnostics.data ?? ready.data ?? { status: "loading" }} />
+        <Panel title={t("operatorNotes")}>
+          <div className="space-y-3 text-sm text-muted-foreground">
+            <p>{t("operatorNotesDescription")}</p>
+            <div className="rounded-md border bg-muted/30 p-3 font-mono text-xs text-foreground">
+              {browserSafeOrigin()}/api/apps/{app.id}
+            </div>
+            <details className="rounded-md border bg-background p-3">
+              <summary className="cursor-pointer text-sm font-medium text-foreground">{t("viewDiagnostics")}</summary>
+              <div className="mt-3">
+                <JsonBlock value={diagnostics.data ?? ready.data ?? { status: "loading" }} minHeight={220} />
+              </div>
+            </details>
+          </div>
         </Panel>
       </div>
     </Section>
@@ -598,12 +680,14 @@ function AppsView({ apps }: { apps: AppSummary[] }) {
           t("columnsActions"),
         ]}
         rows={apps.map((app) => [
-          app.display_name,
+          displayProjectName(app),
           app.name,
           app.id,
           app.updated_at,
           <AppRowActions key={app.id} app={app} />,
         ])}
+        emptyTitle={t("emptyTitle")}
+        emptyDescription={t("emptyDescription")}
       />
     </Section>
   );
@@ -680,6 +764,11 @@ function AppRowActions({ app }: { app: AppSummary }) {
       </Button>
     </div>
   );
+}
+
+function displayProjectName(app: AppSummary) {
+  const displayName = app.display_name || app.name;
+  return displayName.replace(/\bApp\b/g, "Project").replace(/\bApps\b/g, "Projects");
 }
 
 function KeysView({ app }: { app: AppSummary }) {
@@ -773,6 +862,8 @@ function KeysView({ app }: { app: AppSummary }) {
             onKeyRotated={(rotatedKey) => setVisibleKey(rotatedKey)}
           />,
         ])}
+        emptyTitle={t("emptyTitle")}
+        emptyDescription={t("emptyDescription")}
       />
     </Section>
   );
@@ -1156,6 +1247,8 @@ function DataView({ app }: { app: AppSummary }) {
               table.created_at,
               <DataTableActions key={table.name} appId={app.id} tableName={table.name} />,
             ])}
+            emptyTitle={t("emptyTablesTitle")}
+            emptyDescription={t("emptyTablesDescription")}
           />
         </TabsContent>
         <TabsContent value="rows" className="space-y-4">
@@ -1189,6 +1282,8 @@ function DataView({ app }: { app: AppSummary }) {
                 data={row.data ?? {}}
               />,
             ])}
+            emptyTitle={activeTable ? t("emptyRowsTitle") : t("emptyRowsNoTableTitle")}
+            emptyDescription={activeTable ? t("emptyRowsDescription") : t("emptyRowsNoTableDescription")}
           />
         </TabsContent>
       </Tabs>
@@ -1463,6 +1558,8 @@ function StorageView({ app }: { app: AppSummary }) {
               bucket.updated_at,
               <BucketActions key={bucket.name} appId={app.id} bucket={bucket} />,
             ])}
+            emptyTitle={t("emptyBucketsTitle")}
+            emptyDescription={t("emptyBucketsDescription")}
           />
         </TabsContent>
         <TabsContent value="objects" className="space-y-4">
@@ -1492,6 +1589,8 @@ function StorageView({ app }: { app: AppSummary }) {
               object.updated_at,
               <ObjectActions key={object.key} appId={app.id} bucket={activeBucket} objectKey={object.key} />,
             ])}
+            emptyTitle={activeBucket ? t("emptyObjectsTitle") : t("emptyObjectsNoBucketTitle")}
+            emptyDescription={activeBucket ? t("emptyObjectsDescription") : t("emptyObjectsNoBucketDescription")}
           />
         </TabsContent>
       </Tabs>
@@ -1654,16 +1753,22 @@ function FunctionsView({ app }: { app: AppSummary }) {
   const [inputJson, setInputJson] = useState('{\n  "input": {\n    "message": "Hello Peanut"\n  }\n}');
   const [output, setOutput] = useState<Record<string, unknown> | null>(null);
   const [browserOrigin] = useState(() => (typeof window === "undefined" ? "" : window.location.origin));
+  const metrics = useQuery({
+    queryKey: ["ops", "metrics"],
+    queryFn: () => apiFetch<OpsMetrics>("/api/admin/ops/metrics"),
+  });
+  const runtimeEnabled = metrics.data?.functions.enabled ?? true;
   const functions = useQuery({
     queryKey: ["functions", app.id],
     queryFn: async () => (await apiFetch<{ functions: FunctionSummary[] }>(`/api/apps/${app.id}/functions`)).functions,
+    enabled: runtimeEnabled,
   });
   const activeName = selectedName || functions.data?.[0]?.name || "";
   const detail = useQuery({
     queryKey: ["functions", "detail", app.id, activeName],
     queryFn: async () =>
       (await apiFetch<{ function: FunctionDetail }>(`/api/apps/${app.id}/functions/${activeName}`)).function,
-    enabled: Boolean(activeName),
+    enabled: runtimeEnabled && Boolean(activeName),
   });
   const versions = useQuery({
     queryKey: ["functions", "versions", app.id, activeName],
@@ -1671,7 +1776,7 @@ function FunctionsView({ app }: { app: AppSummary }) {
       (await apiFetch<{ versions: FunctionVersionSummary[] }>(
         `/api/apps/${app.id}/functions/${activeName}/versions`,
       )).versions,
-    enabled: Boolean(activeName),
+    enabled: runtimeEnabled && Boolean(activeName),
   });
   const invocations = useQuery({
     queryKey: ["functions", "invocations", app.id, activeName],
@@ -1679,7 +1784,7 @@ function FunctionsView({ app }: { app: AppSummary }) {
       (await apiFetch<{ invocations: FunctionInvocation[] }>(
         `/api/apps/${app.id}/functions/${activeName}/invocations`,
       )).invocations,
-    enabled: Boolean(activeName),
+    enabled: runtimeEnabled && Boolean(activeName),
   });
   const queryString = safeBuildQueryString(queryJson);
   const endpointPath = `/api/apps/${app.id}/function-endpoints/${endpointSlug || "{endpoint-slug}"}${queryString ? `?${queryString}` : ""}`;
@@ -1850,6 +1955,13 @@ function FunctionsView({ app }: { app: AppSummary }) {
 
   return (
     <Section title={t("title")} description={t("description")}>
+      {!runtimeEnabled && (
+        <Alert>
+          <Info className="h-4 w-4" />
+          <AlertTitle>{t("runtimeDisabledTitle")}</AlertTitle>
+          <AlertDescription>{t("runtimeDisabledDescription")}</AlertDescription>
+        </Alert>
+      )}
       <div className="grid gap-4 xl:grid-cols-[320px_minmax(0,1fr)]">
         <Panel title={t("functions")}>
           <div className="space-y-4">
@@ -1873,14 +1985,21 @@ function FunctionsView({ app }: { app: AppSummary }) {
               onClick={() => {
                 if (activeName && detail.data) applyFunctionDraft(detail.data);
               }}
-              disabled={!detail.data}
+              disabled={!runtimeEnabled || !detail.data}
             >
               <Code2 className="h-4 w-4" /> {t("loadDraft")}
             </Button>
             <p className="text-xs leading-5 text-muted-foreground">{t("leftRailHint")}</p>
-            {functions.isLoading ? (
+            {!runtimeEnabled ? (
+              <EmptyState
+                icon={Code2}
+                title={t("runtimeDisabledEmptyTitle")}
+                description={t("runtimeDisabledEmptyDescription")}
+                compact
+              />
+            ) : functions.isLoading ? (
               <Skeleton className="h-44 w-full" />
-            ) : (
+            ) : (functions.data ?? []).length ? (
               <div className="space-y-2">
                 {(functions.data ?? []).map((fn) => (
                   <button
@@ -1905,6 +2024,13 @@ function FunctionsView({ app }: { app: AppSummary }) {
                   </button>
                 ))}
               </div>
+            ) : (
+              <EmptyState
+                icon={Code2}
+                title={t("emptyFunctionsTitle")}
+                description={t("emptyFunctionsDescription")}
+                compact
+              />
             )}
           </div>
         </Panel>
@@ -1931,6 +2057,7 @@ function FunctionsView({ app }: { app: AppSummary }) {
                     .then(() => toast.success(common("copied")))
                     .catch((error: Error) => toast.error(error.message));
                 }}
+                disabled={!runtimeEnabled}
               >
                 <Copy className="h-4 w-4" /> {t("copyEndpoint")}
               </Button>
@@ -2003,19 +2130,19 @@ function FunctionsView({ app }: { app: AppSummary }) {
                   </div>
                 </div>
                 <div className="grid gap-2">
-                  <Button onClick={() => createFunction.mutate()} disabled={createFunction.isPending}>
+                  <Button onClick={() => createFunction.mutate()} disabled={!runtimeEnabled || createFunction.isPending}>
                     <Plus className="h-4 w-4" /> {t("create")}
                   </Button>
-                  <Button variant="outline" onClick={() => updateFunction.mutate()} disabled={!activeName || updateFunction.isPending}>
+                  <Button variant="outline" onClick={() => updateFunction.mutate()} disabled={!runtimeEnabled || !activeName || updateFunction.isPending}>
                     <Save className="h-4 w-4" /> {t("save")}
                   </Button>
-                  <Button variant="outline" onClick={() => lintFunction.mutate()} disabled={lintFunction.isPending}>
+                  <Button variant="outline" onClick={() => lintFunction.mutate()} disabled={!runtimeEnabled || lintFunction.isPending}>
                     <Code2 className="h-4 w-4" /> {t("lint")}
                   </Button>
-                  <Button variant="outline" onClick={() => dryRunFunction.mutate()} disabled={dryRunFunction.isPending}>
+                  <Button variant="outline" onClick={() => dryRunFunction.mutate()} disabled={!runtimeEnabled || dryRunFunction.isPending}>
                     <FlaskConical className="h-4 w-4" /> {t("dryRun")}
                   </Button>
-                  <Button variant="outline" onClick={() => invokeFunction.mutate()} disabled={!activeName || invokeFunction.isPending}>
+                  <Button variant="outline" onClick={() => invokeFunction.mutate()} disabled={!runtimeEnabled || !activeName || invokeFunction.isPending}>
                     <Play className="h-4 w-4" /> {t("invoke")}
                   </Button>
                   <Button
@@ -2025,7 +2152,7 @@ function FunctionsView({ app }: { app: AppSummary }) {
                         deleteFunction.mutate();
                       }
                     }}
-                    disabled={!activeName || deleteFunction.isPending}
+                    disabled={!runtimeEnabled || !activeName || deleteFunction.isPending}
                   >
                     <Trash2 className="h-4 w-4" /> {t("delete")}
                   </Button>
@@ -2092,11 +2219,14 @@ function FunctionsView({ app }: { app: AppSummary }) {
                 variant="outline"
                 size="sm"
                 onClick={() => rollbackVersion.mutate(version.version_number)}
+                disabled={!runtimeEnabled || rollbackVersion.isPending}
               >
                 <RotateCcw className="h-4 w-4" /> {t("restore")}
               </Button>
             ),
           ])}
+          emptyTitle={runtimeEnabled ? t("emptyVersionsTitle") : t("runtimeDisabledEmptyTitle")}
+          emptyDescription={runtimeEnabled ? t("emptyVersionsDescription") : t("runtimeDisabledEmptyDescription")}
         />
       </Panel>
 
@@ -2114,10 +2244,13 @@ function FunctionsView({ app }: { app: AppSummary }) {
               variant="outline"
               size="sm"
               onClick={() => retryInvocation.mutate(invocation.id)}
+              disabled={!runtimeEnabled || retryInvocation.isPending}
             >
               <History className="h-4 w-4" /> {t("retry")}
             </Button>,
           ])}
+          emptyTitle={runtimeEnabled ? t("emptyInvocationsTitle") : t("runtimeDisabledEmptyTitle")}
+          emptyDescription={runtimeEnabled ? t("emptyInvocationsDescription") : t("runtimeDisabledEmptyDescription")}
         />
       </Panel>
     </Section>
@@ -2396,7 +2529,7 @@ function PushView({ app }: { app: AppSummary }) {
   });
   const queue = useQuery({
     queryKey: ["push", "queue", app.id],
-    queryFn: () => apiFetch<Record<string, unknown>>(`/api/apps/${app.id}/push/queue`),
+    queryFn: () => apiFetch<PushQueueResponse>(`/api/apps/${app.id}/push/queue`),
   });
   const sendTest = useMutation({
     mutationFn: () =>
@@ -2434,6 +2567,8 @@ function PushView({ app }: { app: AppSummary }) {
               String(subscription.endpoint ?? ""),
               String(subscription.created_at ?? ""),
             ])}
+            emptyTitle={t("emptySubscriptionsTitle")}
+            emptyDescription={t("emptySubscriptionsDescription")}
           />
         </TabsContent>
         <TabsContent value="test">
@@ -2457,10 +2592,64 @@ function PushView({ app }: { app: AppSummary }) {
           <Panel title={t("diagnostics")}><JsonBlock value={diagnostics.data ?? { status: common("loading") }} /></Panel>
         </TabsContent>
         <TabsContent value="queue">
-          <Panel title={t("queue")}><JsonBlock value={queue.data ?? { status: common("loading") }} /></Panel>
+          <Panel title={t("queue")}>
+            <PushQueueView queue={queue.data} loading={queue.isLoading} />
+          </Panel>
         </TabsContent>
       </Tabs>
     </Section>
+  );
+}
+
+function PushQueueView({ queue, loading }: { queue?: PushQueueResponse; loading?: boolean }) {
+  const t = useTranslations("pushView");
+  const common = useTranslations("common");
+  if (loading) return <Skeleton className="h-64 w-full" />;
+  const items = queue?.items ?? [];
+  const summary = queue?.summary;
+  if (!items.length) {
+    return (
+      <div className="space-y-3">
+        <EmptyState
+          icon={Bell}
+          title={t("emptyQueueTitle")}
+          description={t("emptyQueueDescription")}
+          compact
+        />
+        <details className="rounded-md border bg-background p-3">
+          <summary className="cursor-pointer text-sm font-medium text-muted-foreground">{t("rawQueue")}</summary>
+          <div className="mt-3">
+            <JsonBlock value={queue ?? { status: common("loading") }} minHeight={220} />
+          </div>
+        </details>
+      </div>
+    );
+  }
+  return (
+    <div className="space-y-4">
+      <div className="grid gap-3 md:grid-cols-4">
+        <Metric label={t("queuedTotal")} value={summary?.total ?? items.length} icon={Bell} />
+        <Metric label={t("queuedPending")} value={summary?.pending ?? 0} icon={History} />
+        <Metric label={t("queuedFailed")} value={summary?.failed ?? 0} icon={CircleAlert} />
+        <Metric label={t("queuedSent")} value={summary?.sent ?? 0} icon={CheckCircle2} />
+      </div>
+      <DataTableView
+        columns={[t("columnsId"), t("columnsTitle"), t("columnsStatus"), t("columnsRetry"), t("columnsCreated")]}
+        rows={items.map((item) => [
+          item.id,
+          item.title,
+          item.status,
+          item.retry_count,
+          item.created_at,
+        ])}
+      />
+      <details className="rounded-md border bg-background p-3">
+        <summary className="cursor-pointer text-sm font-medium text-muted-foreground">{t("rawQueue")}</summary>
+        <div className="mt-3">
+          <JsonBlock value={queue} minHeight={220} />
+        </div>
+      </details>
+    </div>
   );
 }
 
@@ -2561,8 +2750,9 @@ function OpsView() {
     },
     onError: (error: Error) => toast.error(error.message),
   });
-  const platform = diagnostics.data as { checks?: Array<{ name: string; ok: boolean; message?: string; severity?: string }> } | undefined;
+  const platform = diagnostics.data as { checks?: DiagnosticCheck[] } | undefined;
   const platformChecks = platform?.checks ?? [];
+  const groupedChecks = groupDiagnosticChecks(platformChecks, t);
   const failedChecks = platformChecks.filter((check) => !check.ok).length;
   const warningChecks = platformChecks.filter((check) => check.ok && check.severity === "warning").length;
   const usageRows =
@@ -2586,14 +2776,14 @@ function OpsView() {
       <div className="grid gap-4 xl:grid-cols-[1fr_1.2fr]">
         <Panel title={t("platformChecks")}>
           <div className="space-y-2">
-            {platformChecks.map((check) => (
-              <div key={check.name} className="flex items-center justify-between gap-3 rounded-md border px-3 py-2">
+            {groupedChecks.map((check) => (
+              <div key={check.id} className="flex items-center justify-between gap-3 rounded-md border px-3 py-2">
                 <div className="min-w-0">
                   <div className="flex items-center gap-2 font-medium">
-                    {check.name}
+                    {check.label}
                     {check.severity === "warning" && <Badge variant="secondary">{common("warning")}</Badge>}
                   </div>
-                  <div className="truncate text-xs text-muted-foreground">{check.message ?? ""}</div>
+                  <div className="truncate text-xs text-muted-foreground">{check.description}</div>
                 </div>
                 <Badge variant={check.ok ? "default" : "destructive"}>{check.ok ? common("ok") : common("fail")}</Badge>
               </div>
@@ -2620,6 +2810,8 @@ function OpsView() {
           loading={workspaceUsage.isLoading}
           columns={[t("columnsWorkspace"), t("columnsResource"), t("columnsUsage"), t("columnsPercent"), t("columnsPeriod")]}
           rows={usageRows}
+          emptyTitle={t("emptyUsageTitle")}
+          emptyDescription={t("emptyUsageDescription")}
         />
       </Panel>
       <Panel title={t("backups")}>
@@ -2674,14 +2866,104 @@ function OpsView() {
               </Button>
             </div>,
           ])}
+          emptyTitle={t("emptyBackupsTitle")}
+          emptyDescription={t("emptyBackupsDescription")}
         />
       </Panel>
-      <div className="grid gap-4 xl:grid-cols-2">
-        <Panel title={t("readyPayload")}><JsonBlock value={ready.data ?? { status: common("loading") }} /></Panel>
-        <Panel title={t("diagnosticsPayload")}><JsonBlock value={diagnostics.data ?? { status: common("loading") }} /></Panel>
-      </div>
+      <details className="rounded-lg border bg-card p-4">
+        <summary className="cursor-pointer text-sm font-medium text-muted-foreground">{t("rawPayloads")}</summary>
+        <div className="mt-4 grid gap-4 xl:grid-cols-2">
+          <Panel title={t("readyPayload")}><JsonBlock value={ready.data ?? { status: common("loading") }} /></Panel>
+          <Panel title={t("diagnosticsPayload")}><JsonBlock value={diagnostics.data ?? { status: common("loading") }} /></Panel>
+        </div>
+      </details>
     </Section>
   );
+}
+
+type DiagnosticCheck = {
+  name: string;
+  ok: boolean;
+  message?: string;
+  severity?: string;
+};
+
+type DiagnosticGroup = {
+  id: string;
+  label: string;
+  description: string;
+  ok: boolean;
+  severity?: string;
+};
+
+type PushQueueEntry = {
+  id: number;
+  user_id: string;
+  title: string;
+  body: string;
+  status: string;
+  retry_count: number;
+  last_error?: string | null;
+  partial_failure_count: number;
+  next_retry_at?: string | null;
+  created_at: string;
+  processed_at?: string | null;
+};
+
+type PushQueueSummary = {
+  total: number;
+  pending: number;
+  processing: number;
+  sent: number;
+  failed: number;
+  partial_success: number;
+  retry_scheduled: number;
+  retry_overdue: number;
+  ntfy_subscriptions: number;
+  web_push_subscriptions: number;
+};
+
+type PushQueueResponse = {
+  items: PushQueueEntry[];
+  summary: PushQueueSummary;
+};
+
+function groupDiagnosticChecks(
+  checks: DiagnosticCheck[],
+  t: ReturnType<typeof useTranslations>,
+): DiagnosticGroup[] {
+  const buckets = new Map<string, DiagnosticCheck[]>();
+  for (const check of checks) {
+    const bucket = diagnosticBucket(check.name);
+    buckets.set(bucket, [...(buckets.get(bucket) ?? []), check]);
+  }
+  return Array.from(buckets.entries()).map(([bucket, bucketChecks]) => {
+    const failed = bucketChecks.filter((check) => !check.ok);
+    const warnings = bucketChecks.filter((check) => check.ok && check.severity === "warning");
+    return {
+      id: bucket,
+      label: t(`diagnostic.${bucket}.label`),
+      description: t(`diagnostic.${bucket}.description`, {
+        count: bucketChecks.length,
+        detail: failed.length > 0 ? t("diagnostic.needsAttentionDetail") : t("diagnostic.okDetail"),
+      }),
+      ok: failed.length === 0,
+      severity: failed.length > 0 ? failed[0]?.severity : warnings[0]?.severity,
+    };
+  });
+}
+
+function diagnosticBucket(name: string) {
+  if (name === "db_schema_version") return "schema";
+  if (name === "default_app") return "defaultProject";
+  if (name === "default_workspace" || name === "workspace_schema" || name === "orphan_workspace_members") return "workspace";
+  if (name === "orphan_apps_without_workspace") return "projectLinks";
+  if (name === "app_id_column") return "projectIsolation";
+  if (name === "app_scoped_unique_index") return "uniqueConstraints";
+  if (name === "duplicate_workspace_names" || name === "duplicate_app_names") return "duplicates";
+  if (name === "password_reset_delivery") return "passwordReset";
+  if (name === "cors_origin_policy") return "cors";
+  return "other";
 }
 
 function Section({
@@ -2739,14 +3021,74 @@ function Metric({
   );
 }
 
+function ActionCard({
+  icon: Icon,
+  title,
+  description,
+  action,
+  onClick,
+}: {
+  icon: React.ComponentType<{ className?: string }>;
+  title: string;
+  description: string;
+  action: string;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className="group rounded-lg border bg-background p-4 text-left transition-colors hover:border-primary/60 hover:bg-muted/40"
+    >
+      <div className="mb-3 flex h-9 w-9 items-center justify-center rounded-md bg-primary/10 text-primary">
+        <Icon className="h-5 w-5" />
+      </div>
+      <div className="font-medium">{title}</div>
+      <div className="mt-1 min-h-10 text-sm leading-5 text-muted-foreground">{description}</div>
+      <div className="mt-3 text-sm font-medium text-primary">{action}</div>
+    </button>
+  );
+}
+
+function HealthRow({
+  label,
+  value,
+  ok,
+  muted,
+}: {
+  label: string;
+  value: React.ReactNode;
+  ok: boolean;
+  muted?: boolean;
+}) {
+  const common = useTranslations("common");
+  return (
+    <div className="flex items-center justify-between gap-3 rounded-md border px-3 py-2">
+      <div className="min-w-0">
+        <div className="text-sm font-medium">{label}</div>
+        <div className="truncate text-xs text-muted-foreground">{value}</div>
+      </div>
+      <Badge variant={ok ? (muted ? "secondary" : "default") : "destructive"}>
+        {ok ? common("ok") : common("needsAttention")}
+      </Badge>
+    </div>
+  );
+}
+
 function DataTableView({
   columns,
   rows,
   loading,
+  emptyTitle,
+  emptyDescription,
+  emptyAction,
 }: {
   columns: string[];
   rows: React.ReactNode[][];
   loading?: boolean;
+  emptyTitle?: string;
+  emptyDescription?: string;
+  emptyAction?: React.ReactNode;
 }) {
   const common = useTranslations("common");
   if (loading) return <Skeleton className="h-64 w-full" />;
@@ -2763,8 +3105,14 @@ function DataTableView({
         <TableBody>
           {rows.length === 0 ? (
             <TableRow>
-              <TableCell colSpan={columns.length} className="h-28 text-center text-muted-foreground">
-                {common("noRecords")}
+              <TableCell colSpan={columns.length} className="h-36">
+                <div className="flex flex-col items-center justify-center px-4 py-8 text-center">
+                  <div className="font-medium">{emptyTitle ?? common("noRecords")}</div>
+                  {emptyDescription && (
+                    <div className="mt-1 max-w-md text-sm leading-5 text-muted-foreground">{emptyDescription}</div>
+                  )}
+                  {emptyAction && <div className="mt-4">{emptyAction}</div>}
+                </div>
               </TableCell>
             </TableRow>
           ) : (
@@ -2803,9 +3151,9 @@ function ActivityList({ events, loading }: { events: ActivityEvent[]; loading?: 
       {events.slice(0, 12).map((event) => (
         <div key={event.id} className="flex items-start justify-between gap-4 p-4">
           <div className="min-w-0">
-            <div className="font-medium">{event.action}</div>
+            <div className="font-medium">{activityActionLabel(event.action, t)}</div>
             <div className="truncate text-sm text-muted-foreground">
-              {event.resource_type ?? event.target_type} / {event.resource_id ?? event.target_id}
+              {activityResourceLabel(event.resource_type ?? event.target_type, t)}
             </div>
           </div>
           <div className="shrink-0 font-mono text-xs text-muted-foreground">{event.created_at}</div>
@@ -2815,26 +3163,100 @@ function ActivityList({ events, loading }: { events: ActivityEvent[]; loading?: 
   );
 }
 
+function activityActionLabel(action: string, t: ReturnType<typeof useTranslations>) {
+  const normalized = action.replace(/^app_/, "project_").replace(/\./g, "_");
+  const labels: Record<string, string> = {
+    project_key_created: t("actions.keyCreated"),
+    project_key_rotated: t("actions.keyRotated"),
+    project_key_revoked: t("actions.keyRevoked"),
+    auth_user_created: t("actions.userCreated"),
+    auth_user_deleted: t("actions.userDeleted"),
+    auth_user_activated: t("actions.userActivated"),
+    auth_user_deactivated: t("actions.userDeactivated"),
+    auth_provider_updated: t("actions.providerUpdated"),
+    data_table_created: t("actions.tableCreated"),
+    data_table_updated: t("actions.tableUpdated"),
+    data_table_deleted: t("actions.tableDeleted"),
+    data_row_created: t("actions.rowCreated"),
+    data_row_updated: t("actions.rowUpdated"),
+    data_row_deleted: t("actions.rowDeleted"),
+    storage_bucket_created: t("actions.bucketCreated"),
+    storage_bucket_updated: t("actions.bucketUpdated"),
+    storage_bucket_deleted: t("actions.bucketDeleted"),
+    storage_object_put: t("actions.objectUploaded"),
+    storage_object_deleted: t("actions.objectDeleted"),
+    function_created: t("actions.functionCreated"),
+    function_updated: t("actions.functionUpdated"),
+    function_deleted: t("actions.functionDeleted"),
+    function_rolled_back: t("actions.functionRolledBack"),
+    push_message_queued: t("actions.pushQueued"),
+    push_message_enqueued: t("actions.pushQueued"),
+    backup_restore_scheduled: t("actions.restoreScheduled"),
+    workspace_setup_invite_created: t("actions.workspaceInviteCreated"),
+    workspace_disabled: t("actions.workspaceDisabled"),
+    workspace_enabled: t("actions.workspaceEnabled"),
+    project_created: t("actions.projectCreated"),
+    project_updated: t("actions.projectUpdated"),
+    project_deleted: t("actions.projectDeleted"),
+    project_disabled: t("actions.projectDisabled"),
+    project_enabled: t("actions.projectEnabled"),
+    admin_role_updated: t("actions.adminRoleUpdated"),
+  };
+  return labels[normalized] ?? t("actions.projectEvent");
+}
+
+function activityResourceLabel(resourceType: string | null | undefined, t: ReturnType<typeof useTranslations>) {
+  if (!resourceType) return t("resource.projectEvent");
+  const normalized = resourceType.replace(/^app_/, "project_");
+  const labels: Record<string, string> = {
+    project_key: t("resource.apiKey"),
+    auth_user: t("resource.user"),
+    auth_provider: t("resource.provider"),
+    data_table: t("resource.table"),
+    data_row: t("resource.row"),
+    storage_bucket: t("resource.bucket"),
+    storage_object: t("resource.object"),
+    function: t("resource.function"),
+    push_message: t("resource.pushMessage"),
+    backup: t("resource.backup"),
+    workspace: t("resource.workspace"),
+    workspace_setup_invite: t("resource.workspaceInvite"),
+    project: t("resource.project"),
+    admin_role: t("resource.adminRole"),
+  };
+  return labels[normalized] ?? t("resource.projectEvent");
+}
+
 function EmptyState({
   icon: Icon,
   title,
   description,
+  action,
+  compact,
 }: {
   icon: React.ComponentType<{ className?: string }>;
   title: string;
   description: string;
+  action?: React.ReactNode;
+  compact?: boolean;
 }) {
   return (
-    <div className="flex min-h-64 flex-col items-center justify-center rounded-lg border border-dashed bg-card p-8 text-center">
+    <div className={cn("flex flex-col items-center justify-center rounded-lg border border-dashed bg-card p-8 text-center", compact ? "min-h-40" : "min-h-64")}>
       <Icon className="mb-3 h-8 w-8 text-primary" />
       <h2 className="font-semibold">{title}</h2>
       <p className="mt-1 max-w-md text-sm text-muted-foreground">{description}</p>
+      {action && <div className="mt-4">{action}</div>}
     </div>
   );
 }
 
 function JsonBlock({ value, minHeight = 288 }: { value: unknown; minHeight?: number }) {
   return <CodeEditor value={JSON.stringify(value, null, 2)} minHeight={minHeight} readOnly />;
+}
+
+function browserSafeOrigin() {
+  if (typeof window === "undefined") return "";
+  return window.location.origin;
 }
 
 function parseJsonInput(value: string, invalidMessage: string) {

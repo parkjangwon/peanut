@@ -1,7 +1,7 @@
 {
   "nav": {
     "overview": "개요",
-    "apps": "앱",
+    "apps": "프로젝트",
     "keys": "API 키",
     "auth": "인증",
     "data": "데이터",
@@ -14,12 +14,12 @@
   "auth": {
     "badge": "셀프호스팅 백엔드 플랫폼",
     "headline": "작게 설치하고, 단단하게 운영하세요.",
-    "description": "피넛은 앱에 필요한 백엔드 기능을 한곳에 모아 제공합니다. 인증, 데이터, 파일, 함수, 푸시까지 서버 한 대에서 직접 관리하세요.",
-    "signalIsolation": "팀과 앱을 안전하게 분리",
+    "description": "피넛은 프로젝트에 필요한 백엔드 기능을 한곳에 모아 제공합니다. 인증, 데이터, 파일, 함수, 푸시까지 서버 한 대에서 직접 관리하세요.",
+    "signalIsolation": "팀과 프로젝트를 안전하게 분리",
     "signalData": "데이터와 파일을 한곳에서",
     "signalOps": "운영 상태를 바로 확인",
     "featureAuth": "인증",
-    "featureAuthDescription": "사용자, 세션, 소셜 로그인 구성을 앱 단위로 관리합니다.",
+    "featureAuthDescription": "사용자, 세션, 소셜 로그인 구성을 프로젝트 단위로 관리합니다.",
     "featureData": "데이터",
     "featureDataDescription": "JSON 테이블과 행 데이터를 콘솔에서 바로 만들고 수정합니다.",
     "featureStorage": "스토리지",
@@ -49,7 +49,9 @@
     "adminExists": "이미 관리자가 있습니다. 로그인해 주세요."
   },
   "common": {
-    "selectApp": "앱 선택",
+    "selectApp": "프로젝트 선택",
+    "openNavigation": "내비게이션 열기",
+    "signOut": "로그아웃",
     "adminConsole": "관리 콘솔",
     "platformRole": "플랫폼 {role}",
     "language": "언어",
@@ -75,7 +77,7 @@
     "activate": "활성화",
     "revoke": "폐기",
     "rotate": "회전",
-    "newApp": "새 앱",
+    "newApp": "새 프로젝트",
     "checking": "확인 중",
     "needsAttention": "확인 필요",
     "loaded": "불러옴",
@@ -98,33 +100,56 @@
   "overview": {
     "title": "플랫폼 개요",
     "description": "격리 상태, 런타임 준비 상태, 최근 활동을 빠르게 확인합니다.",
-    "apps": "앱",
-    "selectedApp": "선택한 앱",
+    "apps": "프로젝트",
+    "selectedApp": "선택한 프로젝트",
     "ready": "준비 상태",
     "diagnostics": "진단",
     "recentActivity": "최근 활동",
-    "platformSignal": "플랫폼 상태"
+    "platformSignal": "플랫폼 상태",
+    "quickstart": "빠른 시작",
+    "quickstartKeys": "서버 키 발급",
+    "quickstartKeysDescription": "로컬 서비스나 작은 백엔드가 호출할 최소 권한 키를 만듭니다.",
+    "quickstartData": "테이블 만들기",
+    "quickstartDataDescription": "notes 같은 JSON 테이블을 만들고 바로 행을 넣어 봅니다.",
+    "quickstartStorage": "파일 버킷 준비",
+    "quickstartStorageDescription": "assets 버킷을 만들고 공개 읽기와 업로드 정책을 정합니다.",
+    "quickstartFunctions": "함수 런타임 확인",
+    "quickstartFunctionsDescription": "HTTP 엔드포인트로 호출할 작은 서버 함수를 작성합니다.",
+    "functionsDisabledDescription": "현재 함수 런타임이 꺼져 있습니다. 설정을 켜야 작성과 테스트가 가능합니다.",
+    "openKeys": "API 키로 이동",
+    "openData": "데이터로 이동",
+    "openStorage": "스토리지로 이동",
+    "openFunctions": "함수로 이동",
+    "projectStatus": "프로젝트 상태",
+    "database": "데이터베이스",
+    "storage": "스토리지",
+    "functionsRuntime": "함수 런타임",
+    "diagnosticWarnings": "주의 항목",
+    "projectId": "프로젝트 ID",
+    "operatorNotes": "연결 정보",
+    "operatorNotesDescription": "이 프로젝트의 API 경로를 기준으로 클라이언트, 서버 키, 로컬 개발 도구를 연결하세요.",
+    "viewDiagnostics": "원본 진단 보기"
   },
   "apps": {
-    "emptyTitle": "첫 앱을 만들어 보세요",
-    "emptyDescription": "피넛은 인증, 데이터, 스토리지, 함수, 푸시를 앱 단위로 격리합니다.",
-    "title": "앱",
-    "description": "앱마다 사용자, 테이블, 버킷, 함수, 푸시 구독, 키가 독립적으로 관리됩니다.",
-    "createTitle": "앱 만들기",
+    "emptyTitle": "첫 프로젝트를 만들어 보세요",
+    "emptyDescription": "피넛은 인증, 데이터, 스토리지, 함수, 푸시를 프로젝트 단위로 격리합니다.",
+    "title": "프로젝트",
+    "description": "프로젝트마다 사용자, 테이블, 버킷, 함수, 푸시 구독, 키가 독립적으로 관리됩니다.",
+    "createTitle": "프로젝트 만들기",
     "namePlaceholder": "이름, 예: mobile-prod",
     "displayNamePlaceholder": "표시 이름",
-    "created": "앱을 만들었습니다",
+    "created": "프로젝트를 만들었습니다",
     "columnsDisplay": "표시 이름",
     "columnsName": "이름",
     "columnsId": "ID",
     "columnsCreated": "생성일",
     "columnsUpdated": "수정일",
     "columnsActions": "작업",
-    "editTitle": "앱 수정",
-    "editDescription": "앱의 표시 이름을 변경합니다. 앱 ID와 내부 이름은 유지됩니다.",
-    "updated": "앱을 수정했습니다",
-    "deleted": "앱을 삭제했습니다",
-    "confirmDelete": "{name} 앱을 삭제할까요? 이 작업은 되돌릴 수 없습니다."
+    "editTitle": "프로젝트 수정",
+    "editDescription": "프로젝트의 표시 이름을 변경합니다. 프로젝트 ID와 내부 이름은 유지됩니다.",
+    "updated": "프로젝트를 수정했습니다",
+    "deleted": "프로젝트를 삭제했습니다",
+    "confirmDelete": "{name} 프로젝트를 삭제할까요? 이 작업은 되돌릴 수 없습니다."
   },
   "keys": {
     "title": "API 키",
@@ -147,11 +172,13 @@
     "revoked": "키를 폐기했습니다",
     "confirmRevoke": "{name} 키를 폐기할까요? 폐기한 키는 다시 사용할 수 없습니다.",
     "rotated": "키를 회전했습니다. 복사 버튼으로만 전체 키를 가져올 수 있습니다.",
-    "confirmRotate": "{name} 키를 회전할까요? 기존 키 값은 즉시 바뀝니다."
+    "confirmRotate": "{name} 키를 회전할까요? 기존 키 값은 즉시 바뀝니다.",
+    "emptyTitle": "아직 API 키가 없습니다",
+    "emptyDescription": "위의 폼에서 server 키를 먼저 만들면 로컬 백엔드나 개발 도구가 이 프로젝트 API를 호출할 수 있습니다."
   },
   "authView": {
     "title": "인증",
-    "description": "앱별 사용자, 세션, OIDC 제공자, 보안 이벤트를 관리합니다.",
+    "description": "프로젝트별 사용자, 세션, OIDC 제공자, 보안 이벤트를 관리합니다.",
     "users": "사용자",
     "sessions": "세션",
     "providers": "제공자",
@@ -178,7 +205,7 @@
   },
   "dataView": {
     "title": "데이터",
-    "description": "앱에서 사용할 JSON 기반 테이블을 만들고 행 데이터를 확인합니다.",
+    "description": "프로젝트에서 사용할 JSON 기반 테이블을 만들고 행 데이터를 확인합니다.",
     "createTable": "테이블 만들기",
     "tableCreated": "테이블을 만들었습니다",
     "rowCreated": "행을 만들었습니다",
@@ -192,8 +219,8 @@
     "rowEditor": "행 편집",
     "selectTable": "테이블 선택",
     "createRow": "행 만들기",
-    "data": "데이터"
-    ,"tableUpdated": "테이블을 수정했습니다",
+    "data": "데이터",
+    "tableUpdated": "테이블을 수정했습니다",
     "tableDeleted": "테이블을 삭제했습니다",
     "rowUpdated": "행을 수정했습니다",
     "rowDeleted": "행을 삭제했습니다",
@@ -203,11 +230,17 @@
     "policyMode": "접근 정책",
     "confirmDeleteTable": "{name} 테이블을 삭제할까요?",
     "confirmDeleteRow": "이 행을 삭제할까요?",
-    "export": "내보내기"
+    "export": "내보내기",
+    "emptyTablesTitle": "아직 테이블이 없습니다",
+    "emptyTablesDescription": "위의 입력값으로 notes 테이블을 만들면 JSON 행을 바로 저장할 수 있습니다.",
+    "emptyRowsTitle": "아직 행이 없습니다",
+    "emptyRowsDescription": "행 편집기에 JSON을 입력하고 행 만들기를 눌러 첫 데이터를 넣어 보세요.",
+    "emptyRowsNoTableTitle": "테이블을 먼저 만들어 주세요",
+    "emptyRowsNoTableDescription": "rows 탭은 선택된 테이블의 데이터를 보여줍니다. tables 탭에서 notes 같은 테이블을 먼저 만드세요."
   },
   "storageView": {
     "title": "스토리지",
-    "description": "앱별 파일을 위한 버킷 정책과 오브젝트를 관리합니다.",
+    "description": "프로젝트별 파일을 위한 버킷 정책과 오브젝트를 관리합니다.",
     "createBucket": "버킷 만들기",
     "bucketCreated": "버킷을 만들었습니다",
     "objectUploaded": "오브젝트를 업로드했습니다",
@@ -234,11 +267,17 @@
     "confirmDeleteObject": "{key} 오브젝트를 삭제할까요?",
     "objectBody": "내용",
     "overwriteObject": "오브젝트 덮어쓰기",
-    "columnsActions": "작업"
+    "columnsActions": "작업",
+    "emptyBucketsTitle": "아직 버킷이 없습니다",
+    "emptyBucketsDescription": "assets 버킷을 만들고 공개 읽기, 클라이언트 업로드, MIME 제한을 정하세요.",
+    "emptyObjectsTitle": "아직 오브젝트가 없습니다",
+    "emptyObjectsDescription": "선택한 버킷에 hello.txt 같은 작은 파일을 업로드해 스토리지 연결을 확인하세요.",
+    "emptyObjectsNoBucketTitle": "버킷을 먼저 만들어 주세요",
+    "emptyObjectsNoBucketDescription": "오브젝트 목록은 선택된 버킷 안의 파일을 보여줍니다."
   },
   "functionsView": {
     "title": "함수",
-    "description": "앱별 함수를 만들고 테스트, 호출, 버전 복원, 재시도를 수행합니다.",
+    "description": "프로젝트별 함수를 만들고 테스트, 호출, 버전 복원, 재시도를 수행합니다.",
     "functions": "함수",
     "editor": "편집기",
     "inputOutput": "입력 / 출력",
@@ -318,7 +357,17 @@
     "columnsStatus": "상태",
     "columnsMode": "모드",
     "columnsDuration": "소요 시간",
-    "columnsRetry": "재시도"
+    "columnsRetry": "재시도",
+    "runtimeDisabledTitle": "함수 런타임이 꺼져 있습니다",
+    "runtimeDisabledDescription": "현재 서버가 FUNCTIONS_ENABLED=false로 실행 중입니다. 함수 작성, 저장, 검사, 시험 실행, 호출, 복원, 재시도는 비활성화됩니다.",
+    "runtimeDisabledEmptyTitle": "런타임을 켜야 사용할 수 있습니다",
+    "runtimeDisabledEmptyDescription": "FUNCTIONS_ENABLED=true와 작업 디렉터리를 설정한 뒤 서버를 다시 시작하면 함수 목록과 테스트 도구가 활성화됩니다.",
+    "emptyFunctionsTitle": "아직 함수가 없습니다",
+    "emptyFunctionsDescription": "hello_console 같은 작은 HTTP 함수를 만들고 엔드포인트로 호출해 보세요.",
+    "emptyVersionsTitle": "아직 버전이 없습니다",
+    "emptyVersionsDescription": "함수를 저장하면 버전 기록이 쌓이고 여기서 이전 버전으로 복원할 수 있습니다.",
+    "emptyInvocationsTitle": "아직 호출 기록이 없습니다",
+    "emptyInvocationsDescription": "시험 실행이나 실제 엔드포인트 호출 후 상태, 소요 시간, 재시도 기록이 표시됩니다."
   },
   "pushView": {
     "title": "푸시",
@@ -335,13 +384,79 @@
     "columnsKind": "종류",
     "columnsTopic": "토픽",
     "columnsEndpoint": "엔드포인트",
-    "columnsCreated": "생성일"
+    "columnsCreated": "생성일",
+    "columnsTitle": "제목",
+    "columnsStatus": "상태",
+    "columnsRetry": "재시도",
+    "queuedTotal": "전체",
+    "queuedPending": "대기",
+    "queuedFailed": "실패",
+    "queuedSent": "전송 완료",
+    "emptySubscriptionsTitle": "아직 푸시 구독이 없습니다",
+    "emptySubscriptionsDescription": "브라우저나 기기 구독을 등록한 뒤 이 프로젝트에서 테스트 발송을 확인하세요.",
+    "emptyQueueTitle": "대기 중인 푸시 작업이 없습니다",
+    "emptyQueueDescription": "테스트 메시지를 보내면 대기, 재시도, 실패한 전송이 여기에 표시됩니다.",
+    "rawQueue": "원본 큐 응답 보기"
   },
   "activityView": {
     "title": "활동",
-    "description": "인증, 데이터, 스토리지, 함수, 푸시, 키 변경 사항을 앱 단위로 보여줍니다.",
+    "description": "인증, 데이터, 스토리지, 함수, 푸시, 키 변경 사항을 프로젝트 단위로 보여줍니다.",
     "emptyTitle": "아직 활동이 없습니다",
-    "emptyDescription": "앱을 사용하면서 발생한 변경 사항이 여기에 표시됩니다."
+    "emptyDescription": "프로젝트를 사용하면서 발생한 변경 사항이 여기에 표시됩니다.",
+    "actions": {
+      "keyCreated": "API 키 생성",
+      "keyRotated": "API 키 회전",
+      "keyRevoked": "API 키 폐기",
+      "userCreated": "사용자 생성",
+      "userDeleted": "사용자 삭제",
+      "userActivated": "사용자 활성화",
+      "userDeactivated": "사용자 비활성화",
+      "providerUpdated": "인증 제공자 수정",
+      "tableCreated": "데이터 테이블 생성",
+      "tableUpdated": "데이터 테이블 수정",
+      "tableDeleted": "데이터 테이블 삭제",
+      "rowCreated": "데이터 행 생성",
+      "rowUpdated": "데이터 행 수정",
+      "rowDeleted": "데이터 행 삭제",
+      "bucketCreated": "스토리지 버킷 생성",
+      "bucketUpdated": "스토리지 버킷 수정",
+      "bucketDeleted": "스토리지 버킷 삭제",
+      "objectUploaded": "스토리지 오브젝트 업로드",
+      "objectDeleted": "스토리지 오브젝트 삭제",
+      "functionCreated": "함수 생성",
+      "functionUpdated": "함수 수정",
+      "functionDeleted": "함수 삭제",
+      "functionRolledBack": "함수 버전 복원",
+      "pushQueued": "푸시 메시지 대기열 추가",
+      "restoreScheduled": "백업 복원 예약",
+      "workspaceInviteCreated": "워크스페이스 초대 생성",
+      "workspaceDisabled": "워크스페이스 비활성화",
+      "workspaceEnabled": "워크스페이스 활성화",
+      "projectCreated": "프로젝트 생성",
+      "projectUpdated": "프로젝트 수정",
+      "projectDeleted": "프로젝트 삭제",
+      "projectDisabled": "프로젝트 비활성화",
+      "projectEnabled": "프로젝트 활성화",
+      "adminRoleUpdated": "관리자 역할 수정",
+      "projectEvent": "프로젝트 이벤트"
+    },
+    "resource": {
+      "projectEvent": "프로젝트 이벤트",
+      "apiKey": "API 키",
+      "user": "사용자",
+      "provider": "인증 제공자",
+      "table": "데이터 테이블",
+      "row": "데이터 행",
+      "bucket": "스토리지 버킷",
+      "object": "스토리지 오브젝트",
+      "function": "함수",
+      "pushMessage": "푸시 메시지",
+      "backup": "백업",
+      "workspace": "워크스페이스",
+      "workspaceInvite": "워크스페이스 초대",
+      "project": "프로젝트",
+      "adminRole": "관리자 역할"
+    }
   },
   "opsView": {
     "title": "운영",
@@ -383,6 +498,55 @@
     "columnsName": "이름",
     "columnsSize": "크기",
     "columnsModified": "수정일",
-    "columnsActions": "작업"
+    "columnsActions": "작업",
+    "rawPayloads": "원본 응답 보기",
+    "emptyUsageTitle": "사용량 데이터가 없습니다",
+    "emptyUsageDescription": "워크스페이스가 생성되면 리소스 한도와 사용량이 여기에 표시됩니다.",
+    "emptyBackupsTitle": "아직 백업이 없습니다",
+    "emptyBackupsDescription": "만들기 버튼으로 수동 백업을 생성하면 다운로드와 복원 예약을 할 수 있습니다.",
+    "diagnostic": {
+      "okDetail": "추가 조치가 필요하지 않습니다.",
+      "needsAttentionDetail": "확인이 필요합니다.",
+      "schema": {
+        "label": "데이터베이스 스키마",
+        "description": "마이그레이션과 스키마 버전을 확인했습니다. {detail}"
+      },
+      "defaultProject": {
+        "label": "기본 프로젝트",
+        "description": "설치 직후 필요한 기본 프로젝트가 준비되어 있는지 확인했습니다. {detail}"
+      },
+      "workspace": {
+        "label": "워크스페이스 레코드",
+        "description": "워크스페이스 구조와 멤버 연결 {count}개 항목을 확인했습니다. {detail}"
+      },
+      "projectLinks": {
+        "label": "프로젝트-워크스페이스 연결",
+        "description": "워크스페이스 없이 떠 있는 프로젝트가 없는지 확인했습니다. {detail}"
+      },
+      "projectIsolation": {
+        "label": "프로젝트별 데이터 격리",
+        "description": "프로젝트 범위 컬럼이 필요한 테이블 {count}개를 확인했습니다. {detail}"
+      },
+      "uniqueConstraints": {
+        "label": "프로젝트별 고유 제약",
+        "description": "이름 충돌을 막는 프로젝트 범위 인덱스 {count}개를 확인했습니다. {detail}"
+      },
+      "duplicates": {
+        "label": "중복 이름 방지",
+        "description": "워크스페이스와 프로젝트 이름 중복 여부를 확인했습니다. {detail}"
+      },
+      "passwordReset": {
+        "label": "비밀번호 재설정 발송",
+        "description": "재설정 링크 발송 경로가 운영에 맞게 설정됐는지 확인했습니다. {detail}"
+      },
+      "cors": {
+        "label": "CORS 허용 출처",
+        "description": "브라우저 호출 허용 출처 정책을 확인했습니다. {detail}"
+      },
+      "other": {
+        "label": "기타 점검",
+        "description": "추가 운영 점검 {count}개를 확인했습니다. {detail}"
+      }
+    }
   }
 }
