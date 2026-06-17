@@ -96,11 +96,7 @@ fn asset_response(path: &str, bytes: Vec<u8>) -> Response {
         .first_or_octet_stream()
         .essence_str()
         .to_string();
-    let cache_control = if path == "index.html" {
-        "no-cache"
-    } else {
-        "public, max-age=31536000, immutable"
-    };
+    let cache_control = cache_control_for_path(path);
 
     Response::builder()
         .status(StatusCode::OK)
@@ -108,6 +104,14 @@ fn asset_response(path: &str, bytes: Vec<u8>) -> Response {
         .header(header::CACHE_CONTROL, cache_control)
         .body(Body::from(bytes))
         .unwrap()
+}
+
+fn cache_control_for_path(path: &str) -> &'static str {
+    if path == "index.html" || path.starts_with("_next/static/") {
+        "no-cache"
+    } else {
+        "public, max-age=31536000, immutable"
+    }
 }
 
 fn fallback_response() -> Response {
@@ -176,5 +180,10 @@ mod tests {
             .await
             .into_response();
         assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[test]
+    fn test_next_static_assets_are_revalidated() {
+        assert_eq!(cache_control_for_path("_next/static/chunks/app.js"), "no-cache");
     }
 }
