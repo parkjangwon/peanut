@@ -3,7 +3,7 @@ services:
     image: ${PEANUT_IMAGE:-ghcr.io/parkjangwon/peanut:latest}
     container_name: peanut
     ports:
-      - "3000:3000"
+      - "${PEANUT_HOST_PORT:-3192}:3000"
     volumes:
       - ./data:/app/data
     restart: always

@@ -72,7 +72,7 @@ Peanut을 시작합니다.
 docker compose up -d
 ```
 
-`http://127.0.0.1:3000`을 열고 platform admin을 만들거나 로그인한 뒤, 배포를 신뢰하기 전에 production gate를 실행합니다.
+`http://127.0.0.1:3192`을 열고 platform admin을 만들거나 로그인한 뒤, 배포를 신뢰하기 전에 production gate를 실행합니다.
 
 ```bash
 PEANUT_ADMIN_TOKEN="$ADMIN_TOKEN" scripts/verify-compose.sh

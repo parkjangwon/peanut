@@ -16,7 +16,7 @@ docker compose up -d
 docker compose -f docker-compose.yml -f docker-compose.build.yml up -d --build
 ```
 
-기본 서비스 이름은 `peanut`이고, `3000` 포트를 노출하며, 상태는 `./data` 아래에 저장합니다.
+기본 서비스 이름은 `peanut`이고, 호스트 포트 `3192`를 컨테이너의 `3000`에 연결하며, 상태는 `./data` 아래에 저장합니다.
 
 ## 필수 `.env`
 
@@ -29,6 +29,7 @@ FUNCTIONS_SECRETS_MASTER_KEY=replace-with-a-different-long-random-secret
 DATABASE_URL=sqlite://data/peanut.db
 STORAGE_DIR=data/storage
 BIND_ADDR=0.0.0.0:3000
+PEANUT_HOST_PORT=3192
 MAX_UPLOAD_BYTES=5242880
 FUNCTIONS_ENABLED=true
 FUNCTIONS_ALLOW_NETWORK=false
@@ -64,13 +65,13 @@ docker compose logs -f peanut
 readiness 확인:
 
 ```bash
-curl -fsS http://127.0.0.1:3000/api/ready
+curl -fsS http://127.0.0.1:3192/api/ready
 ```
 
 브라우저:
 
 ```text
-http://127.0.0.1:3000
+http://127.0.0.1:3192
 ```
 
 ## 첫 관리자
@@ -78,7 +79,7 @@ http://127.0.0.1:3000
 콘솔의 setup flow를 사용하거나 API로 bootstrap합니다.
 
 ```bash
-curl -s -X POST "http://127.0.0.1:3000/api/bootstrap/admin" \
+curl -s -X POST "http://127.0.0.1:3192/api/bootstrap/admin" \
   -H "content-type: application/json" \
   --data '{"email":"owner@example.com","password":"password123"}'
 ```
