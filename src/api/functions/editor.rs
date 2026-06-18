@@ -244,7 +244,10 @@ mod tests {
                 source_code: "export default function handler() { return { ok: true } }"
                     .to_string(),
                 function_name: None,
+                method: "POST".to_string(),
                 input: Value::Null,
+                query: Value::Null,
+                body: Value::Null,
                 auth: Value::Null,
                 env: Value::Null,
                 timeout_ms: None,
@@ -271,7 +274,10 @@ mod tests {
                 source_code: "export default function handler(ctx) { return { echo: ctx.request.input.value } }"
                     .to_string(),
                 function_name: Some("editor_fn".to_string()),
+                method: "POST".to_string(),
                 input: serde_json::json!({ "value": 42 }),
+                query: Value::Null,
+                body: Value::Null,
                 auth: Value::Null,
                 env: Value::Null,
                 timeout_ms: None,

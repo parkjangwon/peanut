@@ -180,7 +180,7 @@ pub struct UpdateFunctionRequest {
     pub rate_limit_per_minute: Option<i64>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct InvokeFunctionRequest {
     #[serde(default)]
     pub input: Value,

@@ -632,6 +632,30 @@ mod tests {
         }
     }
 
+    async fn invoke_function_with_request(
+        state: crate::AppState,
+        claims: Option<Extension<Claims>>,
+        headers: HeaderMap,
+        endpoint_slug: impl Into<String>,
+        request: InvokeFunctionRequest,
+    ) -> Response {
+        use axum::body::Bytes;
+        use axum::extract::Query;
+        use axum::http::Method;
+
+        let body = Bytes::from(serde_json::to_vec(&request).expect("serialize invoke request"));
+        invoke_function(
+            State(state),
+            claims,
+            headers,
+            Path(endpoint_slug.into()),
+            Method::POST,
+            Query(BTreeMap::new()),
+            body,
+        )
+        .await
+    }
+
     #[tokio::test]
     async fn test_admin_can_create_and_invoke_function() {
         if skip_without_deno() {
@@ -662,16 +686,16 @@ mod tests {
         .await;
         assert_eq!(create_response.status(), StatusCode::CREATED);
 
-        let invoke_response = invoke_function(
-            State(state.clone()),
+        let invoke_response = invoke_function_with_request(
+            state.clone(),
             Some(Extension(claims(&admin.user.id, true))),
             HeaderMap::new(),
-            Path("hello-fn".to_string()),
-            Json(InvokeFunctionRequest {
+            "hello-fn",
+            InvokeFunctionRequest {
                 input: serde_json::json!({ "name": "jangwon" }),
                 api_key: None,
                 async_invoke: None,
-            }),
+            },
         )
         .await;
         let invoke_status = invoke_response.status();
@@ -737,16 +761,16 @@ mod tests {
         .await;
         assert_eq!(create_response.status(), StatusCode::CREATED);
 
-        let invoke_response = invoke_function(
-            State(state),
+        let invoke_response = invoke_function_with_request(
+            state,
             None,
             HeaderMap::new(),
-            Path("public-fn".to_string()),
-            Json(InvokeFunctionRequest {
+            "public-fn",
+            InvokeFunctionRequest {
                 input: serde_json::json!({}),
                 api_key: None,
                 async_invoke: None,
-            }),
+            },
         )
         .await;
         let invoke_status = invoke_response.status();
@@ -826,16 +850,16 @@ mod tests {
         assert_eq!(secret_ciphertext.as_deref(), Some(secret_value.as_str()));
         assert_eq!(encryption_version, Some(1));
 
-        let invoke_response = invoke_function(
-            State(state),
+        let invoke_response = invoke_function_with_request(
+            state,
             Some(Extension(claims(&admin.user.id, true))),
             HeaderMap::new(),
-            Path("secret-fn".to_string()),
-            Json(InvokeFunctionRequest {
+            "secret-fn",
+            InvokeFunctionRequest {
                 input: serde_json::json!({}),
                 api_key: None,
                 async_invoke: None,
-            }),
+            },
         )
         .await;
         assert_eq!(invoke_response.status(), StatusCode::OK);
@@ -892,16 +916,16 @@ export default async function handler(ctx) {
         .await;
         assert_eq!(create_response.status(), StatusCode::CREATED);
 
-        let invoke_response = invoke_function(
-            State(state.clone()),
+        let invoke_response = invoke_function_with_request(
+            state.clone(),
             Some(Extension(claims(&admin.user.id, true))),
             HeaderMap::new(),
-            Path("storage-push-fn".to_string()),
-            Json(InvokeFunctionRequest {
+            "storage-push-fn",
+            InvokeFunctionRequest {
                 input: serde_json::json!({}),
                 api_key: None,
                 async_invoke: None,
-            }),
+            },
         )
         .await;
         let invoke_status = invoke_response.status();
@@ -1025,16 +1049,16 @@ export default async function handler(ctx) {
         .await;
         assert_eq!(create_function_response.status(), StatusCode::CREATED);
 
-        let invoke_response = invoke_function(
-            State(state.clone()),
+        let invoke_response = invoke_function_with_request(
+            state.clone(),
             Some(Extension(claims(&member.user.id, false))),
             HeaderMap::new(),
-            Path("data-fn".to_string()),
-            Json(InvokeFunctionRequest {
+            "data-fn",
+            InvokeFunctionRequest {
                 input: serde_json::json!({ "title": "buy milk" }),
                 api_key: None,
                 async_invoke: None,
-            }),
+            },
         )
         .await;
         assert_eq!(invoke_response.status(), StatusCode::OK);
@@ -1099,16 +1123,16 @@ export default async function handler(ctx) {
         .await;
         assert_eq!(create_response.status(), StatusCode::CREATED);
 
-        let invoke_response = invoke_function(
-            State(state),
+        let invoke_response = invoke_function_with_request(
+            state,
             Some(Extension(claims(&member.user.id, false))),
             HeaderMap::new(),
-            Path("admin-only-fn".to_string()),
-            Json(InvokeFunctionRequest {
+            "admin-only-fn",
+            InvokeFunctionRequest {
                 input: serde_json::json!({}),
                 api_key: None,
                 async_invoke: None,
-            }),
+            },
         )
         .await;
         assert_eq!(invoke_response.status(), StatusCode::FORBIDDEN);
@@ -1146,30 +1170,30 @@ export default async function handler(ctx) {
         .await;
         assert_eq!(create_response.status(), StatusCode::CREATED);
 
-        let invoke_response = invoke_function(
-            State(state.clone()),
+        let invoke_response = invoke_function_with_request(
+            state.clone(),
             None,
             HeaderMap::new(),
-            Path("api-key-fn".to_string()),
-            Json(InvokeFunctionRequest {
+            "api-key-fn",
+            InvokeFunctionRequest {
                 input: serde_json::json!({}),
                 api_key: None,
                 async_invoke: None,
-            }),
+            },
         )
         .await;
         assert_eq!(invoke_response.status(), StatusCode::UNAUTHORIZED);
 
-        let invoke_response = invoke_function(
-            State(state),
+        let invoke_response = invoke_function_with_request(
+            state,
             None,
             HeaderMap::new(),
-            Path("api-key-fn".to_string()),
-            Json(InvokeFunctionRequest {
+            "api-key-fn",
+            InvokeFunctionRequest {
                 input: serde_json::json!({}),
                 api_key: Some("super-secret-key".to_string()),
                 async_invoke: None,
-            }),
+            },
         )
         .await;
         assert_eq!(invoke_response.status(), StatusCode::OK);
@@ -1209,46 +1233,46 @@ export default async function handler(ctx) {
 
         let mut bad_headers = HeaderMap::new();
         bad_headers.insert("origin", "https://evil.example.com".parse().unwrap());
-        let bad_origin = invoke_function(
-            State(state.clone()),
+        let bad_origin = invoke_function_with_request(
+            state.clone(),
             None,
             bad_headers,
-            Path("origin-fn".to_string()),
-            Json(InvokeFunctionRequest {
+            "origin-fn",
+            InvokeFunctionRequest {
                 input: serde_json::json!({}),
                 api_key: None,
                 async_invoke: None,
-            }),
+            },
         )
         .await;
         assert_eq!(bad_origin.status(), StatusCode::FORBIDDEN);
 
         let mut ok_headers = HeaderMap::new();
         ok_headers.insert("origin", "https://app.example.com".parse().unwrap());
-        let first = invoke_function(
-            State(state.clone()),
+        let first = invoke_function_with_request(
+            state.clone(),
             None,
             ok_headers.clone(),
-            Path("origin-fn".to_string()),
-            Json(InvokeFunctionRequest {
+            "origin-fn",
+            InvokeFunctionRequest {
                 input: serde_json::json!({}),
                 api_key: None,
                 async_invoke: None,
-            }),
+            },
         )
         .await;
         assert_eq!(first.status(), StatusCode::OK);
 
-        let second = invoke_function(
-            State(state),
+        let second = invoke_function_with_request(
+            state,
             None,
             ok_headers,
-            Path("origin-fn".to_string()),
-            Json(InvokeFunctionRequest {
+            "origin-fn",
+            InvokeFunctionRequest {
                 input: serde_json::json!({}),
                 api_key: None,
                 async_invoke: None,
-            }),
+            },
         )
         .await;
         assert_eq!(second.status(), StatusCode::TOO_MANY_REQUESTS);
@@ -1282,16 +1306,16 @@ export default async function handler(ctx) {
             }),
         ).await;
         assert_eq!(create_response.status(), StatusCode::CREATED);
-        let invoke = invoke_function(
-            State(state.clone()),
+        let invoke = invoke_function_with_request(
+            state.clone(),
             Some(Extension(claims(&admin.user.id, true))),
             HeaderMap::new(),
-            Path("detail-fn".to_string()),
-            Json(InvokeFunctionRequest {
+            "detail-fn",
+            InvokeFunctionRequest {
                 input: serde_json::json!({"x":1}),
                 api_key: None,
                 async_invoke: None,
-            }),
+            },
         )
         .await;
         let invoke_body: InvokeFunctionResponse = test_support::response_json(invoke).await;
@@ -1380,16 +1404,16 @@ export default async function handler(ctx) {
         .await;
         assert_eq!(create_response.status(), StatusCode::CREATED);
 
-        let invoke_response = invoke_function(
-            State(state.clone()),
+        let invoke_response = invoke_function_with_request(
+            state.clone(),
             Some(Extension(claims(&admin.user.id, true))),
             HeaderMap::new(),
-            Path("async-fn".to_string()),
-            Json(InvokeFunctionRequest {
+            "async-fn",
+            InvokeFunctionRequest {
                 input: serde_json::json!({ "job": "heavy" }),
                 api_key: None,
                 async_invoke: Some(true),
-            }),
+            },
         )
         .await;
         assert_eq!(invoke_response.status(), StatusCode::ACCEPTED);
@@ -1456,16 +1480,16 @@ export default async function handler(ctx) {
         .await;
         assert_eq!(create_response.status(), StatusCode::CREATED);
 
-        let invoke_response = invoke_function(
-            State(state.clone()),
+        let invoke_response = invoke_function_with_request(
+            state.clone(),
             Some(Extension(claims(&admin.user.id, true))),
             HeaderMap::new(),
-            Path("stream-fn".to_string()),
-            Json(InvokeFunctionRequest {
+            "stream-fn",
+            InvokeFunctionRequest {
                 input: serde_json::json!({}),
                 api_key: None,
                 async_invoke: Some(true),
-            }),
+            },
         )
         .await;
         assert_eq!(invoke_response.status(), StatusCode::ACCEPTED);
@@ -1564,16 +1588,16 @@ export default async function handler(ctx) {
         .await;
         assert_eq!(create_response.status(), StatusCode::CREATED);
 
-        let invoke_response = invoke_function(
-            State(state),
+        let invoke_response = invoke_function_with_request(
+            state,
             Some(Extension(claims(&admin.user.id, true))),
             HeaderMap::new(),
-            Path("disabled-fn".to_string()),
-            Json(InvokeFunctionRequest {
+            "disabled-fn",
+            InvokeFunctionRequest {
                 input: serde_json::json!({}),
                 api_key: None,
                 async_invoke: None,
-            }),
+            },
         )
         .await;
         assert_eq!(invoke_response.status(), StatusCode::CONFLICT);
@@ -1667,16 +1691,16 @@ export default async function handler(ctx) {
         assert_eq!(rollback_body.function.active_version_number, 1);
         assert!(rollback_body.function.source_code.contains("version: 1"));
 
-        let invoke_response = invoke_function(
-            State(state),
+        let invoke_response = invoke_function_with_request(
+            state,
             Some(Extension(claims(&admin.user.id, true))),
             HeaderMap::new(),
-            Path("versioned-fn".to_string()),
-            Json(InvokeFunctionRequest {
+            "versioned-fn",
+            InvokeFunctionRequest {
                 input: serde_json::json!({}),
                 api_key: None,
                 async_invoke: None,
-            }),
+            },
         )
         .await;
         assert_eq!(invoke_response.status(), StatusCode::OK);
