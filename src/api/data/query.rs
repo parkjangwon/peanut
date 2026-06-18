@@ -266,24 +266,17 @@ fn sql_operator(op: &str) -> &'static str {
 
 fn validate_filter_value(spec: &DataFieldSpec, value: &str) -> Result<(), String> {
     match spec.field_type.as_str() {
-        "boolean" => {
-            if parse_bool_filter(value).is_none() {
-                return Err("filter_value must be true/false/1/0 for boolean fields".to_string());
-            }
+        "boolean" if parse_bool_filter(value).is_none() => {
+            Err("filter_value must be true/false/1/0 for boolean fields".to_string())
         }
-        "integer" => {
-            if value.parse::<i64>().is_err() {
-                return Err("filter_value must be an integer for integer fields".to_string());
-            }
+        "integer" if value.parse::<i64>().is_err() => {
+            Err("filter_value must be an integer for integer fields".to_string())
         }
-        "number" | "datetime" => {
-            if value.parse::<f64>().is_err() {
-                return Err("filter_value must be numeric for number/datetime fields".to_string());
-            }
+        "number" | "datetime" if value.parse::<f64>().is_err() => {
+            Err("filter_value must be numeric for number/datetime fields".to_string())
         }
-        _ => {}
+        _ => Ok(()),
     }
-    Ok(())
 }
 
 #[allow(dead_code)]
