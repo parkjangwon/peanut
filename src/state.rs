@@ -53,6 +53,7 @@ impl RateLimitState {
 pub struct AppState {
     pub pool: sqlx::SqlitePool,
     pub storage: Arc<crate::storage::local::LocalStorage>,
+    pub mail: crate::config::MailConfig,
     pub auth: AuthState,
     pub functions: FunctionsState,
     pub function_secrets_key: Arc<String>,

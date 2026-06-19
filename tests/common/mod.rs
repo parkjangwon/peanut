@@ -18,6 +18,17 @@ const TEST_ADDR: &str = "127.0.0.1:12345";
 pub const TEST_APP_ID: &str = "default";
 pub const TEST_APP_KEY: &str = "pk_test_default";
 
+fn disabled_mail_config() -> peanut::config::MailConfig {
+    peanut::config::MailConfig {
+        smtp_enabled: false,
+        smtp_host: String::new(),
+        smtp_port: 587,
+        smtp_user: String::new(),
+        smtp_password: String::new(),
+        smtp_from: String::new(),
+    }
+}
+
 pub async fn make_app() -> (Router, tempfile::TempDir) {
     make_app_with_seeded_key(true).await
 }
@@ -56,6 +67,7 @@ async fn make_app_with_options(
     let state = peanut::AppState {
         pool,
         storage: Arc::new(peanut::storage::local::LocalStorage::new(dir.path())),
+        mail: disabled_mail_config(),
         auth: peanut::AuthState {
             jwt_secret: Arc::new("test_secret".to_string()),
             password_reset_delivery: peanut::config::PasswordResetDelivery::Inline,
@@ -87,6 +99,7 @@ async fn make_app_with_options(
         storage_dir: dir.path().to_path_buf(),
         bind_addr: "127.0.0.1:0".parse().unwrap(),
         jwt_secret: "test_secret".to_string(),
+        mail: disabled_mail_config(),
         max_upload_bytes: 5 * 1024 * 1024,
         password_reset_delivery: peanut::config::PasswordResetDelivery::Inline,
         auth_allowed_origins: Vec::new(),

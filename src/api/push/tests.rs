@@ -61,6 +61,10 @@ async fn test_subscription_and_queue_flow() {
             title: "hello".to_string(),
             body: "world".to_string(),
             user_id: None,
+            broadcast_tag: None,
+            payload: None,
+            scheduled_at: None,
+            idempotency_key: None,
         }),
     )
     .await;

@@ -134,6 +134,10 @@ async fn handle_push_enqueue(
             title: title.to_string(),
             body: body.to_string(),
             user_id,
+            broadcast_tag: None,
+            payload: None,
+            scheduled_at: None,
+            idempotency_key: None,
         }),
     )
     .await;
@@ -171,6 +175,7 @@ async fn handle_data_get_row(
         State(state.clone()),
         Extension(claims),
         AxumPath((table.to_string(), row_id.to_string())),
+        axum::extract::Query(crate::api::data::GetRowParams::default()),
     )
     .await;
     response_json_value(response).await

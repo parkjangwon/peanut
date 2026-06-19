@@ -1,6 +1,6 @@
 "use client";
 
-import { Bell, CheckCircle2, CircleAlert, History } from "lucide-react";
+import { Bell, CheckCircle2, CircleAlert, History, TrendingUp } from "lucide-react";
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTranslations } from "next-intl";
@@ -17,7 +17,7 @@ import { JsonBlock } from "../shared/code-editor";
 import { DataTableView } from "../shared/data-table-view";
 import { EmptyState } from "../shared/empty-state";
 import { Metric, Panel, Section } from "../shared/layout-primitives";
-import type { PushQueueResponse } from "../types";
+import type { PushQueueResponse, PushQueueStatsResponse } from "../types";
 
 export function PushView({ app }: { app: AppSummary }) {
   const t = useTranslations("pushView");
@@ -46,6 +46,10 @@ export function PushView({ app }: { app: AppSummary }) {
     queryKey: ["push", "queue", app.id],
     queryFn: () => apiFetch<PushQueueResponse>(`/api/apps/${app.id}/push/queue`),
   });
+  const stats = useQuery({
+    queryKey: ["push", "queue-stats", app.id],
+    queryFn: () => apiFetch<PushQueueStatsResponse>(`/api/apps/${app.id}/push/queue/stats?window_hours=24&limit=5`),
+  });
   const sendTest = useMutation({
     mutationFn: () =>
       apiFetch(`/api/apps/${app.id}/push/test-message`, {
@@ -59,6 +63,7 @@ export function PushView({ app }: { app: AppSummary }) {
     onSuccess: () => {
       toast.success(t("queued"));
       queryClient.invalidateQueries({ queryKey: ["push", "queue", app.id] });
+      queryClient.invalidateQueries({ queryKey: ["push", "queue-stats", app.id] });
     },
     onError: (error: Error) => toast.error(error.message),
   });
@@ -68,6 +73,7 @@ export function PushView({ app }: { app: AppSummary }) {
         <TabsList>
           <TabsTrigger value="subscriptions">{t("subscriptions")}</TabsTrigger>
           <TabsTrigger value="test">{t("testMessage")}</TabsTrigger>
+          <TabsTrigger value="stats">{t("stats")}</TabsTrigger>
           <TabsTrigger value="diagnostics">{t("diagnostics")}</TabsTrigger>
           <TabsTrigger value="queue">{t("queue")}</TabsTrigger>
         </TabsList>
@@ -103,6 +109,9 @@ export function PushView({ app }: { app: AppSummary }) {
             </div>
           </Panel>
         </TabsContent>
+        <TabsContent value="stats">
+          <PushStatsView stats={stats.data} loading={stats.isLoading} />
+        </TabsContent>
         <TabsContent value="diagnostics">
           <Panel title={t("diagnostics")}><JsonBlock value={diagnostics.data ?? { status: common("loading") }} /></Panel>
         </TabsContent>
@@ -113,6 +122,49 @@ export function PushView({ app }: { app: AppSummary }) {
         </TabsContent>
       </Tabs>
     </Section>
+  );
+}
+
+function PushStatsView({ stats, loading }: { stats?: PushQueueStatsResponse; loading?: boolean }) {
+  const t = useTranslations("pushView");
+  if (loading) return <Skeleton className="h-64 w-full" />;
+  if (!stats) {
+    return (
+      <EmptyState
+        icon={TrendingUp}
+        title={t("emptyStatsTitle")}
+        description={t("emptyStatsDescription")}
+        compact
+      />
+    );
+  }
+  return (
+    <div className="space-y-4">
+      <div className="grid gap-3 md:grid-cols-4">
+        <Metric label={t("statsWindowHours")} value={`${stats.window_hours}h`} icon={TrendingUp} />
+        <Metric label={t("statsRetryScheduled")} value={stats.retry_scheduled} icon={History} />
+        <Metric label={t("statsRetryOverdue")} value={stats.retry_overdue} icon={CircleAlert} />
+        <Metric label={t("statsReasonLimit")} value={stats.limit} icon={Bell} />
+      </div>
+      <div className="grid gap-4 lg:grid-cols-2">
+        <Panel title={t("statsTerminalFailures")}>
+          <DataTableView
+            columns={[t("statsReason"), t("statsCount")]}
+            rows={stats.terminal_failure_reasons.map((item) => [item.reason, item.count])}
+            emptyTitle={t("statsNoFailures")}
+            emptyDescription={t("statsNoFailuresDescription")}
+          />
+        </Panel>
+        <Panel title={t("statsDestinationFailures")}>
+          <DataTableView
+            columns={[t("statsReason"), t("statsCount")]}
+            rows={stats.destination_failure_reasons.map((item) => [item.reason, item.count])}
+            emptyTitle={t("statsNoFailures")}
+            emptyDescription={t("statsNoFailuresDescription")}
+          />
+        </Panel>
+      </div>
+    </div>
   );
 }
 
@@ -142,19 +194,29 @@ function PushQueueView({ queue, loading }: { queue?: PushQueueResponse; loading?
   }
   return (
     <div className="space-y-4">
-      <div className="grid gap-3 md:grid-cols-4">
+      <div className="grid gap-3 md:grid-cols-4 xl:grid-cols-6">
         <Metric label={t("queuedTotal")} value={summary?.total ?? items.length} icon={Bell} />
         <Metric label={t("queuedPending")} value={summary?.pending ?? 0} icon={History} />
+        <Metric label={t("queuedProcessing")} value={summary?.processing ?? 0} icon={History} />
         <Metric label={t("queuedFailed")} value={summary?.failed ?? 0} icon={CircleAlert} />
         <Metric label={t("queuedSent")} value={summary?.sent ?? 0} icon={CheckCircle2} />
+        <Metric label={t("queuedPartial")} value={summary?.partial_success ?? 0} icon={CircleAlert} />
       </div>
       <DataTableView
-        columns={[t("columnsId"), t("columnsTitle"), t("columnsStatus"), t("columnsRetry"), t("columnsCreated")]}
+        columns={[
+          t("columnsId"),
+          t("columnsTitle"),
+          t("columnsStatus"),
+          t("columnsRetry"),
+          t("columnsPartialFailures"),
+          t("columnsCreated"),
+        ]}
         rows={items.map((item) => [
           item.id,
           item.title,
           item.status,
           item.retry_count,
+          item.partial_failure_count,
           item.created_at,
         ])}
       />

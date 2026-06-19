@@ -92,11 +92,20 @@ pub async fn create_row(
                     event_id,
                     &table.name,
                     &row_id,
+                    owner_user_id.as_deref(),
                     &claims.sub,
                     "insert",
                     Some(&normalized),
                 );
             }
+            crate::jobs::fire_data_triggers(
+                &state,
+                &claims.app_id,
+                &table.id,
+                "insert",
+                &row_id,
+                Some(&normalized),
+            );
             let _ = crate::api::audit::record_audit_log(
                 &state.pool,
                 Some(&claims.app_id),
@@ -221,7 +230,29 @@ pub(crate) async fn execute_list_rows(
             let mut rows = Vec::with_capacity(records.len());
             for record in records {
                 match DataRowResponse::try_from_record(record) {
-                    Ok(row) => rows.push(row),
+                    Ok(mut row) => {
+                        if let Some(expand) = params.expand.as_deref() {
+                            match parse_expand_fields(expand, &table.schema) {
+                                Ok(expand_fields) => {
+                                    if let Err(message) = expand_row_data(
+                                        &state.pool,
+                                        &table.app_id,
+                                        &table.schema,
+                                        &mut row.data,
+                                        &expand_fields,
+                                    )
+                                    .await
+                                    {
+                                        return json_error(StatusCode::BAD_REQUEST, message);
+                                    }
+                                }
+                                Err(message) => {
+                                    return json_error(StatusCode::BAD_REQUEST, message)
+                                }
+                            }
+                        }
+                        rows.push(row);
+                    }
                     Err(message) => return json_error(StatusCode::INTERNAL_SERVER_ERROR, message),
                 }
             }
@@ -247,6 +278,7 @@ pub async fn get_row(
     State(state): State<crate::AppState>,
     Extension(claims): Extension<Claims>,
     Path((table, row_id)): Path<(String, String)>,
+    Query(params): Query<GetRowParams>,
 ) -> Response {
     let table = match load_table(&state.pool, &claims.app_id, &table).await {
         Ok(table) => table,
@@ -276,12 +308,33 @@ pub async fn get_row(
         &claims,
         &table.access_policy,
         record.owner_user_id.as_deref(),
+        RowAccessAction::Read,
     ) {
         return json_error(StatusCode::FORBIDDEN, "row access denied");
     }
 
     match DataRowResponse::try_from_record(record) {
-        Ok(row) => (StatusCode::OK, Json(row)).into_response(),
+        Ok(mut row) => {
+            if let Some(expand) = params.expand.as_deref() {
+                match parse_expand_fields(expand, &table.schema) {
+                    Ok(expand_fields) => {
+                        if let Err(message) = expand_row_data(
+                            &state.pool,
+                            &table.app_id,
+                            &table.schema,
+                            &mut row.data,
+                            &expand_fields,
+                        )
+                        .await
+                        {
+                            return json_error(StatusCode::BAD_REQUEST, message);
+                        }
+                    }
+                    Err(message) => return json_error(StatusCode::BAD_REQUEST, message),
+                }
+            }
+            (StatusCode::OK, Json(row)).into_response()
+        }
         Err(message) => json_error(StatusCode::INTERNAL_SERVER_ERROR, message),
     }
 }
@@ -320,6 +373,7 @@ pub async fn update_row(
         &claims,
         &table.access_policy,
         existing.owner_user_id.as_deref(),
+        RowAccessAction::Update,
     ) {
         return json_error(StatusCode::FORBIDDEN, "row access denied");
     }
@@ -364,8 +418,16 @@ pub async fn update_row(
     {
         Ok(_) => {
             if let Ok(event_id) = record_row_event(&state.pool, &claims.app_id, &table.id, &row_id, &claims.sub, "update", Some(&normalized)).await {
-                emit_data_row_event(&state, &claims.app_id, event_id, &table.name, &row_id, &claims.sub, "update", Some(&normalized));
+                emit_data_row_event(&state, &claims.app_id, event_id, &table.name, &row_id, existing.owner_user_id.as_deref(), &claims.sub, "update", Some(&normalized));
             }
+            crate::jobs::fire_data_triggers(
+                &state,
+                &claims.app_id,
+                &table.id,
+                "update",
+                &row_id,
+                Some(&normalized),
+            );
             let _ = crate::api::audit::record_audit_log(
                 &state.pool,
                 Some(&claims.app_id),
@@ -422,6 +484,7 @@ pub async fn delete_row(
         &claims,
         &table.access_policy,
         existing.owner_user_id.as_deref(),
+        RowAccessAction::Delete,
     ) {
         return json_error(StatusCode::FORBIDDEN, "row access denied");
     }
@@ -454,11 +517,20 @@ pub async fn delete_row(
                     event_id,
                     &table.name,
                     &row_id,
+                    existing.owner_user_id.as_deref(),
                     &claims.sub,
                     "delete",
                     previous.as_ref(),
                 );
             }
+            crate::jobs::fire_data_triggers(
+                &state,
+                &claims.app_id,
+                &table.id,
+                "delete",
+                &row_id,
+                previous.as_ref(),
+            );
             let _ = crate::api::audit::record_audit_log(
                 &state.pool,
                 Some(&claims.app_id),

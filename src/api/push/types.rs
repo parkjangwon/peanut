@@ -106,4 +106,22 @@ pub struct EnqueuePushRequest {
     pub title: String,
     pub body: String,
     pub user_id: Option<String>,
+    #[serde(default)]
+    pub broadcast_tag: Option<String>,
+    #[serde(default)]
+    pub payload: Option<super::service::PushPayload>,
+    #[serde(default)]
+    pub scheduled_at: Option<String>,
+    #[serde(default)]
+    pub idempotency_key: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct EnqueuePushBatchRequest {
+    pub messages: Vec<EnqueuePushRequest>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct EnqueuePushBatchResponse {
+    pub messages: Vec<super::service::EnqueuePushResponse>,
 }

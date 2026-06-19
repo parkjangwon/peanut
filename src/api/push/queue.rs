@@ -21,7 +21,7 @@ pub(super) fn decode_failed_destinations(
     Vec::new()
 }
 
-fn map_queue_entry(row: PushQueueEntryRow) -> PushQueueEntry {
+pub(super) fn map_queue_entry(row: PushQueueEntryRow) -> PushQueueEntry {
     PushQueueEntry {
         id: row.id,
         user_id: row.user_id,

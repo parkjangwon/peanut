@@ -17,6 +17,14 @@ pub async fn make_test_state() -> (crate::AppState, tempfile::TempDir) {
     let state = crate::AppState {
         pool,
         storage: Arc::new(crate::storage::local::LocalStorage::new(dir.path())),
+        mail: crate::config::MailConfig {
+            smtp_enabled: false,
+            smtp_host: String::new(),
+            smtp_port: 587,
+            smtp_user: String::new(),
+            smtp_password: String::new(),
+            smtp_from: String::new(),
+        },
         auth: crate::AuthState {
             jwt_secret: Arc::new("test_secret".to_string()),
             password_reset_delivery: crate::config::PasswordResetDelivery::Inline,
@@ -53,6 +61,14 @@ pub async fn make_test_app() -> (Router, tempfile::TempDir) {
         storage_dir: dir.path().to_path_buf(),
         bind_addr: "127.0.0.1:0".parse().unwrap(),
         jwt_secret: "test_secret".to_string(),
+        mail: crate::config::MailConfig {
+            smtp_enabled: false,
+            smtp_host: String::new(),
+            smtp_port: 587,
+            smtp_user: String::new(),
+            smtp_password: String::new(),
+            smtp_from: String::new(),
+        },
         max_upload_bytes: 5 * 1024 * 1024,
         password_reset_delivery: crate::config::PasswordResetDelivery::Inline,
         auth_allowed_origins: Vec::new(),

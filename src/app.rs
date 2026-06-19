@@ -88,6 +88,18 @@ fn build_auth_public_routes(state: crate::AppState) -> Router<crate::AppState> {
             "/apps/:app_id/auth/oauth/:provider/callback",
             get(crate::api::auth::oauth_callback),
         )
+        .route(
+            "/apps/:app_id/auth/verify-email/confirm",
+            post(crate::api::auth::confirm_email_verification),
+        )
+        .route(
+            "/apps/:app_id/storage/buckets/:bucket/presigned-objects/*key",
+            put(crate::api::storage::put_presigned_object),
+        )
+        .route(
+            "/apps/:app_id/storage/buckets/:bucket/presigned-objects/*key",
+            get(crate::api::storage::get_presigned_object),
+        )
         .layer(auth_rate_limit)
         .layer(auth_client_policy)
 }
@@ -222,6 +234,10 @@ fn build_protected_routes(
         .route("/admin/backups", get(crate::api::backups::list_backups))
         .route("/admin/backups", post(crate::api::backups::create_backup))
         .route(
+            "/admin/backups/full",
+            post(crate::api::backups::create_full_backup),
+        )
+        .route(
             "/admin/backups/restore-pending",
             get(crate::api::backups::get_restore_pending),
         )
@@ -298,6 +314,10 @@ fn build_sdk_routes(state: crate::AppState, max_upload_bytes: usize) -> Router<c
             post(crate::api::sdk::reset_password),
         )
         .route(
+            "/apps/:app_id/auth/verify-email/request",
+            post(crate::api::sdk::request_email_verification),
+        )
+        .route(
             "/apps/:app_id/auth/sessions",
             get(crate::api::sdk::list_auth_sessions),
         )
@@ -342,6 +362,10 @@ fn build_sdk_routes(state: crate::AppState, max_upload_bytes: usize) -> Router<c
             delete(crate::api::sdk::delete_data_row),
         )
         .route(
+            "/apps/:app_id/data/tables/:table/events/stream",
+            get(crate::api::sdk::stream_data_events),
+        )
+        .route(
             "/apps/:app_id/push/subscriptions",
             get(crate::api::sdk::list_push_subscriptions),
         )
@@ -362,6 +386,14 @@ fn build_sdk_routes(state: crate::AppState, max_upload_bytes: usize) -> Router<c
             post(crate::api::sdk::enqueue_push_message),
         )
         .route(
+            "/apps/:app_id/push/messages/batch",
+            post(crate::api::sdk::enqueue_push_batch),
+        )
+        .route(
+            "/apps/:app_id/push/messages/:message_id",
+            get(crate::api::sdk::get_push_message_status),
+        )
+        .route(
             "/apps/:app_id/function-endpoints/:endpoint_slug",
             any(crate::api::sdk::invoke_function),
         )
@@ -380,6 +412,30 @@ fn build_sdk_routes(state: crate::AppState, max_upload_bytes: usize) -> Router<c
         .route(
             "/apps/:app_id/storage/buckets/:bucket/objects/*key",
             delete(crate::api::storage::delete_sdk_object),
+        )
+        .route(
+            "/apps/:app_id/storage/buckets/:bucket/presign-upload",
+            post(crate::api::storage::create_presigned_upload_url),
+        )
+        .route(
+            "/apps/:app_id/storage/buckets/:bucket/presign-download",
+            post(crate::api::storage::create_presigned_download_url),
+        )
+        .route(
+            "/apps/:app_id/storage/buckets/:bucket/multipart/create",
+            post(crate::api::storage::create_multipart_upload),
+        )
+        .route(
+            "/apps/:app_id/storage/buckets/:bucket/multipart/:upload_id/parts/:part_number",
+            put(crate::api::storage::upload_multipart_part),
+        )
+        .route(
+            "/apps/:app_id/storage/buckets/:bucket/multipart/complete",
+            post(crate::api::storage::complete_multipart_upload),
+        )
+        .route(
+            "/apps/:app_id/storage/buckets/:bucket/multipart/abort",
+            post(crate::api::storage::abort_multipart_upload),
         )
         .layer(DefaultBodyLimit::max(max_upload_bytes))
         .layer(axum::middleware::from_fn_with_state(
@@ -525,10 +581,6 @@ fn build_app_admin_data_routes() -> Router<crate::AppState> {
         .route(
             "/apps/:app_id/data/tables/:table/events/checkpoint",
             get(crate::api::app_scope::get_data_event_checkpoint),
-        )
-        .route(
-            "/apps/:app_id/data/tables/:table/events/stream",
-            get(crate::api::app_scope::stream_data_events),
         )
 }
 

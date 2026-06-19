@@ -84,11 +84,30 @@ pub async fn forgot_password_for_app(
 
     match issue_password_reset_token(&state.pool, app_id, &user.id).await {
         Ok(reset_token) => {
-            let response_token = deliver_password_reset_token(
-                &state.auth.password_reset_delivery,
-                &user.email,
-                &reset_token,
-            );
+            let delivery = if state.mail.smtp_enabled {
+                let subject = "Reset your password";
+                let body = format!(
+                    "Use this token to reset your password:\n\n{reset_token}\n\nThis token expires in {} minutes.",
+                    super::PASSWORD_RESET_TOKEN_TTL_MINUTES
+                );
+                if let Err(error) =
+                    crate::mail::send_email(&state.mail, &user.email, subject, &body).await
+                {
+                    tracing::error!(email = %user.email, error = %error, "failed to send password reset email");
+                }
+                "email"
+            } else {
+                password_reset_delivery_label(&state.auth.password_reset_delivery)
+            };
+            let response_token = if state.mail.smtp_enabled {
+                String::new()
+            } else {
+                deliver_password_reset_token(
+                    &state.auth.password_reset_delivery,
+                    &user.email,
+                    &reset_token,
+                )
+            };
             let _ = record_auth_event(
                 &state.pool,
                 app_id,
@@ -96,7 +115,7 @@ pub async fn forgot_password_for_app(
                 Some(&user.id),
                 "password_reset_requested",
                 Some(serde_json::json!({
-                    "delivery": password_reset_delivery_label(&state.auth.password_reset_delivery),
+                    "delivery": delivery,
                 })),
             )
             .await;
@@ -105,8 +124,7 @@ pub async fn forgot_password_for_app(
                 Json(ForgotPasswordResponse {
                     message: message.to_string(),
                     reset_token: response_token,
-                    delivery: password_reset_delivery_label(&state.auth.password_reset_delivery)
-                        .to_string(),
+                    delivery: delivery.to_string(),
                 }),
             )
                 .into_response()

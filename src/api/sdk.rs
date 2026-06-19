@@ -137,6 +137,37 @@ pub async fn reset_password(
     crate::api::auth::reset_password_for_app(&state, &app_id, payload).await
 }
 
+pub async fn request_email_verification(
+    State(state): State<crate::AppState>,
+    Extension(auth): Extension<SdkAuthContext>,
+    Path(app_id): Path<String>,
+    Json(payload): Json<crate::api::auth::RequestEmailVerificationBody>,
+) -> Response {
+    let claims = match scoped_user_claims(&auth, "auth:public") {
+        Ok(claims) => claims,
+        Err(response) => return response,
+    };
+    crate::api::auth::request_email_verification_for_app(
+        &state,
+        &app_id,
+        payload,
+        Some(&claims.sub),
+    )
+    .await
+}
+
+pub async fn confirm_email_verification(
+    State(state): State<crate::AppState>,
+    Extension(auth): Extension<SdkAuthContext>,
+    Path(app_id): Path<String>,
+    Query(query): Query<crate::api::auth::ConfirmEmailVerificationQuery>,
+) -> Response {
+    if let Err(response) = scoped_actor_claims(&auth, "auth:public") {
+        return response;
+    }
+    crate::api::auth::confirm_email_verification_for_app(&state, &app_id, &query.token).await
+}
+
 pub async fn list_auth_sessions(
     State(state): State<crate::AppState>,
     Extension(auth): Extension<SdkAuthContext>,
@@ -222,12 +253,31 @@ pub async fn get_data_row(
     State(state): State<crate::AppState>,
     Extension(auth): Extension<SdkAuthContext>,
     Path((_app_id, table, row_id)): Path<(String, String, String)>,
+    Query(params): Query<crate::api::data::GetRowParams>,
 ) -> Response {
     let claims = match scoped_actor_claims(&auth, "data:read") {
         Ok(claims) => claims,
         Err(response) => return response,
     };
-    crate::api::data::get_row(State(state), Extension(claims), Path((table, row_id))).await
+    crate::api::data::get_row(
+        State(state),
+        Extension(claims),
+        Path((table, row_id)),
+        Query(params),
+    )
+    .await
+}
+
+pub async fn stream_data_events(
+    State(state): State<crate::AppState>,
+    Extension(auth): Extension<SdkAuthContext>,
+    Path((_app_id, table)): Path<(String, String)>,
+) -> Response {
+    let claims = match scoped_actor_claims(&auth, "data:read") {
+        Ok(claims) => claims,
+        Err(response) => return response,
+    };
+    crate::api::data::stream_table_events_sdk(State(state), Extension(claims), Path(table)).await
 }
 
 pub async fn create_data_row(
@@ -437,62 +487,50 @@ pub async fn enqueue_push_message(
         Ok(claims) => claims,
         Err(response) => return response,
     };
-    let title = payload.title.trim();
-    let body = payload.body.trim();
-    if title.is_empty() {
-        return json_error(StatusCode::BAD_REQUEST, "title is required");
-    }
-    if body.is_empty() {
-        return json_error(StatusCode::BAD_REQUEST, "body is required");
-    }
-
-    let target_user_id = if claims.is_admin {
-        payload.user_id.unwrap_or_else(|| claims.sub.clone())
-    } else {
-        claims.sub.clone()
-    };
-    let user_exists: Option<(String,)> = match sqlx::query_as("SELECT id FROM users WHERE id = ?")
-        .bind(&target_user_id)
-        .fetch_optional(&state.pool)
-        .await
-    {
-        Ok(user) => user,
-        Err(_) => {
-            return json_error(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "failed to verify target user",
-            )
-        }
-    };
-    if user_exists.is_none() {
-        return json_error(StatusCode::NOT_FOUND, "target user not found");
-    }
-
-    match sqlx::query(
-        "INSERT INTO push_queue (app_id, user_id, title, body, status, retry_count, last_error) VALUES (?, ?, ?, ?, 'pending', 0, NULL)",
+    match crate::api::push::service::enqueue_push(
+        &state,
+        crate::api::push::service::EnqueuePushInput {
+            app_id: &app_id,
+            claims: &claims,
+            title: payload.title,
+            body: payload.body,
+            user_id: payload.user_id,
+            broadcast_tag: payload.broadcast_tag,
+            payload: payload.payload,
+            scheduled_at: payload.scheduled_at,
+            idempotency_key: payload.idempotency_key,
+        },
     )
-    .bind(&app_id)
-    .bind(&target_user_id)
-    .bind(title)
-    .bind(body)
-    .execute(&state.pool)
     .await
     {
-        Ok(_) => {
-            let _ = crate::api::audit::record_audit_log(
-                &state.pool,
-                Some(&app_id),
-                &claims,
-                "push.message.enqueued",
-                "push_message",
-                &target_user_id,
-                serde_json::json!({ "title": title }),
-            )
-            .await;
-            json_message(StatusCode::CREATED, "queued push message")
-        }
-        Err(_) => json_error(StatusCode::INTERNAL_SERVER_ERROR, "failed to queue push message"),
+        Ok(result) => (StatusCode::CREATED, Json(result)).into_response(),
+        Err(response) => response,
     }
+}
+
+pub async fn enqueue_push_batch(
+    State(state): State<crate::AppState>,
+    Extension(auth): Extension<SdkAuthContext>,
+    Path(_app_id): Path<String>,
+    Json(payload): Json<crate::api::push::EnqueuePushBatchRequest>,
+) -> Response {
+    let claims = match scoped_actor_claims(&auth, "push:send") {
+        Ok(claims) => claims,
+        Err(response) => return response,
+    };
+    crate::api::push::enqueue_batch(State(state), Extension(claims), Json(payload)).await
+}
+
+pub async fn get_push_message_status(
+    State(state): State<crate::AppState>,
+    Extension(auth): Extension<SdkAuthContext>,
+    Path((_app_id, message_id)): Path<(String, i64)>,
+) -> Response {
+    let claims = match scoped_actor_claims(&auth, "push:send") {
+        Ok(claims) => claims,
+        Err(response) => return response,
+    };
+    crate::api::push::get_message_status(State(state), Extension(claims), Path(message_id)).await
 }
 
 async fn save_app_push_subscription(
@@ -618,6 +656,7 @@ mod tests {
                             required: true,
                             max_length: None,
                             default: None,
+                            ..Default::default()
                         },
                     )]
                     .into_iter()
@@ -625,6 +664,7 @@ mod tests {
                 },
                 access_policy: crate::api::data::AccessPolicy {
                     mode: "authenticated_shared_rw".to_string(),
+                    ..Default::default()
                 },
             }),
         )

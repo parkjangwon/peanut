@@ -349,6 +349,7 @@ pub async fn import_rows(
                         event_id,
                         &table.name,
                         &row_id,
+                        owner_user_id.as_deref(),
                         &claims.sub,
                         "insert",
                         Some(&normalized),

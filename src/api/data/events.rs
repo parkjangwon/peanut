@@ -160,6 +160,66 @@ pub async fn get_row_event_checkpoint(
         .into_response()
 }
 
+pub async fn stream_table_events_sdk(
+    State(state): State<crate::AppState>,
+    Extension(claims): Extension<Claims>,
+    Path(table): Path<String>,
+) -> Response {
+    let table = match load_table(&state.pool, &claims.app_id, &table).await {
+        Ok(table) => table,
+        Err(LoadTableError::NotFound) => {
+            return json_error(StatusCode::NOT_FOUND, "data table not found")
+        }
+        Err(LoadTableError::Invalid(message)) => {
+            return json_error(StatusCode::INTERNAL_SERVER_ERROR, message)
+        }
+        Err(LoadTableError::QueryFailed) => {
+            return json_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "failed to load data table",
+            )
+        }
+    };
+
+    if !can_read_table(&claims, &table.access_policy) {
+        return json_error(StatusCode::FORBIDDEN, "read access denied");
+    }
+
+    let app_id = claims.app_id.clone();
+    let table_name = table.name.clone();
+    let access_policy = table.access_policy.clone();
+    let filter_claims = claims.clone();
+
+    let stream =
+        BroadcastStream::new(state.data_event_sender.subscribe()).filter_map(move |message| {
+            match message {
+                Ok(event)
+                    if event.app_id == app_id
+                        && event.table_name == table_name
+                        && (filter_claims.is_admin
+                            || can_access_row(
+                                &filter_claims,
+                                &access_policy,
+                                event.owner_user_id.as_deref(),
+                                RowAccessAction::Read,
+                            )) =>
+                {
+                    Some(Ok::<Event, Infallible>(
+                        Event::default()
+                            .event("data.row_changed")
+                            .json_data(event)
+                            .unwrap_or_else(|_| Event::default().data("{}")),
+                    ))
+                }
+                _ => None,
+            }
+        });
+
+    Sse::new(stream)
+        .keep_alive(KeepAlive::new().interval(std::time::Duration::from_secs(15)))
+        .into_response()
+}
+
 pub async fn stream_row_events(
     State(state): State<crate::AppState>,
     Extension(claims): Extension<Claims>,

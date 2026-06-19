@@ -1,4 +1,8 @@
-use crate::push::{ntfy::send_ntfy_notification, webpush::send_web_push};
+use crate::push::{
+    delivery::{DeliveryExtras, DeliveryMessage},
+    ntfy::send_ntfy_notification,
+    webpush::send_web_push,
+};
 use serde::Serialize;
 use sqlx::SqlitePool;
 use std::sync::Arc;
@@ -14,14 +18,18 @@ const RETRY_BACKOFF_SCHEDULE_SECONDS: [i64; 2] = [30, 120];
 #[derive(sqlx::FromRow)]
 struct PushQueueItem {
     id: i64,
+    app_id: String,
     user_id: String,
     title: String,
     body: String,
     retry_count: i64,
+    payload_json: Option<String>,
+    broadcast_tag: Option<String>,
 }
 
-#[derive(sqlx::FromRow)]
+#[derive(sqlx::FromRow, Clone)]
 struct SubscriptionRow {
+    user_id: String,
     endpoint: String,
     p256dh: String,
     auth: String,
@@ -71,8 +79,24 @@ async fn cleanup_old_items(pool: &SqlitePool) -> Result<u64, sqlx::Error> {
 pub async fn process_queue(pool: &SqlitePool) -> Result<(), Box<dyn std::error::Error>> {
     process_queue_with_deliveries(
         pool,
-        |topic, title, body| async move { send_ntfy_notification(&topic, &title, &body).await },
-        |subscription, title, body| async move { send_web_push(subscription, &title, &body).await },
+        |topic, message| async move {
+            send_ntfy_notification(
+                &topic,
+                &message.title,
+                &message.body,
+                message.extras.as_ref(),
+            )
+            .await
+        },
+        |subscription, message| async move {
+            send_web_push(
+                subscription,
+                &message.title,
+                &message.body,
+                message.extras.as_ref(),
+            )
+            .await
+        },
     )
     .await
 }
@@ -90,17 +114,17 @@ async fn process_queue_with_deliveries<NtfyFn, NtfyFuture, WebPushFn, WebPushFut
     send_web_push_delivery: WebPushFn,
 ) -> Result<(), Box<dyn std::error::Error>>
 where
-    NtfyFn: Fn(String, String, String) -> NtfyFuture + Send + Sync + 'static,
+    NtfyFn: Fn(String, DeliveryMessage) -> NtfyFuture + Send + Sync + 'static,
     NtfyFuture:
         Future<Output = Result<(), Box<dyn std::error::Error + Send + Sync>>> + Send + 'static,
-    WebPushFn: Fn(SubscriptionInfo, String, String) -> WebPushFuture + Send + Sync + 'static,
+    WebPushFn: Fn(SubscriptionInfo, DeliveryMessage) -> WebPushFuture + Send + Sync + 'static,
     WebPushFuture:
         Future<Output = Result<(), Box<dyn std::error::Error + Send + Sync>>> + Send + 'static,
 {
     reclaim_stale_processing_items(pool).await?;
 
     let pending_ids: Vec<(i64,)> = sqlx::query_as(
-        "SELECT id FROM push_queue WHERE status = 'pending' AND (next_retry_at IS NULL OR next_retry_at <= CURRENT_TIMESTAMP) ORDER BY id ASC LIMIT 10",
+        "SELECT id FROM push_queue WHERE status = 'pending' AND (scheduled_at IS NULL OR scheduled_at <= CURRENT_TIMESTAMP) AND (next_retry_at IS NULL OR next_retry_at <= CURRENT_TIMESTAMP) ORDER BY id ASC LIMIT 10",
     )
     .fetch_all(pool)
     .await?;
@@ -121,30 +145,57 @@ where
         }
 
         let item = sqlx::query_as::<_, PushQueueItem>(
-            "SELECT id, user_id, title, body, retry_count FROM push_queue WHERE id = ?",
+            "SELECT id, app_id, user_id, title, body, retry_count, payload_json, broadcast_tag FROM push_queue WHERE id = ?",
         )
         .bind(id)
         .fetch_one(pool)
         .await?;
 
-        let subscriptions = sqlx::query_as::<_, SubscriptionRow>(
-            "SELECT endpoint, p256dh, auth FROM push_subscriptions WHERE user_id = ?",
-        )
-        .bind(&item.user_id)
-        .fetch_all(pool)
-        .await?;
+        let subscriptions = if let Some(tag) = item.broadcast_tag.as_deref() {
+            sqlx::query_as::<_, SubscriptionRow>(
+                "SELECT user_id, endpoint, p256dh, auth FROM push_subscriptions WHERE app_id = ? AND endpoint = ? AND p256dh = '' AND auth = ''",
+            )
+            .bind(&item.app_id)
+            .bind(tag)
+            .fetch_all(pool)
+            .await?
+        } else {
+            sqlx::query_as::<_, SubscriptionRow>(
+                "SELECT user_id, endpoint, p256dh, auth FROM push_subscriptions WHERE app_id = ? AND user_id = ?",
+            )
+            .bind(&item.app_id)
+            .bind(&item.user_id)
+            .fetch_all(pool)
+            .await?
+        };
 
         if subscriptions.is_empty() {
             mark_terminal_failure(pool, item.id, "no subscriptions configured").await?;
+            emit_push_webhook(
+                pool,
+                &item.app_id,
+                item.id,
+                "failed",
+                Some("no subscriptions configured"),
+            )
+            .await;
             continue;
         }
 
+        let delivery_message = DeliveryMessage {
+            title: item.title.clone(),
+            body: item.body.clone(),
+            extras: DeliveryExtras::from_json(item.payload_json.as_deref()),
+        };
+
+        let mut endpoint_owners = std::collections::HashMap::new();
         let mut join_set = JoinSet::new();
-        for subscription in subscriptions {
+        for subscription in &subscriptions {
+            endpoint_owners.insert(subscription.endpoint.clone(), subscription.user_id.clone());
             let send_ntfy = Arc::clone(&send_ntfy);
             let send_web_push_delivery = Arc::clone(&send_web_push_delivery);
-            let title = item.title.clone();
-            let body = item.body.clone();
+            let message = delivery_message.clone();
+            let subscription = subscription.clone();
 
             join_set.spawn(async move {
                 let endpoint = subscription.endpoint.clone();
@@ -154,9 +205,9 @@ where
                         subscription.p256dh.clone(),
                         subscription.auth.clone(),
                     );
-                    send_web_push_delivery(subscription_info, title, body).await
+                    send_web_push_delivery(subscription_info, message).await
                 } else {
-                    send_ntfy(subscription.endpoint.clone(), title, body).await
+                    send_ntfy(subscription.endpoint.clone(), message).await
                 };
 
                 (endpoint, delivery_result)
@@ -174,7 +225,13 @@ where
                 Ok(r) => r,
                 Err(e) => {
                     tracing::error!("Push delivery task panicked: {}", e);
-                    continue;
+                    (
+                        "unknown".to_string(),
+                        Err(Box::new(std::io::Error::other(format!(
+                            "delivery task panicked: {e}"
+                        )))
+                            as Box<dyn std::error::Error + Send + Sync>),
+                    )
                 }
             };
 
@@ -211,7 +268,9 @@ where
         }
 
         for endpoint in dead_subscription_endpoints {
-            delete_subscription_by_endpoint(pool, &item.user_id, &endpoint).await?;
+            if let Some(user_id) = endpoint_owners.get(&endpoint) {
+                delete_subscription_by_endpoint(pool, user_id, &endpoint).await?;
+            }
         }
 
         let partial_failure_count = failed_destinations.len() as i64;
@@ -241,6 +300,14 @@ where
                 failed_destinations_json.as_deref(),
             )
             .await?;
+            emit_push_webhook(
+                pool,
+                &item.app_id,
+                item.id,
+                "sent",
+                partial_failure_note.as_deref(),
+            )
+            .await;
         } else if failure_outcomes.iter().all(|outcome| {
             matches!(
                 outcome,
@@ -248,16 +315,30 @@ where
             )
         }) {
             mark_terminal_failure(pool, item.id, &errors.join(" | ")).await?;
+            emit_push_webhook(
+                pool,
+                &item.app_id,
+                item.id,
+                "failed",
+                Some(&errors.join(" | ")),
+            )
+            .await;
         } else {
+            let joined_errors = errors.join(" | ");
+            let will_retry = item.retry_count + 1 < MAX_RETRIES;
             mark_failed(
                 pool,
                 item.id,
                 item.retry_count,
-                Some(errors.join(" | ")),
+                Some(joined_errors.clone()),
                 partial_failure_count,
                 failed_destinations_json.as_deref(),
             )
             .await?;
+            if !will_retry {
+                emit_push_webhook(pool, &item.app_id, item.id, "failed", Some(&joined_errors))
+                    .await;
+            }
         }
     }
 
@@ -287,7 +368,10 @@ fn classify_delivery_error(error: &(dyn std::error::Error + 'static)) -> Deliver
 
     if let Some(ntfy_error) = error.downcast_ref::<crate::push::ntfy::NtfyDeliveryError>() {
         match ntfy_error {
-            crate::push::ntfy::NtfyDeliveryError::TerminalStatus(_) => {
+            crate::push::ntfy::NtfyDeliveryError::TerminalStatus(status) => {
+                if matches!(*status, 404 | 410) {
+                    return DeliveryOutcome::SubscriptionGone;
+                }
                 return DeliveryOutcome::TerminalFailure;
             }
             crate::push::ntfy::NtfyDeliveryError::RetryableStatus(_) => {
@@ -419,6 +503,74 @@ async fn mark_failed(
     Ok(())
 }
 
+async fn emit_push_webhook(
+    pool: &SqlitePool,
+    app_id: &str,
+    message_id: i64,
+    status: &str,
+    error: Option<&str>,
+) {
+    let webhook = match sqlx::query_as::<_, (Option<String>, Option<String>)>(
+        "SELECT push_webhook_url, webhook_secret FROM apps WHERE id = ?",
+    )
+    .bind(app_id)
+    .fetch_optional(pool)
+    .await
+    {
+        Ok(Some((Some(url), secret))) if !url.trim().is_empty() => (url, secret),
+        _ => return,
+    };
+
+    let (url, secret) = webhook;
+    let body = serde_json::json!({
+        "event": "push.delivery",
+        "app_id": app_id,
+        "message_id": message_id,
+        "status": status,
+        "error": error,
+    });
+    let body_text = body.to_string();
+    let app_id = app_id.to_string();
+    let status = status.to_string();
+    tokio::spawn(async move {
+        if let Err(error) = post_push_webhook(&url, secret.as_deref(), &body_text).await {
+            tracing::warn!(
+                "Failed to deliver push webhook for app {} message {} ({}): {}",
+                app_id,
+                message_id,
+                status,
+                error
+            );
+        }
+    });
+}
+
+async fn post_push_webhook(
+    url: &str,
+    secret: Option<&str>,
+    body: &str,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let client = reqwest::Client::new();
+    let mut request = client
+        .post(url)
+        .header("Content-Type", "application/json")
+        .body(body.to_string());
+    if let Some(secret) = secret.filter(|value| !value.trim().is_empty()) {
+        use hmac::{Hmac, Mac};
+        use sha2::Sha256;
+        let mut mac = Hmac::<Sha256>::new_from_slice(secret.as_bytes())?;
+        mac.update(body.as_bytes());
+        let signature = hex::encode(mac.finalize().into_bytes());
+        request = request.header("X-Peanut-Signature", format!("sha256={signature}"));
+    }
+    let response = request.send().await?;
+    if response.status().is_success() {
+        Ok(())
+    } else {
+        Err(format!("webhook returned {}", response.status()).into())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -498,12 +650,14 @@ mod tests {
 
         process_queue_with_deliveries(
             &pool,
-            |topic, _title, _body| async move {
+            |topic, message| async move {
                 assert_eq!(topic, "alerts_main");
+                assert_eq!(message.title, "hello");
                 Ok(())
             },
-            |subscription, _title, _body| async move {
+            |subscription, message| async move {
                 assert_eq!(subscription.endpoint, "https://example.invalid/push");
+                assert_eq!(message.body, "world");
                 Err("web push endpoint gone".to_string().into())
             },
         )
@@ -558,8 +712,8 @@ mod tests {
 
         process_queue_with_deliveries(
             &pool,
-            |_topic, _title, _body| async move { Ok(()) },
-            |_subscription, _title, _body| async move { Ok(()) },
+            |_topic, _message| async move { Ok(()) },
+            |_subscription, _message| async move { Ok(()) },
         )
         .await
         .unwrap();
@@ -604,8 +758,8 @@ mod tests {
 
         process_queue_with_deliveries(
             &pool,
-            |_topic, _title, _body| async move { Ok(()) },
-            |_subscription, _title, _body| async move {
+            |_topic, _message| async move { Ok(()) },
+            |_subscription, _message| async move {
                 Err(Box::new(web_push::WebPushError::EndpointNotValid)
                     as Box<dyn std::error::Error + Send + Sync>)
             },
@@ -666,8 +820,8 @@ mod tests {
 
         process_queue_with_deliveries(
             &pool,
-            |_topic, _title, _body| async move { Ok(()) },
-            |_subscription, _title, _body| async move {
+            |_topic, _message| async move { Ok(()) },
+            |_subscription, _message| async move {
                 Err(Box::new(web_push::WebPushError::EndpointNotFound)
                     as Box<dyn std::error::Error + Send + Sync>)
             },
@@ -721,13 +875,13 @@ mod tests {
 
         process_queue_with_deliveries(
             &pool,
-            |_topic, _title, _body| async move {
+            |_topic, _message| async move {
                 Err(
                     Box::new(crate::push::ntfy::NtfyDeliveryError::TerminalStatus(404))
                         as Box<dyn std::error::Error + Send + Sync>,
                 )
             },
-            |_subscription, _title, _body| async move { Ok(()) },
+            |_subscription, _message| async move { Ok(()) },
         )
         .await
         .unwrap();
@@ -819,13 +973,13 @@ mod tests {
 
         process_queue_with_deliveries(
             &pool,
-            |_topic, _title, _body| async move {
+            |_topic, _message| async move {
                 Err(
                     Box::new(crate::push::ntfy::NtfyDeliveryError::RetryableStatus(503))
                         as Box<dyn std::error::Error + Send + Sync>,
                 )
             },
-            |_subscription, _title, _body| async move { Ok(()) },
+            |_subscription, _message| async move { Ok(()) },
         )
         .await
         .unwrap();
@@ -844,13 +998,13 @@ mod tests {
 
         process_queue_with_deliveries(
             &pool,
-            |_topic, _title, _body| async move {
+            |_topic, _message| async move {
                 Err(
                     Box::new(crate::push::ntfy::NtfyDeliveryError::RetryableStatus(503))
                         as Box<dyn std::error::Error + Send + Sync>,
                 )
             },
-            |_subscription, _title, _body| async move { Ok(()) },
+            |_subscription, _message| async move { Ok(()) },
         )
         .await
         .unwrap();
@@ -876,6 +1030,7 @@ mod tests {
     #[test]
     fn test_detects_web_push_subscription() {
         let ntfy = SubscriptionRow {
+            user_id: "user_1".to_string(),
             endpoint: "alerts_main".to_string(),
             p256dh: "".to_string(),
             auth: "".to_string(),
@@ -883,6 +1038,7 @@ mod tests {
         assert!(!is_web_push_subscription(&ntfy));
 
         let web_push = SubscriptionRow {
+            user_id: "user_1".to_string(),
             endpoint: "https://example.invalid/push".to_string(),
             p256dh: "abc".to_string(),
             auth: "def".to_string(),

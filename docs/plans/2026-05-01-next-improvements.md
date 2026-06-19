@@ -1,13 +1,29 @@
 # Peanut 개선 계획 (갱신)
 
 작성일: 2026-06-19  
-브랜치: `cursor/code-improvements-1213`
+브랜치: `cursor/pocketbase-competitive-1213`
 
 이 문서는 2026-05-01 계획의 후속 실행 상태를 정리한다.
 
 ---
 
-## 완료된 항목
+## PocketBase 경쟁 기능 (2026-06-19)
+
+| 영역 | 상태 | 비고 |
+|------|------|------|
+| Push 고도화 | ✅ 완료 | SDK enqueue 통합, batch/status, rich payload, dead sub 정리, webhook |
+| Data relation/file/expand/rules | ✅ 완료 | `expand`, custom access rules, SSE SDK stream |
+| Auth SMTP + 이메일 인증 | ✅ 완료 | `mail/`, verification flow |
+| Storage presign/multipart | ✅ 완료 | HMAC presigned URL, multipart HTTP |
+| Backup bundle | ✅ 완료 | DB + storage tar.gz |
+| Automation | ✅ 완료 | cron scheduler, data function triggers |
+| JS SDK realtime | ✅ 완료 | `client.realtime.subscribeTable()` |
+| Console push stats | ✅ 완료 | queue/stats 탭, partial failure 메트릭 |
+| OpenAPI / docs | ✅ 완료 | `docs/push.md`, push/realtime 경로 동기화 |
+
+---
+
+## 완료된 항목 (이전 PR)
 
 | 항목 | 상태 | 비고 |
 |------|------|------|

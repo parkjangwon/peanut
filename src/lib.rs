@@ -15,6 +15,8 @@ pub mod console;
 pub mod db;
 pub mod functions;
 pub mod i18n;
+pub mod jobs;
+pub mod mail;
 pub mod middleware;
 pub mod push;
 pub mod secrets;

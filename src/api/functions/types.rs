@@ -122,18 +122,18 @@ pub struct FunctionRealtimeEvent {
 }
 
 #[derive(Debug, Clone, FromRow)]
-pub(super) struct LoadedFunctionVersion {
-    pub(super) id: String,
-    pub(super) version_number: i64,
-    pub(super) runtime: String,
-    pub(super) source_code: String,
-    pub(super) invoke_policy: String,
-    pub(super) env_json: String,
-    pub(super) api_key_hash: Option<String>,
-    pub(super) allowed_origins_json: String,
-    pub(super) rate_limit_per_minute: i64,
-    pub(super) timeout_ms: i64,
-    pub(super) secret_key_count: i64,
+pub(crate) struct LoadedFunctionVersion {
+    pub(crate) id: String,
+    pub(crate) version_number: i64,
+    pub(crate) runtime: String,
+    pub(crate) source_code: String,
+    pub(crate) invoke_policy: String,
+    pub(crate) env_json: String,
+    pub(crate) api_key_hash: Option<String>,
+    pub(crate) allowed_origins_json: String,
+    pub(crate) rate_limit_per_minute: i64,
+    pub(crate) timeout_ms: i64,
+    pub(crate) secret_key_count: i64,
 }
 
 #[derive(Debug, Clone)]
