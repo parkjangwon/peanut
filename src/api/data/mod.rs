@@ -20,6 +20,7 @@ use crate::auth::jwt::Claims;
 
 mod access;
 mod events;
+mod expand;
 mod import_export;
 mod internal;
 mod presets;
@@ -28,8 +29,11 @@ mod rows;
 mod tables;
 mod types;
 
-pub(crate) use access::{can_access_row, can_read_table, can_write_table};
-pub use events::{get_row_event_checkpoint, list_row_events, stream_row_events};
+pub(crate) use access::{can_access_row, can_read_table, can_write_table, RowAccessAction};
+pub use events::{
+    get_row_event_checkpoint, list_row_events, stream_row_events, stream_table_events_sdk,
+};
+pub(crate) use expand::{expand_row_data, parse_expand_fields};
 pub use import_export::{export_table, import_rows};
 pub use presets::{
     create_query_preset, delete_query_preset, list_query_presets, run_query_preset,
@@ -45,6 +49,11 @@ pub use types::*;
 const POLICY_ADMIN_ONLY: &str = "admin_only";
 const POLICY_OWNER_PRIVATE: &str = "owner_private";
 const POLICY_AUTHENTICATED_SHARED_RW: &str = "authenticated_shared_rw";
+const POLICY_CUSTOM: &str = "custom";
+const RULE_PUBLIC: &str = "public";
+const RULE_AUTHENTICATED: &str = "authenticated";
+const RULE_ADMIN: &str = "admin";
+const RULE_OWNER: &str = "owner";
 const MAX_LIST_ROWS: i64 = 50;
 const TABLE_EXPORT_VERSION: &str = "peanut.table-export.v1";
 

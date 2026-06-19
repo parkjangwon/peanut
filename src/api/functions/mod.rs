@@ -37,7 +37,9 @@ pub use invocations::{
     get_function_invocation, list_function_invocation_attempts, list_function_invocations,
     retry_function_invocation,
 };
+pub(crate) use invoke::run_function_invocation_with_version;
 pub use invoke::{invoke_app_function, invoke_function};
+pub(crate) use types::LoadedFunctionVersion;
 pub use types::*;
 pub use versions::{list_function_versions, rollback_function_version};
 

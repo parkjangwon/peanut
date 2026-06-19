@@ -3,12 +3,22 @@ use axum::{
     response::Response,
 };
 
+mod multipart;
 mod policies;
+mod presign;
 mod sdk;
 
+pub use multipart::{
+    abort_multipart_upload, complete_multipart_upload, create_multipart_upload,
+    upload_multipart_part,
+};
 pub use policies::{
     create_storage_bucket, delete_storage_bucket, get_storage_bucket, list_storage_buckets,
     update_storage_bucket,
+};
+pub use presign::{
+    create_presigned_download_url, create_presigned_upload_url, get_presigned_object,
+    put_presigned_object,
 };
 pub use sdk::{delete_sdk_object, get_sdk_object, list_sdk_objects, put_sdk_object};
 

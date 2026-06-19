@@ -38,6 +38,7 @@ fn todo_table_request() -> CreateTableRequest {
                         required: false,
                         max_length: None,
                         default: Some(Value::Bool(false)),
+                        ..Default::default()
                     },
                 ),
                 (
@@ -47,12 +48,14 @@ fn todo_table_request() -> CreateTableRequest {
                         required: true,
                         max_length: Some(200),
                         default: None,
+                        ..Default::default()
                     },
                 ),
             ]),
         },
         access_policy: AccessPolicy {
             mode: POLICY_OWNER_PRIVATE.to_string(),
+            ..Default::default()
         },
     }
 }
@@ -146,6 +149,7 @@ async fn test_admin_can_update_and_delete_table() {
                             required: false,
                             max_length: None,
                             default: Some(Value::Bool(false)),
+                            ..Default::default()
                         },
                     ),
                     (
@@ -155,6 +159,7 @@ async fn test_admin_can_update_and_delete_table() {
                             required: false,
                             max_length: None,
                             default: Some(json!(1)),
+                            ..Default::default()
                         },
                     ),
                     (
@@ -164,12 +169,14 @@ async fn test_admin_can_update_and_delete_table() {
                             required: true,
                             max_length: Some(200),
                             default: None,
+                            ..Default::default()
                         },
                     ),
                 ]),
             }),
             access_policy: Some(AccessPolicy {
                 mode: POLICY_AUTHENTICATED_SHARED_RW.to_string(),
+                ..Default::default()
             }),
         }),
     )
@@ -239,6 +246,7 @@ async fn test_schema_evolution_rejects_field_type_changes() {
                             required: false,
                             max_length: None,
                             default: Some(Value::Bool(false)),
+                            ..Default::default()
                         },
                     ),
                     (
@@ -248,6 +256,7 @@ async fn test_schema_evolution_rejects_field_type_changes() {
                             required: true,
                             max_length: None,
                             default: None,
+                            ..Default::default()
                         },
                     ),
                 ]),
@@ -292,6 +301,7 @@ async fn test_schema_evolution_allows_field_type_changes_before_rows_exist() {
                             required: false,
                             max_length: None,
                             default: Some(Value::Bool(false)),
+                            ..Default::default()
                         },
                     ),
                     (
@@ -301,6 +311,7 @@ async fn test_schema_evolution_allows_field_type_changes_before_rows_exist() {
                             required: true,
                             max_length: None,
                             default: None,
+                            ..Default::default()
                         },
                     ),
                 ]),
@@ -350,6 +361,7 @@ async fn test_schema_evolution_rejects_field_removal_after_rows_exist() {
                         required: true,
                         max_length: Some(200),
                         default: None,
+                        ..Default::default()
                     },
                 )]),
             }),
@@ -404,6 +416,7 @@ async fn test_schema_evolution_requires_defaults_for_new_required_fields_when_ro
                             required: false,
                             max_length: None,
                             default: Some(Value::Bool(false)),
+                            ..Default::default()
                         },
                     ),
                     (
@@ -413,6 +426,7 @@ async fn test_schema_evolution_requires_defaults_for_new_required_fields_when_ro
                             required: true,
                             max_length: None,
                             default: None,
+                            ..Default::default()
                         },
                     ),
                     (
@@ -422,6 +436,7 @@ async fn test_schema_evolution_requires_defaults_for_new_required_fields_when_ro
                             required: true,
                             max_length: Some(200),
                             default: None,
+                            ..Default::default()
                         },
                     ),
                 ]),
@@ -515,6 +530,7 @@ async fn test_owner_private_rows_are_isolated_per_user() {
         State(state),
         Extension(claims(&user_two.user.id, false)),
         axum::extract::Path(("todos".to_string(), created_row.id)),
+        axum::extract::Query(GetRowParams::default()),
     )
     .await;
     assert_eq!(forbidden_get.status(), StatusCode::FORBIDDEN);
@@ -563,6 +579,7 @@ async fn test_list_rows_supports_limit_order_and_filters() {
             filter_field: Some("title".to_string()),
             filter_op: Some("contains".to_string()),
             filter_value: Some("buy".to_string()),
+            ..Default::default()
         }),
     )
     .await;
@@ -589,6 +606,7 @@ async fn test_list_rows_supports_limit_order_and_filters() {
             filter_field: Some("title".to_string()),
             filter_op: Some("starts_with".to_string()),
             filter_value: Some("buy".to_string()),
+            ..Default::default()
         }),
     )
     .await;
@@ -611,6 +629,7 @@ async fn test_list_rows_supports_limit_order_and_filters() {
             filter_field: None,
             filter_op: None,
             filter_value: None,
+            ..Default::default()
         }),
     )
     .await;
@@ -638,6 +657,7 @@ async fn test_list_rows_supports_limit_order_and_filters() {
             filter_field: None,
             filter_op: None,
             filter_value: None,
+            ..Default::default()
         }),
     )
     .await;
@@ -658,6 +678,7 @@ async fn test_list_rows_supports_limit_order_and_filters() {
             filter_field: Some("title".to_string()),
             filter_op: Some("gt".to_string()),
             filter_value: Some("buy".to_string()),
+            ..Default::default()
         }),
     )
     .await;
@@ -805,6 +826,7 @@ async fn test_admin_can_manage_query_presets() {
                 filter_field: Some("title".to_string()),
                 filter_op: Some("starts_with".to_string()),
                 filter_value: Some("buy".to_string()),
+                ..Default::default()
             },
         }),
     )
@@ -888,6 +910,7 @@ async fn test_admin_can_manage_query_presets() {
                 filter_field: None,
                 filter_op: None,
                 filter_value: None,
+                ..Default::default()
             },
         }),
     )
@@ -1118,6 +1141,7 @@ async fn test_import_can_restore_table_schema_and_policy() {
                                 required: false,
                                 max_length: None,
                                 default: Some(Value::Bool(false)),
+                                ..Default::default()
                             },
                         ),
                         (
@@ -1127,6 +1151,7 @@ async fn test_import_can_restore_table_schema_and_policy() {
                                 required: true,
                                 max_length: None,
                                 default: Some(json!(1)),
+                                ..Default::default()
                             },
                         ),
                         (
@@ -1136,12 +1161,14 @@ async fn test_import_can_restore_table_schema_and_policy() {
                                 required: true,
                                 max_length: Some(200),
                                 default: None,
+                                ..Default::default()
                             },
                         ),
                     ]),
                 },
                 access_policy: AccessPolicy {
                     mode: POLICY_AUTHENTICATED_SHARED_RW.to_string(),
+                    ..Default::default()
                 },
                 created_by: None,
                 created_at: None,
@@ -1225,6 +1252,7 @@ async fn test_import_dry_run_does_not_mutate_rows_and_reports_preview() {
                                 required: false,
                                 max_length: None,
                                 default: Some(Value::Bool(false)),
+                                ..Default::default()
                             },
                         ),
                         (
@@ -1234,6 +1262,7 @@ async fn test_import_dry_run_does_not_mutate_rows_and_reports_preview() {
                                 required: false,
                                 max_length: None,
                                 default: Some(json!(1)),
+                                ..Default::default()
                             },
                         ),
                         (
@@ -1243,6 +1272,7 @@ async fn test_import_dry_run_does_not_mutate_rows_and_reports_preview() {
                                 required: true,
                                 max_length: Some(200),
                                 default: None,
+                                ..Default::default()
                             },
                         ),
                     ]),

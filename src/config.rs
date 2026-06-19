@@ -23,11 +23,22 @@ pub enum PasswordResetDelivery {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MailConfig {
+    pub smtp_enabled: bool,
+    pub smtp_host: String,
+    pub smtp_port: u16,
+    pub smtp_user: String,
+    pub smtp_password: String,
+    pub smtp_from: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AppConfig {
     pub database_url: String,
     pub storage_dir: PathBuf,
     pub bind_addr: SocketAddr,
     pub jwt_secret: String,
+    pub mail: MailConfig,
     pub max_upload_bytes: usize,
     pub password_reset_delivery: PasswordResetDelivery,
     pub auth_allowed_origins: Vec<String>,
@@ -159,12 +170,14 @@ fn load_config_from_map(values: &HashMap<String, String>) -> Result<AppConfig, S
         .map(|value| value.trim().to_string())
         .filter(|value| !value.is_empty())
         .unwrap_or_else(|| jwt_secret.clone());
+    let mail = load_mail_config(values)?;
 
     Ok(AppConfig {
         database_url,
         storage_dir,
         bind_addr,
         jwt_secret,
+        mail,
         max_upload_bytes,
         password_reset_delivery,
         auth_allowed_origins,
@@ -302,6 +315,44 @@ fn parse_client_id_policy_list(
         }
     }
     Ok(entries)
+}
+
+fn load_mail_config(values: &HashMap<String, String>) -> Result<MailConfig, String> {
+    let smtp_host = values
+        .get("SMTP_HOST")
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty());
+    let smtp_port = values
+        .get("SMTP_PORT")
+        .map(|value| value.trim().to_string())
+        .and_then(|value| value.parse::<u16>().ok())
+        .unwrap_or(587);
+    let smtp_user = values
+        .get("SMTP_USER")
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty());
+    let smtp_password = values
+        .get("SMTP_PASSWORD")
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty());
+    let smtp_from = values
+        .get("SMTP_FROM")
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty());
+
+    let smtp_enabled = smtp_host.is_some()
+        && smtp_user.is_some()
+        && smtp_password.is_some()
+        && smtp_from.is_some();
+
+    Ok(MailConfig {
+        smtp_enabled,
+        smtp_host: smtp_host.unwrap_or_default(),
+        smtp_port,
+        smtp_user: smtp_user.unwrap_or_default(),
+        smtp_password: smtp_password.unwrap_or_default(),
+        smtp_from: smtp_from.unwrap_or_default(),
+    })
 }
 
 fn parse_csv_policy_list(values: &HashMap<String, String>, key: &str) -> Vec<String> {

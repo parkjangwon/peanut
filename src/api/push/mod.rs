@@ -18,13 +18,15 @@ use crate::auth::jwt::Claims;
 mod diagnostics;
 mod enqueue;
 mod queue;
+pub mod service;
 mod subscriptions;
 mod types;
 mod vapid;
 
 pub use diagnostics::get_push_diagnostics;
-pub use enqueue::enqueue_message;
+pub use enqueue::{enqueue_batch, enqueue_message, get_message_status};
 pub use queue::{list_queue, list_queue_stats};
+pub use service::{enqueue_push, EnqueuePushInput, EnqueuePushResponse, PushPayload};
 #[allow(unused_imports)]
 pub use subscriptions::{
     create_subscription, delete_subscription, list_subscriptions, validate_topic,

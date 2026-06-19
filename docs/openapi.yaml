@@ -822,9 +822,87 @@ paths:
         - appKeyAuth: []
       parameters:
         - $ref: "#/components/parameters/AppId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/EnqueuePushRequest"
       responses:
         "201":
           description: Message queued.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnqueuePushResponse"
+  /api/apps/{app_id}/push/messages/batch:
+    post:
+      operationId: enqueuePushMessageBatch
+      summary: Queue multiple push messages
+      security:
+        - appKeyAuth: []
+      parameters:
+        - $ref: "#/components/parameters/AppId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/EnqueuePushBatchRequest"
+      responses:
+        "201":
+          description: Messages queued.
+  /api/apps/{app_id}/push/messages/{message_id}:
+    get:
+      operationId: getPushMessageStatus
+      summary: Return queue status for a push message
+      security:
+        - appKeyAuth: []
+      parameters:
+        - $ref: "#/components/parameters/AppId"
+        - name: message_id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Push queue item.
+        "404":
+          $ref: "#/components/responses/Error"
+  /api/apps/{app_id}/push/queue/stats:
+    get:
+      operationId: getPushQueueStats
+      summary: Return aggregated push failure stats for the console
+      parameters:
+        - $ref: "#/components/parameters/AppId"
+        - name: window_hours
+          in: query
+          schema:
+            type: integer
+        - name: limit
+          in: query
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Push queue stats.
+  /api/apps/{app_id}/data/tables/{table}/events/stream:
+    get:
+      operationId: streamDataTableEvents
+      summary: Stream row change events over SSE
+      security:
+        - appKeyAuth: []
+      parameters:
+        - $ref: "#/components/parameters/AppId"
+        - name: table
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Server-sent events stream (`data.row_changed`).
   /api/apps/{app_id}/push/test-message:
     post:
       operationId: enqueuePushTestMessage
@@ -1067,6 +1145,44 @@ components:
           type: string
         user_id:
           type: [string, "null"]
+        broadcast_tag:
+          type: [string, "null"]
+        payload:
+          $ref: "#/components/schemas/PushPayload"
+        scheduled_at:
+          type: [string, "null"]
+        idempotency_key:
+          type: [string, "null"]
+    EnqueuePushBatchRequest:
+      type: object
+      required: [messages]
+      properties:
+        messages:
+          type: array
+          items:
+            $ref: "#/components/schemas/EnqueuePushRequest"
+    EnqueuePushResponse:
+      type: object
+      required: [id, status]
+      properties:
+        id:
+          type: integer
+        status:
+          type: string
+    PushPayload:
+      type: object
+      properties:
+        data:
+          type: object
+          additionalProperties: true
+        url:
+          type: string
+        icon:
+          type: string
+        badge:
+          type: string
+        priority:
+          type: string
     UserSummary:
       type: object
       required: [id, app_id, email, is_active, is_admin, admin_role]

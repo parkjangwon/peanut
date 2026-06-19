@@ -1,11 +1,13 @@
 use std::{env, fmt};
 
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD as BASE64_URL_SAFE_NO_PAD, Engine as _};
-use serde_json::json;
+use serde_json::{json, Value};
 use web_push::{
     ContentEncoding, IsahcWebPushClient, SubscriptionInfo, VapidSignatureBuilder, WebPushClient,
     WebPushMessageBuilder, URL_SAFE_NO_PAD,
 };
+
+use super::delivery::DeliveryExtras;
 
 const WEB_PUSH_VAPID_PRIVATE_KEY: &str = "WEB_PUSH_VAPID_PRIVATE_KEY";
 const WEB_PUSH_VAPID_SUBJECT: &str = "WEB_PUSH_VAPID_SUBJECT";
@@ -35,12 +37,10 @@ pub async fn send_web_push(
     subscription: SubscriptionInfo,
     title: &str,
     body: &str,
+    extras: Option<&DeliveryExtras>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let config = load_web_push_config()?;
-    let payload = serde_json::to_vec(&json!({
-        "title": title,
-        "body": body,
-    }))?;
+    let payload = serde_json::to_vec(&build_web_push_payload(title, body, extras))?;
 
     let mut signature_builder = VapidSignatureBuilder::from_base64(
         &config.vapid_private_key,
@@ -57,6 +57,38 @@ pub async fn send_web_push(
     let client = IsahcWebPushClient::new()?;
     client.send(message_builder.build()?).await?;
     Ok(())
+}
+
+fn build_web_push_payload(title: &str, body: &str, extras: Option<&DeliveryExtras>) -> Value {
+    let mut payload = json!({
+        "title": title,
+        "body": body,
+    });
+
+    if let Some(extras) = extras {
+        if let Some(url) = extras.url.as_ref().filter(|value| !value.trim().is_empty()) {
+            payload["url"] = json!(url);
+        }
+        if let Some(icon) = extras
+            .icon
+            .as_ref()
+            .filter(|value| !value.trim().is_empty())
+        {
+            payload["icon"] = json!(icon);
+        }
+        if let Some(badge) = extras
+            .badge
+            .as_ref()
+            .filter(|value| !value.trim().is_empty())
+        {
+            payload["badge"] = json!(badge);
+        }
+        if let Some(data) = extras.data.clone() {
+            payload["data"] = data;
+        }
+    }
+
+    payload
 }
 
 pub fn public_vapid_key() -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
@@ -159,5 +191,23 @@ mod tests {
         assert!(public_key
             .chars()
             .all(|ch| ch.is_ascii_alphanumeric() || ch == '-' || ch == '_'));
+    }
+
+    #[test]
+    fn test_build_web_push_payload_includes_extras() {
+        let payload = build_web_push_payload(
+            "Hello",
+            "World",
+            Some(&DeliveryExtras {
+                url: Some("https://example.com".to_string()),
+                icon: Some("https://example.com/icon.png".to_string()),
+                badge: None,
+                priority: None,
+                data: Some(json!({"id": 1})),
+            }),
+        );
+        assert_eq!(payload["title"], "Hello");
+        assert_eq!(payload["url"], "https://example.com");
+        assert_eq!(payload["data"]["id"], 1);
     }
 }

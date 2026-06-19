@@ -95,7 +95,7 @@ pub struct MultipartUploadListing {
     pub initiated_at: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CompletedMultipartPart {
     pub part_number: u32,
     pub etag: String,

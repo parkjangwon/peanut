@@ -62,6 +62,7 @@ export class PeanutClient {
   readonly storage: PeanutStorageClient;
   readonly push: PeanutPushClient;
   readonly functions: PeanutFunctionsClient;
+  readonly realtime: PeanutRealtimeClient;
 
   private readonly baseUrl: string;
   private readonly appId: string;
@@ -90,6 +91,7 @@ export class PeanutClient {
     this.storage = new PeanutStorageClient(this);
     this.push = new PeanutPushClient(this);
     this.functions = new PeanutFunctionsClient(this);
+    this.realtime = new PeanutRealtimeClient(this);
   }
 
   setAccessToken(accessToken?: string): void {
@@ -158,6 +160,25 @@ export class PeanutClient {
       headers.set("Authorization", `Bearer ${this.accessToken}`);
     }
     const response = await this.fetchWithRetry(`${this.baseUrl}${path}`, { method, headers, body });
+    if (!response.ok) {
+      const contentType = response.headers.get("content-type") ?? "";
+      const value = contentType.includes("application/json")
+        ? await response.json()
+        : await response.text();
+      throw new PeanutError(response.status, errorMessage(value), value);
+    }
+    return response;
+  }
+
+  async streamRequest(path: string, signal?: AbortSignal): Promise<Response> {
+    const headers = new Headers({
+      Accept: "text/event-stream",
+    });
+    headers.set("X-Peanut-Api-Key", this.apiKey);
+    if (this.accessToken) {
+      headers.set("Authorization", `Bearer ${this.accessToken}`);
+    }
+    const response = await this.fetchImpl(`${this.baseUrl}${path}`, { headers, signal });
     if (!response.ok) {
       const contentType = response.headers.get("content-type") ?? "";
       const value = contentType.includes("application/json")
@@ -297,6 +318,104 @@ export class PeanutStorageClient {
   }
 }
 
+export interface PeanutPushPayload {
+  data?: JsonValue;
+  url?: string;
+  icon?: string;
+  badge?: string;
+  priority?: string;
+}
+
+export interface PeanutEnqueuePushResponse {
+  id: number;
+  status: string;
+}
+
+export interface PeanutPushMessageStatus extends PeanutEnqueuePushResponse {
+  user_id: string;
+  title: string;
+  body: string;
+  retry_count: number;
+  last_error?: string | null;
+  partial_failure_count: number;
+  failed_destinations: Array<{ endpoint: string; error: string }>;
+  next_retry_at?: string | null;
+  created_at: string;
+  processed_at?: string | null;
+}
+
+export interface PeanutDataRowRealtimeEvent {
+  id: number;
+  app_id: string;
+  event: string;
+  table_name: string;
+  row_id: string;
+  owner_user_id?: string | null;
+  actor_user_id: string;
+  action: string;
+  diff?: JsonValue;
+}
+
+export interface PeanutRealtimeSubscription {
+  close(): void;
+}
+
+export class PeanutRealtimeClient {
+  constructor(private readonly client: PeanutClient) {}
+
+  subscribeTable(
+    table: string,
+    handlers: {
+      onEvent: (event: PeanutDataRowRealtimeEvent) => void;
+      onError?: (error: Error) => void;
+    },
+  ): PeanutRealtimeSubscription {
+    const controller = new AbortController();
+    const path = this.client.appPath(`/data/tables/${encodePath(table)}/events/stream`);
+
+    void (async () => {
+      try {
+        const response = await this.client.streamRequest(path, controller.signal);
+        const reader = response.body?.getReader();
+        if (!reader) {
+          throw new Error("Streaming response body unavailable");
+        }
+        const decoder = new TextDecoder();
+        let buffer = "";
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) {
+            break;
+          }
+          buffer += decoder.decode(value, { stream: true });
+          const parts = buffer.split("\n\n");
+          buffer = parts.pop() ?? "";
+          for (const part of parts) {
+            const dataLine = part.split("\n").find((line) => line.startsWith("data:"));
+            if (!dataLine) {
+              continue;
+            }
+            const payload = dataLine.slice("data:".length).trim();
+            if (!payload) {
+              continue;
+            }
+            handlers.onEvent(JSON.parse(payload) as PeanutDataRowRealtimeEvent);
+          }
+        }
+      } catch (error) {
+        if (controller.signal.aborted) {
+          return;
+        }
+        handlers.onError?.(error instanceof Error ? error : new Error(String(error)));
+      }
+    })();
+
+    return {
+      close: () => controller.abort(),
+    };
+  }
+}
+
 export class PeanutPushClient {
   constructor(private readonly client: PeanutClient) {}
 
@@ -324,8 +443,34 @@ export class PeanutPushClient {
     return this.client.request("GET", this.client.appPath("/push/vapid-public-key"));
   }
 
-  enqueueMessage(payload: { title: string; body: string; user_id?: string }): Promise<unknown> {
+  enqueueMessage(payload: {
+    title: string;
+    body: string;
+    user_id?: string;
+    broadcast_tag?: string;
+    payload?: PeanutPushPayload;
+    scheduled_at?: string;
+    idempotency_key?: string;
+  }): Promise<PeanutEnqueuePushResponse> {
     return this.client.request("POST", this.client.appPath("/push/messages"), { body: payload });
+  }
+
+  enqueueBatch(messages: Array<{
+    title: string;
+    body: string;
+    user_id?: string;
+    broadcast_tag?: string;
+    payload?: PeanutPushPayload;
+    scheduled_at?: string;
+    idempotency_key?: string;
+  }>): Promise<{ messages: PeanutEnqueuePushResponse[] }> {
+    return this.client.request("POST", this.client.appPath("/push/messages/batch"), {
+      body: { messages },
+    });
+  }
+
+  getMessageStatus(messageId: number): Promise<PeanutPushMessageStatus> {
+    return this.client.request("GET", this.client.appPath(`/push/messages/${messageId}`));
   }
 }
 

@@ -543,3 +543,32 @@ pub async fn enqueue_push_test_message(
         Json(payload)
     )
 }
+
+pub async fn enqueue_push_batch(
+    State(state): State<crate::AppState>,
+    Extension(claims): Extension<crate::auth::jwt::Claims>,
+    Path(app_id): Path<String>,
+    Json(payload): Json<crate::api::push::EnqueuePushBatchRequest>,
+) -> Response {
+    app_developer!(
+        state,
+        claims,
+        app_id,
+        crate::api::push::enqueue_batch,
+        Json(payload)
+    )
+}
+
+pub async fn get_push_message_status(
+    State(state): State<crate::AppState>,
+    Extension(claims): Extension<crate::auth::jwt::Claims>,
+    Path((app_id, message_id)): Path<(String, i64)>,
+) -> Response {
+    app_developer!(
+        state,
+        claims,
+        app_id,
+        crate::api::push::get_message_status,
+        Path(message_id)
+    )
+}

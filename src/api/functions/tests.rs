@@ -403,6 +403,7 @@ async fn test_authenticated_function_can_use_data_row_bindings() {
             required: true,
             max_length: Some(200),
             default: None,
+            ..Default::default()
         },
     );
     fields.insert(
@@ -412,6 +413,7 @@ async fn test_authenticated_function_can_use_data_row_bindings() {
             required: false,
             max_length: None,
             default: Some(serde_json::json!(false)),
+            ..Default::default()
         },
     );
 
@@ -424,6 +426,7 @@ async fn test_authenticated_function_can_use_data_row_bindings() {
             schema: data::DataTableSchema { fields },
             access_policy: data::AccessPolicy {
                 mode: "owner_private".to_string(),
+                ..Default::default()
             },
         }),
     )

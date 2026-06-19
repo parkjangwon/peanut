@@ -111,6 +111,89 @@ pub async fn create_backup(
     }
 }
 
+pub async fn create_full_backup(
+    State(state): State<crate::AppState>,
+    Extension(claims): Extension<Claims>,
+) -> Response {
+    if let Some(response) = require_admin_role(&state.pool, &claims, "operator").await {
+        return response;
+    }
+
+    let db_backup_path = match crate::db::backup_db(&state.pool, &state.database_url).await {
+        Ok(path) => path,
+        Err(_) => return json_error(StatusCode::INTERNAL_SERVER_ERROR, "failed to create backup"),
+    };
+
+    let bundle_path = match create_full_backup_bundle(
+        &state.database_url,
+        FsPath::new(&db_backup_path),
+        state.storage.root(),
+    )
+    .await
+    {
+        Ok(path) => path,
+        Err(_) => {
+            return json_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "failed to create full backup bundle",
+            )
+        }
+    };
+
+    match backup_summary_from_path(bundle_path).await {
+        Ok(backup) => (StatusCode::CREATED, Json(BackupResponse { backup })).into_response(),
+        Err(_) => json_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "failed to inspect full backup bundle",
+        ),
+    }
+}
+
+async fn create_full_backup_bundle(
+    database_url: &str,
+    db_backup_path: &FsPath,
+    storage_root: &FsPath,
+) -> std::io::Result<PathBuf> {
+    let db_path = FsPath::new(crate::db::extract_db_path(database_url));
+    let db_dir = backup_dir_for_db_path(db_path);
+    let timestamp = chrono::Local::now().format("%Y%m%d_%H%M%S").to_string();
+    let db_filename = db_path
+        .file_name()
+        .and_then(|value| value.to_str())
+        .unwrap_or("peanut.db");
+    let bundle_name = format!("{db_filename}.{timestamp}.full-backup.tar.gz");
+    let bundle_path = db_dir.join(&bundle_name);
+
+    let db_backup_name = db_backup_path
+        .file_name()
+        .and_then(|value| value.to_str())
+        .ok_or_else(|| std::io::Error::other("invalid database backup path"))?;
+    let storage_dir_name = storage_root
+        .file_name()
+        .and_then(|value| value.to_str())
+        .unwrap_or("storage");
+
+    let status = tokio::process::Command::new("tar")
+        .arg("-czf")
+        .arg(&bundle_path)
+        .arg("-C")
+        .arg(db_backup_path.parent().unwrap_or(db_dir))
+        .arg(db_backup_name)
+        .arg("-C")
+        .arg(storage_root.parent().unwrap_or(FsPath::new(".")))
+        .arg(storage_dir_name)
+        .status()
+        .await?;
+
+    if !status.success() {
+        return Err(std::io::Error::other(
+            "tar failed to create full backup bundle",
+        ));
+    }
+
+    Ok(bundle_path)
+}
+
 pub async fn get_restore_pending(
     State(state): State<crate::AppState>,
     Extension(claims): Extension<Claims>,
@@ -314,7 +397,9 @@ pub async fn list_backup_summaries(database_url: &str) -> std::io::Result<Vec<Ba
     let mut entries = tokio::fs::read_dir(db_dir).await?;
     while let Some(entry) = entries.next_entry().await? {
         let file_name = entry.file_name().to_string_lossy().to_string();
-        if file_name.starts_with(&prefix) && file_name.ends_with(".backup") {
+        if file_name.starts_with(&prefix)
+            && (file_name.ends_with(".backup") || file_name.ends_with(".full-backup.tar.gz"))
+        {
             backups.push(backup_summary_from_path(entry.path()).await?);
         }
     }
@@ -353,7 +438,7 @@ fn validate_backup_name(backup_name: &str) -> Result<(), String> {
         || backup_name.contains('/')
         || backup_name.contains('\\')
         || backup_name.contains("..")
-        || !backup_name.ends_with(".backup")
+        || (!backup_name.ends_with(".backup") && !backup_name.ends_with(".full-backup.tar.gz"))
     {
         return Err("invalid backup name".to_string());
     }

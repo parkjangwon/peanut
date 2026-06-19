@@ -74,6 +74,7 @@ pub struct DataRowRealtimeEvent {
     pub event: String,
     pub table_name: String,
     pub row_id: String,
+    pub owner_user_id: Option<String>,
     pub actor_user_id: String,
     pub action: String,
     pub diff: Option<Value>,
@@ -187,7 +188,7 @@ pub struct DataTableSchema {
     pub fields: BTreeMap<String, DataFieldSpec>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 pub struct DataFieldSpec {
     #[serde(rename = "type")]
     pub field_type: String,
@@ -197,11 +198,30 @@ pub struct DataFieldSpec {
     pub max_length: Option<usize>,
     #[serde(default)]
     pub default: Option<Value>,
+    #[serde(default)]
+    pub relation_table: Option<String>,
+    #[serde(default)]
+    pub file_bucket: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct AccessRules {
+    #[serde(default)]
+    pub create: Option<String>,
+    #[serde(default)]
+    pub read: Option<String>,
+    #[serde(default)]
+    pub update: Option<String>,
+    #[serde(default)]
+    pub delete: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct AccessPolicy {
+    #[serde(default)]
     pub mode: String,
+    #[serde(default)]
+    pub rules: Option<AccessRules>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -216,6 +236,12 @@ pub struct ListRowsParams {
     pub filter_field: Option<String>,
     pub filter_op: Option<String>,
     pub filter_value: Option<String>,
+    pub expand: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, Default)]
+pub struct GetRowParams {
+    pub expand: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]

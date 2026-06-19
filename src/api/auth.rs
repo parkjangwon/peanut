@@ -22,6 +22,7 @@ mod password;
 mod providers;
 mod public;
 mod sessions;
+mod verification;
 
 pub use admin_console::{admin_login, admin_logout, admin_me, admin_refresh_session};
 pub use admin_users::{
@@ -40,6 +41,11 @@ pub use providers::{
 pub use public::{login, logout, refresh_session, register};
 pub use public::{login_for_app, logout_for_app, refresh_session_for_app, register_for_app};
 pub use sessions::{list_sessions, me, revoke_all_sessions, revoke_session};
+pub use verification::{
+    confirm_email_verification, confirm_email_verification_for_app, request_email_verification,
+    request_email_verification_for_app, request_email_verification_for_app_public,
+    ConfirmEmailVerificationQuery, RequestEmailVerificationBody,
+};
 
 const ACCESS_TOKEN_TTL_MINUTES: i64 = 15;
 const REFRESH_TOKEN_TTL_DAYS: i64 = 30;

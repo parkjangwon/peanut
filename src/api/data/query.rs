@@ -339,6 +339,7 @@ mod tests {
             required: false,
             max_length: None,
             default: None,
+            ..Default::default()
         }
     }
 
@@ -348,6 +349,7 @@ mod tests {
             required: false,
             max_length: None,
             default: None,
+            ..Default::default()
         }
     }
 
@@ -357,6 +359,7 @@ mod tests {
             required: false,
             max_length: None,
             default: None,
+            ..Default::default()
         }
     }
 
@@ -382,6 +385,7 @@ mod tests {
                 filter_field: Some("priority".to_string()),
                 filter_op: Some("gte".to_string()),
                 filter_value: Some("2".to_string()),
+                ..Default::default()
             },
             &todo_schema(),
             crate::app_context::DEFAULT_APP_ID,

@@ -2,7 +2,7 @@ use serde_json::{Map, Value};
 
 use super::query::{validate_list_rows_params, validate_schema_evolution};
 use crate::api::data::types::{
-    AccessPolicy, DataFieldSpec, DataRowRealtimeEvent, DataRowRecord, DataRowResponse,
+    AccessPolicy, AccessRules, DataFieldSpec, DataRowRealtimeEvent, DataRowRecord, DataRowResponse,
     DataTableDetail, DataTableRecord, DataTableRestoreSpec, DataTableSchema, QueryPresetRecord,
     QueryPresetResponse, SchemaDiffPreview, UpsertQueryPresetRequest,
 };
@@ -111,6 +111,7 @@ pub(super) fn emit_data_row_event(
     event_id: i64,
     table_name: &str,
     row_id: &str,
+    owner_user_id: Option<&str>,
     actor_user_id: &str,
     action: &str,
     diff: Option<&Value>,
@@ -121,6 +122,7 @@ pub(super) fn emit_data_row_event(
         event: "row.changed".to_string(),
         table_name: table_name.to_string(),
         row_id: row_id.to_string(),
+        owner_user_id: owner_user_id.map(str::to_string),
         actor_user_id: actor_user_id.to_string(),
         action: action.to_string(),
         diff: diff.cloned(),
@@ -242,6 +244,39 @@ pub(super) fn validate_schema(schema: &DataTableSchema) -> Result<(), String> {
         }
         match field.field_type.as_str() {
             "string" | "integer" | "number" | "boolean" | "datetime" | "json" => {}
+            "relation" => {
+                let Some(relation_table) = field
+                    .relation_table
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+                else {
+                    return Err(format!(
+                        "field '{}' of type relation requires relation_table",
+                        field_name
+                    ));
+                };
+                if let Err(message) = validate_table_name(relation_table) {
+                    return Err(format!(
+                        "field '{}' relation_table is invalid: {}",
+                        field_name, message
+                    ));
+                }
+            }
+            "file" => {
+                if field
+                    .file_bucket
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+                    .is_none()
+                {
+                    return Err(format!(
+                        "field '{}' of type file requires file_bucket",
+                        field_name
+                    ));
+                }
+            }
             _ => return Err(format!("field '{}' has unsupported type", field_name)),
         }
         if let Some(default_value) = &field.default {
@@ -256,8 +291,45 @@ pub(super) fn validate_access_policy(policy: &AccessPolicy) -> Result<(), String
     match policy.mode.as_str() {
         super::POLICY_ADMIN_ONLY
         | super::POLICY_OWNER_PRIVATE
-        | super::POLICY_AUTHENTICATED_SHARED_RW => Ok(()),
+        | super::POLICY_AUTHENTICATED_SHARED_RW => {
+            if let Some(rules) = &policy.rules {
+                validate_access_rules(rules)?;
+            }
+            Ok(())
+        }
+        super::POLICY_CUSTOM => {
+            let Some(rules) = &policy.rules else {
+                return Err("access_policy.rules are required when mode is custom".to_string());
+            };
+            validate_access_rules(rules)
+        }
         _ => Err("access_policy.mode is invalid".to_string()),
+    }
+}
+
+fn validate_access_rules(rules: &AccessRules) -> Result<(), String> {
+    for (action, rule) in [
+        ("create", rules.create.as_deref()),
+        ("read", rules.read.as_deref()),
+        ("update", rules.update.as_deref()),
+        ("delete", rules.delete.as_deref()),
+    ] {
+        if let Some(rule) = rule {
+            validate_access_rule_value(action, rule)?;
+        }
+    }
+    Ok(())
+}
+
+fn validate_access_rule_value(action: &str, rule: &str) -> Result<(), String> {
+    match rule {
+        super::RULE_PUBLIC | super::RULE_AUTHENTICATED | super::RULE_ADMIN | super::RULE_OWNER => {
+            Ok(())
+        }
+        _ => Err(format!(
+            "access_policy.rules.{} must be public, authenticated, admin, or owner",
+            action
+        )),
     }
 }
 
@@ -372,15 +444,33 @@ pub(super) fn validate_field_value(
             }
         }
         "json" => {}
+        "relation" | "file" => {
+            let Some(text) = value.as_str() else {
+                return Err(format!("field '{}' must be a string", field_name));
+            };
+            if text.is_empty() {
+                return Err(format!("field '{}' must not be empty", field_name));
+            }
+        }
         _ => return Err(format!("field '{}' has unsupported type", field_name)),
     }
     Ok(())
 }
 
 pub(super) fn owner_user_id_for_new_row(claims: &Claims, policy: &AccessPolicy) -> Option<String> {
+    if let Some(rules) = &policy.rules {
+        if let Some(create_rule) = rules.create.as_deref() {
+            return match create_rule {
+                super::RULE_OWNER | super::RULE_AUTHENTICATED => Some(claims.sub.clone()),
+                _ => None,
+            };
+        }
+    }
+
     match policy.mode.as_str() {
         super::POLICY_OWNER_PRIVATE => Some(claims.sub.clone()),
         super::POLICY_AUTHENTICATED_SHARED_RW => Some(claims.sub.clone()),
+        super::POLICY_CUSTOM => None,
         _ => None,
     }
 }
@@ -389,6 +479,25 @@ pub(super) fn normalize_import_owner_user_id(
     policy: &AccessPolicy,
     owner_user_id: Option<String>,
 ) -> Result<Option<String>, String> {
+    if let Some(rules) = &policy.rules {
+        if let Some(create_rule) = rules.create.as_deref() {
+            return match create_rule {
+                super::RULE_OWNER => owner_user_id
+                    .filter(|value| !value.trim().is_empty())
+                    .map(Some)
+                    .ok_or_else(|| {
+                        "owner_user_id is required when importing rows with owner create rule"
+                            .to_string()
+                    }),
+                super::RULE_AUTHENTICATED => {
+                    Ok(owner_user_id.filter(|value| !value.trim().is_empty()))
+                }
+                super::RULE_PUBLIC | super::RULE_ADMIN => Ok(None),
+                _ => Err("access_policy.rules.create is invalid".to_string()),
+            };
+        }
+    }
+
     match policy.mode.as_str() {
         super::POLICY_OWNER_PRIVATE => owner_user_id
             .filter(|value| !value.trim().is_empty())
@@ -400,7 +509,7 @@ pub(super) fn normalize_import_owner_user_id(
         super::POLICY_AUTHENTICATED_SHARED_RW => {
             Ok(owner_user_id.filter(|value| !value.trim().is_empty()))
         }
-        super::POLICY_ADMIN_ONLY => Ok(None),
+        super::POLICY_ADMIN_ONLY | super::POLICY_CUSTOM => Ok(None),
         _ => Err("access_policy.mode is invalid".to_string()),
     }
 }

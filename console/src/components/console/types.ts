@@ -34,9 +34,19 @@ export type PushQueueEntry = {
   retry_count: number;
   last_error?: string | null;
   partial_failure_count: number;
+  failed_destinations?: Array<{ endpoint: string; error: string }>;
   next_retry_at?: string | null;
   created_at: string;
   processed_at?: string | null;
+};
+
+export type PushQueueStatsResponse = {
+  window_hours: number;
+  limit: number;
+  retry_scheduled: number;
+  retry_overdue: number;
+  terminal_failure_reasons: Array<{ reason: string; count: number }>;
+  destination_failure_reasons: Array<{ reason: string; count: number }>;
 };
 
 export type PushQueueSummary = {

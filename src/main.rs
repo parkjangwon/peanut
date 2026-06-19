@@ -57,6 +57,7 @@ async fn main() {
     let state = AppState {
         pool: pool.clone(),
         storage,
+        mail: config.mail.clone(),
         auth: AuthState {
             jwt_secret: Arc::new(config.jwt_secret.clone()),
             password_reset_delivery: config.password_reset_delivery.clone(),
@@ -87,6 +88,11 @@ async fn main() {
     let pool_clone = state.pool.clone();
     tokio::spawn(async move {
         peanut::push::worker::start_push_worker(pool_clone).await;
+    });
+
+    let jobs_state = state.clone();
+    tokio::spawn(async move {
+        peanut::jobs::start_job_scheduler(jobs_state).await;
     });
 
     let storage_for_cleanup = state.storage.clone();

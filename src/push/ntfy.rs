@@ -4,6 +4,8 @@ use reqwest::{
 };
 use std::fmt;
 
+use super::delivery::DeliveryExtras;
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum NtfyDeliveryError {
     TerminalStatus(u16),
@@ -25,9 +27,10 @@ pub async fn send_ntfy_notification(
     topic: &str,
     title: &str,
     body: &str,
+    extras: Option<&DeliveryExtras>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let client = Client::new();
-    let request = build_ntfy_request(&client, topic, title, body)?;
+    let request = build_ntfy_request(&client, topic, title, body, extras)?;
     let res = client.execute(request).await?;
 
     if res.status().is_success() {
@@ -47,6 +50,7 @@ fn build_ntfy_request(
     topic: &str,
     title: &str,
     body: &str,
+    extras: Option<&DeliveryExtras>,
 ) -> Result<Request, Box<dyn std::error::Error + Send + Sync>> {
     build_ntfy_request_with_config(
         client,
@@ -55,6 +59,7 @@ fn build_ntfy_request(
         topic,
         title,
         body,
+        extras,
     )
 }
 
@@ -65,12 +70,35 @@ fn build_ntfy_request_with_config(
     topic: &str,
     title: &str,
     body: &str,
+    extras: Option<&DeliveryExtras>,
 ) -> Result<Request, Box<dyn std::error::Error + Send + Sync>> {
     let url = ntfy_topic_url_with_base(base_url, topic)?;
-    let mut request = client
-        .post(url)
-        .header("Title", title)
-        .body(body.to_string());
+    let message_body = ntfy_message_body(body, extras);
+    let mut request = client.post(url).header("Title", title).body(message_body);
+
+    if let Some(extras) = extras {
+        if let Some(click_url) = extras
+            .url
+            .as_deref()
+            .filter(|value| !value.trim().is_empty())
+        {
+            request = request.header("Click", click_url);
+        }
+        if let Some(icon) = extras
+            .icon
+            .as_deref()
+            .filter(|value| !value.trim().is_empty())
+        {
+            request = request.header("Icon", icon);
+        }
+        if let Some(priority) = extras
+            .priority
+            .as_deref()
+            .filter(|value| !value.trim().is_empty())
+        {
+            request = request.header("Priority", priority);
+        }
+    }
 
     if let Some(token) = auth_token.filter(|value| !value.trim().is_empty()) {
         request = request.header(
@@ -80,6 +108,22 @@ fn build_ntfy_request_with_config(
     }
 
     Ok(request.build()?)
+}
+
+fn ntfy_message_body(body: &str, extras: Option<&DeliveryExtras>) -> String {
+    let Some(extras) = extras else {
+        return body.to_string();
+    };
+    if extras.data.is_none() && extras.badge.is_none() {
+        return body.to_string();
+    }
+
+    serde_json::to_string(&serde_json::json!({
+        "body": body,
+        "badge": extras.badge,
+        "data": extras.data,
+    }))
+    .unwrap_or_else(|_| body.to_string())
 }
 
 fn ntfy_topic_url_with_base(
@@ -145,6 +189,7 @@ mod tests {
             "alerts_main",
             "Hello",
             "Body",
+            None,
         )
         .unwrap();
         assert_eq!(
@@ -156,6 +201,37 @@ mod tests {
             request.headers().get(AUTHORIZATION).unwrap(),
             "Bearer secret-token"
         );
+    }
+
+    #[test]
+    fn test_build_ntfy_request_adds_rich_headers() {
+        let client = Client::new();
+        let extras = DeliveryExtras {
+            url: Some("https://example.com/inbox".to_string()),
+            icon: Some("https://example.com/icon.png".to_string()),
+            priority: Some("high".to_string()),
+            data: Some(serde_json::json!({"order_id": "42"})),
+            badge: None,
+        };
+        let request = build_ntfy_request_with_config(
+            &client,
+            "https://push.example.com",
+            None,
+            "alerts_main",
+            "Hello",
+            "Body",
+            Some(&extras),
+        )
+        .unwrap();
+        assert_eq!(
+            request.headers().get("Click").unwrap(),
+            "https://example.com/inbox"
+        );
+        assert_eq!(
+            request.headers().get("Icon").unwrap(),
+            "https://example.com/icon.png"
+        );
+        assert_eq!(request.headers().get("Priority").unwrap(), "high");
     }
 
     #[test]
