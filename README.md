@@ -110,7 +110,7 @@ The Dockerfile builds the console, copies `console/out` into the Rust build
 stage, installs Deno in the runtime image, and serves everything from the Peanut
 binary.
 
-Open `http://127.0.0.1:3000`, create or sign in as a platform admin, then run
+Open `http://127.0.0.1:3192`, create or sign in as a platform admin, then run
 the production gate before trusting a deployment:
 
 ```bash
