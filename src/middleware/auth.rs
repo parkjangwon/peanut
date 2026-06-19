@@ -73,7 +73,10 @@ pub async fn authenticate_bearer_principal(
 ) -> Result<AuthenticatedPrincipal, Response> {
     let token = auth_header
         .and_then(|h| h.strip_prefix("Bearer "))
-        .ok_or_else(|| json_error(StatusCode::UNAUTHORIZED, "missing bearer token"))?;
+        .ok_or_else(|| {
+            tracing::warn!("admin auth rejected: missing bearer token");
+            json_error(StatusCode::UNAUTHORIZED, "missing bearer token")
+        })?;
 
     if let Ok(token_claims) = verify_jwt(token, state.auth.jwt_secret.as_str()) {
         let claims = validate_user_claims(

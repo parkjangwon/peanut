@@ -279,142 +279,11 @@ fn validate_filter_value(spec: &DataFieldSpec, value: &str) -> Result<(), String
     }
 }
 
-#[allow(dead_code)]
-pub(crate) fn apply_row_filters(
-    rows: Vec<DataRowResponse>,
-    schema: &DataTableSchema,
-    params: &ListRowsParams,
-) -> Vec<DataRowResponse> {
-    rows.into_iter()
-        .filter(|row| match params.search.as_deref() {
-            Some(search) => row_matches_search(row, schema, search),
-            None => true,
-        })
-        .filter(|row| match &params.title_contains {
-            Some(needle) => row
-                .data
-                .get("title")
-                .and_then(Value::as_str)
-                .map(|title| title.contains(needle))
-                .unwrap_or(false),
-            None => true,
-        })
-        .filter(|row| match params.done {
-            Some(done) => row.data.get("done").and_then(Value::as_bool) == Some(done),
-            None => true,
-        })
-        .filter(|row| {
-            match (
-                &params.filter_field,
-                &params.filter_op,
-                &params.filter_value,
-            ) {
-                (Some(field), Some(op), Some(value)) => {
-                    row_matches_generic_filter(row, field, op, value)
-                }
-                _ => true,
-            }
-        })
-        .collect()
-}
-
-#[allow(dead_code)]
-fn row_matches_search(row: &DataRowResponse, schema: &DataTableSchema, search: &str) -> bool {
-    schema
-        .fields
-        .iter()
-        .filter(|(_, spec)| spec.field_type == "string")
-        .any(|(field_name, _)| {
-            row.data
-                .get(field_name)
-                .and_then(Value::as_str)
-                .map(|value| value.contains(search))
-                .unwrap_or(false)
-        })
-}
-
-#[allow(dead_code)]
-pub(crate) fn sort_rows(rows: &mut [DataRowResponse], order_by: &str, descending: bool) {
-    rows.sort_by(|left, right| compare_rows(left, right, order_by));
-    if descending {
-        rows.reverse();
-    }
-}
-
-#[allow(dead_code)]
-fn row_matches_generic_filter(row: &DataRowResponse, field: &str, op: &str, value: &str) -> bool {
-    let Some(current) = row.data.get(field) else {
-        return false;
-    };
-
-    match current {
-        Value::String(text) => match op {
-            "eq" => text == value,
-            "ne" => text != value,
-            "contains" => text.contains(value),
-            "starts_with" => text.starts_with(value),
-            "ends_with" => text.ends_with(value),
-            _ => false,
-        },
-        Value::Bool(boolean) => match parse_bool_filter(value) {
-            Some(parsed) => match op {
-                "eq" => *boolean == parsed,
-                "ne" => *boolean != parsed,
-                _ => false,
-            },
-            None => false,
-        },
-        Value::Number(number) => match parse_number_filter(value) {
-            Some(parsed) => match number.as_f64() {
-                Some(current_number) => compare_numbers(current_number, parsed, op),
-                None => false,
-            },
-            None => false,
-        },
-        _ => match op {
-            "eq" => current == value,
-            "ne" => current != value,
-            _ => false,
-        },
-    }
-}
-
 fn parse_bool_filter(value: &str) -> Option<bool> {
     match value {
-        "true" => Some(true),
-        "false" => Some(false),
+        "true" | "1" => Some(true),
+        "false" | "0" => Some(false),
         _ => None,
-    }
-}
-
-#[allow(dead_code)]
-fn parse_number_filter(value: &str) -> Option<f64> {
-    value.parse::<f64>().ok()
-}
-
-#[allow(dead_code)]
-fn compare_numbers(current: f64, expected: f64, op: &str) -> bool {
-    match op {
-        "eq" => current == expected,
-        "ne" => current != expected,
-        "gt" => current > expected,
-        "gte" => current >= expected,
-        "lt" => current < expected,
-        "lte" => current <= expected,
-        _ => false,
-    }
-}
-
-#[allow(dead_code)]
-fn compare_rows(
-    left: &DataRowResponse,
-    right: &DataRowResponse,
-    order_by: &str,
-) -> std::cmp::Ordering {
-    match order_by {
-        "created_at" => left.created_at.cmp(&right.created_at),
-        "updated_at" => left.updated_at.cmp(&right.updated_at),
-        field => compare_json_values(left.data.get(field), right.data.get(field)),
     }
 }
 
@@ -457,24 +326,6 @@ pub(crate) fn validate_schema_evolution(
     }
 
     Ok(())
-}
-
-#[allow(dead_code)]
-fn compare_json_values(left: Option<&Value>, right: Option<&Value>) -> std::cmp::Ordering {
-    use std::cmp::Ordering;
-
-    match (left, right) {
-        (Some(Value::String(a)), Some(Value::String(b))) => a.cmp(b),
-        (Some(Value::Bool(a)), Some(Value::Bool(b))) => a.cmp(b),
-        (Some(Value::Number(a)), Some(Value::Number(b))) => a
-            .as_f64()
-            .partial_cmp(&b.as_f64())
-            .unwrap_or(Ordering::Equal),
-        (Some(a), Some(b)) => a.to_string().cmp(&b.to_string()),
-        (None, Some(_)) => Ordering::Less,
-        (Some(_), None) => Ordering::Greater,
-        (None, None) => Ordering::Equal,
-    }
 }
 
 #[cfg(test)]

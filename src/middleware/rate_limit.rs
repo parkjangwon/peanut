@@ -23,7 +23,11 @@ pub async fn rate_limit_middleware(
     let client_ip = get_client_ip(&req, addr, state.trust_proxy_headers);
 
     let now = Instant::now();
-    let mut entry = state.rate_limit_state.entry(client_ip).or_insert((0, now));
+    let mut entry = state
+        .rate_limits
+        .global
+        .entry(client_ip)
+        .or_insert((0, now));
     let (count, last_reset) = entry.value_mut();
 
     if now.duration_since(*last_reset) > Duration::from_secs(60) {
@@ -31,6 +35,7 @@ pub async fn rate_limit_middleware(
         *last_reset = now;
     } else {
         if *count >= 100 {
+            tracing::warn!(%client_ip, "global rate limit exceeded");
             return Err(json_error(
                 StatusCode::TOO_MANY_REQUESTS,
                 "Too many requests. Please try again later.",
@@ -52,7 +57,7 @@ pub async fn auth_rate_limit_middleware(
 ) -> Result<Response, Response> {
     let client_ip = get_client_ip(&req, addr, state.trust_proxy_headers);
     let now = Instant::now();
-    let mut entry = state.auth_rate_limit_state.entry(client_ip).or_default();
+    let mut entry = state.rate_limits.auth.entry(client_ip).or_default();
 
     if !record_auth_attempt(
         entry.value_mut(),
@@ -60,6 +65,7 @@ pub async fn auth_rate_limit_middleware(
         AUTH_RATE_LIMIT_MAX_REQUESTS,
         Duration::from_secs(AUTH_RATE_LIMIT_WINDOW_SECS),
     ) {
+        tracing::warn!(%client_ip, "auth rate limit exceeded");
         return Err(json_error(
             StatusCode::TOO_MANY_REQUESTS,
             "Too many authentication requests. Please try again later.",

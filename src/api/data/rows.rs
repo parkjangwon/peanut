@@ -179,19 +179,31 @@ pub(crate) async fn execute_list_rows(
         &table.id,
         owner_user_id,
     );
+    let where_sql = row_query.where_clauses.join(" AND ");
+    let count_sql = format!("SELECT COUNT(*) FROM data_rows WHERE {where_sql}");
+
+    let mut count_query = sqlx::query_scalar::<_, i64>(&count_sql);
+    for bind in &row_query.binds {
+        count_query = match bind {
+            RowQueryBind::Text(value) => count_query.bind(value.as_str()),
+            RowQueryBind::Bool(value) => count_query.bind(*value),
+            RowQueryBind::Int(value) => count_query.bind(*value),
+            RowQueryBind::Float(value) => count_query.bind(*value),
+        };
+    }
+
     let sql = format!(
-        "SELECT id, owner_user_id, data_json, created_at, updated_at FROM data_rows WHERE {} {} LIMIT ? OFFSET ?",
-        row_query.where_clauses.join(" AND "),
+        "SELECT id, owner_user_id, data_json, created_at, updated_at FROM data_rows WHERE {where_sql} {} LIMIT ? OFFSET ?",
         row_query.order_sql,
     );
 
     let mut query = sqlx::query_as::<_, DataRowRecord>(&sql);
-    for bind in row_query.binds {
+    for bind in &row_query.binds {
         query = match bind {
-            RowQueryBind::Text(value) => query.bind(value),
-            RowQueryBind::Bool(value) => query.bind(value),
-            RowQueryBind::Int(value) => query.bind(value),
-            RowQueryBind::Float(value) => query.bind(value),
+            RowQueryBind::Text(value) => query.bind(value.as_str()),
+            RowQueryBind::Bool(value) => query.bind(*value),
+            RowQueryBind::Int(value) => query.bind(*value),
+            RowQueryBind::Float(value) => query.bind(*value),
         };
     }
     let rows_result = query
@@ -202,6 +214,10 @@ pub(crate) async fn execute_list_rows(
 
     match rows_result {
         Ok(records) => {
+            let total = count_query
+                .fetch_one(&state.pool)
+                .await
+                .unwrap_or(records.len() as i64);
             let mut rows = Vec::with_capacity(records.len());
             for record in records {
                 match DataRowResponse::try_from_record(record) {
@@ -210,7 +226,18 @@ pub(crate) async fn execute_list_rows(
                 }
             }
 
-            (StatusCode::OK, Json(DataRowsResponse { rows })).into_response()
+            let has_more = row_query.offset + row_query.limit < total;
+            (
+                StatusCode::OK,
+                Json(DataRowsResponse {
+                    rows,
+                    total,
+                    limit: row_query.limit,
+                    offset: row_query.offset,
+                    has_more,
+                }),
+            )
+                .into_response()
         }
         Err(_) => json_error(StatusCode::INTERNAL_SERVER_ERROR, "failed to list rows"),
     }

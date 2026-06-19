@@ -31,6 +31,10 @@ pub struct DataTableDetail {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DataRowsResponse {
     pub rows: Vec<DataRowResponse>,
+    pub total: i64,
+    pub limit: i64,
+    pub offset: i64,
+    pub has_more: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

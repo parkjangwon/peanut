@@ -223,7 +223,8 @@ fn enforce_app_key_rate_limit(
 ) -> Result<(), Response> {
     let now = Instant::now();
     let mut entry = state
-        .app_key_rate_limit_state
+        .rate_limits
+        .app_key
         .entry(key_id.to_string())
         .or_insert((0, now));
     let (count, last_reset) = entry.value_mut();
