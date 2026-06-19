@@ -7,13 +7,12 @@ use uuid::Uuid;
 
 use crate::api::common::json_error;
 use crate::auth::jwt::Claims;
+use crate::secrets::{decrypt_secret, encrypt_secret};
 
 use super::types::{
-    FunctionDetail, FunctionInvocation, LoadedFunctionVersion, UpsertFunctionRequest,
-    UpdateFunctionRequest,
+    FunctionDetail, FunctionInvocation, LoadedFunctionVersion, UpdateFunctionRequest,
+    UpsertFunctionRequest,
 };
-
-// ── admin guard ────────────────────────────────────────────────────────────────
 
 pub(super) fn require_admin(claims: &Claims) -> Option<Response> {
     if claims.is_admin {
@@ -22,8 +21,6 @@ pub(super) fn require_admin(claims: &Claims) -> Option<Response> {
         Some(json_error(StatusCode::FORBIDDEN, "admin access required"))
     }
 }
-
-// ── validated payload ──────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone)]
 pub(super) struct ValidatedFunction {
@@ -43,11 +40,11 @@ pub(super) struct ValidatedFunction {
     pub(super) enabled: bool,
 }
 
-// ── DB write helpers ───────────────────────────────────────────────────────────
-
 pub(super) async fn insert_function_version(
     tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+    functions_secrets_key: &str,
     function_id: &str,
+    app_id: &str,
     version_number: i64,
     validated: &ValidatedFunction,
     created_by: &str,
@@ -56,11 +53,12 @@ pub(super) async fn insert_function_version(
     sqlx::query(
         r#"
         INSERT INTO function_versions (
-            id, function_id, version_number, runtime, source_code, invoke_policy, env_json, api_key_hash, allowed_origins_json, rate_limit_per_minute, timeout_ms, created_by
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            id, app_id, function_id, version_number, runtime, source_code, invoke_policy, env_json, api_key_hash, allowed_origins_json, rate_limit_per_minute, timeout_ms, created_by
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         "#,
     )
     .bind(&version_id)
+    .bind(app_id)
     .bind(function_id)
     .bind(version_number)
     .bind(&validated.runtime)
@@ -76,19 +74,24 @@ pub(super) async fn insert_function_version(
     .await?;
 
     for (secret_key, secret_value) in &validated.secret_values {
+        let secret_ciphertext =
+            encrypt_secret(functions_secrets_key, secret_value).map_err(|error| {
+                sqlx::Error::Protocol(format!("failed to encrypt function secret: {error}"))
+            })?;
         sqlx::query(
-            "INSERT INTO function_version_secrets (version_id, secret_key, secret_value) VALUES (?, ?, ?)",
+            "INSERT INTO function_version_secrets (version_id, secret_key, secret_value, secret_ciphertext, encryption_version) VALUES (?, ?, ?, ?, ?)",
         )
         .bind(&version_id)
         .bind(secret_key)
-        .bind(secret_value)
+        .bind(&secret_ciphertext)
+        .bind(&secret_ciphertext)
+        .bind(crate::secrets::encryption_version())
         .execute(&mut **tx)
         .await?;
     }
 
     Ok(LoadedFunctionVersion {
         id: version_id,
-        function_id: function_id.to_string(),
         version_number,
         runtime: validated.runtime.clone(),
         source_code: validated.source_code.clone(),
@@ -137,8 +140,6 @@ pub(super) async fn activate_function_version(
     Ok(())
 }
 
-// ── payload validation ─────────────────────────────────────────────────────────
-
 pub(super) fn validate_create_payload(
     payload: UpsertFunctionRequest,
 ) -> Result<ValidatedFunction, String> {
@@ -158,8 +159,7 @@ pub(super) fn validate_create_payload(
         .map(hash_api_key);
     let allowed_origins_json =
         normalize_allowed_origins_json(payload.allowed_origins.unwrap_or_default())?;
-    let rate_limit_per_minute =
-        normalize_rate_limit(payload.rate_limit_per_minute.unwrap_or(60))?;
+    let rate_limit_per_minute = normalize_rate_limit(payload.rate_limit_per_minute.unwrap_or(60))?;
     let timeout_ms = normalize_timeout(payload.timeout_ms.unwrap_or(3000))?;
     let enabled = payload.enabled.unwrap_or(true);
 
@@ -258,8 +258,6 @@ pub(super) fn validate_update_payload(
     })
 }
 
-// ── normalizers & parsers ──────────────────────────────────────────────────────
-
 pub(super) fn normalize_non_empty(value: &str, field_name: &str) -> Result<String, String> {
     let value = value.trim();
     if value.is_empty() {
@@ -299,9 +297,7 @@ pub(super) fn normalize_invoke_policy(value: &str) -> Result<String, String> {
     let value = value.trim().to_lowercase();
     match value.as_str() {
         "public" | "authenticated" | "admin_only" | "api_key" => Ok(value),
-        _ => Err(
-            "invoke_policy must be public, authenticated, admin_only, or api_key".to_string(),
-        ),
+        _ => Err("invoke_policy must be public, authenticated, admin_only, or api_key".to_string()),
     }
 }
 
@@ -385,13 +381,10 @@ pub(super) fn normalize_allowed_origins_json(values: Vec<String>) -> Result<Stri
         .collect::<Vec<_>>();
     for origin in &normalized {
         if !(origin.starts_with("http://") || origin.starts_with("https://")) {
-            return Err(
-                "allowed_origins entries must start with http:// or https://".to_string(),
-            );
+            return Err("allowed_origins entries must start with http:// or https://".to_string());
         }
     }
-    serde_json::to_string(&normalized)
-        .map_err(|_| "failed to encode allowed origins".to_string())
+    serde_json::to_string(&normalized).map_err(|_| "failed to encode allowed origins".to_string())
 }
 
 pub(super) fn parse_allowed_origins(raw: &str) -> Vec<String> {
@@ -401,7 +394,7 @@ pub(super) fn parse_allowed_origins(raw: &str) -> Vec<String> {
 pub(super) fn hash_api_key(value: &str) -> String {
     sha256(value.as_bytes())
         .iter()
-        .map(|byte| format!("{byte:02x}"))
+        .map(|byte| format!("{:02x}", byte))
         .collect()
 }
 
@@ -421,8 +414,6 @@ pub(super) fn normalize_timeout(timeout_ms: i64) -> Result<i64, String> {
     }
 }
 
-// ── error types ────────────────────────────────────────────────────────────────
-
 pub(super) enum LoadFunctionError {
     NotFound,
     QueryFailed,
@@ -437,8 +428,6 @@ pub(super) enum LoadFunctionVersionError {
     NotFound,
     QueryFailed,
 }
-
-// ── DB read helpers ────────────────────────────────────────────────────────────
 
 pub(super) async fn load_invocation(
     pool: &sqlx::SqlitePool,
@@ -470,11 +459,13 @@ pub(super) async fn find_root_invocation_id(
 
 pub(super) async fn load_function_by_name(
     pool: &sqlx::SqlitePool,
+    app_id: &str,
     name: &str,
 ) -> Result<FunctionDetail, LoadFunctionError> {
     sqlx::query_as::<_, FunctionDetail>(
-        "SELECT id, app_id, name, display_name, endpoint_slug, runtime, source_code, invoke_policy, env_json, api_key_hash, allowed_origins_json, rate_limit_per_minute, CASE WHEN api_key_hash IS NULL OR api_key_hash = '' THEN 0 ELSE 1 END AS api_key_present, timeout_ms, enabled, active_version_number, active_version_id, secret_key_count, created_by, updated_by, created_at, updated_at FROM functions WHERE name = ?",
+        "SELECT id, app_id, name, display_name, endpoint_slug, runtime, source_code, invoke_policy, env_json, api_key_hash, allowed_origins_json, rate_limit_per_minute, CASE WHEN api_key_hash IS NULL OR api_key_hash = '' THEN 0 ELSE 1 END AS api_key_present, timeout_ms, enabled, active_version_number, active_version_id, secret_key_count, created_by, updated_by, created_at, updated_at FROM functions WHERE app_id = ? AND name = ?",
     )
+    .bind(app_id)
     .bind(name)
     .fetch_optional(pool)
     .await
@@ -487,8 +478,9 @@ pub(super) async fn load_function_by_endpoint(
     endpoint_slug: &str,
 ) -> Result<FunctionDetail, LoadFunctionError> {
     sqlx::query_as::<_, FunctionDetail>(
-        "SELECT id, app_id, name, display_name, endpoint_slug, runtime, source_code, invoke_policy, env_json, api_key_hash, allowed_origins_json, rate_limit_per_minute, CASE WHEN api_key_hash IS NULL OR api_key_hash = '' THEN 0 ELSE 1 END AS api_key_present, timeout_ms, enabled, active_version_number, active_version_id, secret_key_count, created_by, updated_by, created_at, updated_at FROM functions WHERE endpoint_slug = ?",
+        "SELECT id, app_id, name, display_name, endpoint_slug, runtime, source_code, invoke_policy, env_json, api_key_hash, allowed_origins_json, rate_limit_per_minute, CASE WHEN api_key_hash IS NULL OR api_key_hash = '' THEN 0 ELSE 1 END AS api_key_present, timeout_ms, enabled, active_version_number, active_version_id, secret_key_count, created_by, updated_by, created_at, updated_at FROM functions WHERE app_id = ? AND endpoint_slug = ?",
     )
+    .bind(crate::app_context::DEFAULT_APP_ID)
     .bind(endpoint_slug)
     .fetch_optional(pool)
     .await
@@ -528,13 +520,39 @@ pub(super) async fn load_function_version_by_id(
 
 pub(super) async fn load_function_secrets(
     pool: &sqlx::SqlitePool,
+    functions_secrets_key: &str,
     version_id: &str,
 ) -> Result<BTreeMap<String, String>, sqlx::Error> {
-    let rows: Vec<(String, String)> = sqlx::query_as(
-        "SELECT secret_key, secret_value FROM function_version_secrets WHERE version_id = ? ORDER BY secret_key ASC",
+    type FunctionSecretRow = (String, Option<String>, Option<String>, Option<i64>);
+
+    let rows: Vec<FunctionSecretRow> = sqlx::query_as(
+        "SELECT secret_key, secret_value, secret_ciphertext, encryption_version FROM function_version_secrets WHERE version_id = ? ORDER BY secret_key ASC",
     )
     .bind(version_id)
     .fetch_all(pool)
     .await?;
-    Ok(rows.into_iter().collect())
+
+    let mut secrets = BTreeMap::new();
+    for (secret_key, secret_value, secret_ciphertext, _encryption_version) in rows {
+        let Some(ciphertext) = secret_ciphertext else {
+            return Err(sqlx::Error::Protocol(format!(
+                "function secret '{secret_key}' is missing ciphertext"
+            )));
+        };
+        if secret_value
+            .as_deref()
+            .is_some_and(|value| value != ciphertext)
+        {
+            return Err(sqlx::Error::Protocol(format!(
+                "function secret '{secret_key}' uses unsupported plaintext storage"
+            )));
+        }
+        let resolved = decrypt_secret(functions_secrets_key, &ciphertext).map_err(|error| {
+            sqlx::Error::Protocol(format!(
+                "failed to decrypt function secret '{secret_key}': {error}"
+            ))
+        })?;
+        secrets.insert(secret_key, resolved);
+    }
+    Ok(secrets)
 }

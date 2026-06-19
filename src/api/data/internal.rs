@@ -1,12 +1,12 @@
 use serde_json::{Map, Value};
 
-use crate::auth::jwt::Claims;
+use super::query::{validate_list_rows_params, validate_schema_evolution};
 use crate::api::data::types::{
-    AccessPolicy, DataFieldSpec, DataRowRecord, DataRowRealtimeEvent, DataRowResponse,
+    AccessPolicy, DataFieldSpec, DataRowRealtimeEvent, DataRowRecord, DataRowResponse,
     DataTableDetail, DataTableRecord, DataTableRestoreSpec, DataTableSchema, QueryPresetRecord,
     QueryPresetResponse, SchemaDiffPreview, UpsertQueryPresetRequest,
 };
-use super::query::{validate_list_rows_params, validate_schema_evolution};
+use crate::auth::jwt::Claims;
 
 pub(super) fn validate_restore_table_spec(
     existing: &LoadedTable,
@@ -65,6 +65,7 @@ pub(super) fn schema_diff_preview(
 
 pub(super) async fn restore_table_definition(
     pool: &sqlx::SqlitePool,
+    app_id: &str,
     existing: &LoadedTable,
     restore_spec: &DataTableRestoreSpec,
 ) -> Result<LoadedTable, RestoreTableError> {
@@ -91,7 +92,7 @@ pub(super) async fn restore_table_definition(
         .await
         .map_err(|_| RestoreTableError::Internal("failed to restore table definition".to_string()))?;
 
-    load_table(pool, &existing.name)
+    load_table(pool, app_id, &existing.name)
         .await
         .map_err(|error| match error {
             LoadTableError::NotFound => {
@@ -106,6 +107,7 @@ pub(super) async fn restore_table_definition(
 
 pub(super) fn emit_data_row_event(
     state: &crate::AppState,
+    app_id: &str,
     event_id: i64,
     table_name: &str,
     row_id: &str,
@@ -115,6 +117,7 @@ pub(super) fn emit_data_row_event(
 ) {
     let _ = state.data_event_sender.send(DataRowRealtimeEvent {
         id: event_id,
+        app_id: app_id.to_string(),
         event: "row.changed".to_string(),
         table_name: table_name.to_string(),
         row_id: row_id.to_string(),
@@ -126,11 +129,13 @@ pub(super) fn emit_data_row_event(
 
 pub(super) async fn load_query_presets(
     pool: &sqlx::SqlitePool,
+    app_id: &str,
     table_id: &str,
 ) -> Result<Vec<QueryPresetResponse>, String> {
     let records = sqlx::query_as::<_, QueryPresetRecord>(
-        "SELECT id, name, display_name, params_json, created_at, updated_at FROM data_query_presets WHERE table_id = ? ORDER BY created_at DESC, name ASC",
+        "SELECT id, name, display_name, params_json, created_at, updated_at FROM data_query_presets WHERE app_id = ? AND table_id = ? ORDER BY created_at DESC, name ASC",
     )
+    .bind(app_id)
     .bind(table_id)
     .fetch_all(pool)
     .await
@@ -148,12 +153,14 @@ pub(super) async fn load_query_presets(
 
 pub(super) async fn load_query_preset(
     pool: &sqlx::SqlitePool,
+    app_id: &str,
     table_id: &str,
     preset_id: &str,
 ) -> Result<QueryPresetResponse, LoadPresetError> {
     let record = sqlx::query_as::<_, QueryPresetRecord>(
-        "SELECT id, name, display_name, params_json, created_at, updated_at FROM data_query_presets WHERE table_id = ? AND id = ?",
+        "SELECT id, name, display_name, params_json, created_at, updated_at FROM data_query_presets WHERE app_id = ? AND table_id = ? AND id = ?",
     )
+    .bind(app_id)
     .bind(table_id)
     .bind(preset_id)
     .fetch_optional(pool)
@@ -372,9 +379,8 @@ pub(super) fn validate_field_value(
 
 pub(super) fn owner_user_id_for_new_row(claims: &Claims, policy: &AccessPolicy) -> Option<String> {
     match policy.mode.as_str() {
-        super::POLICY_OWNER_PRIVATE | super::POLICY_AUTHENTICATED_SHARED_RW => {
-            Some(claims.sub.clone())
-        }
+        super::POLICY_OWNER_PRIVATE => Some(claims.sub.clone()),
+        super::POLICY_AUTHENTICATED_SHARED_RW => Some(claims.sub.clone()),
         _ => None,
     }
 }
@@ -401,6 +407,7 @@ pub(super) fn normalize_import_owner_user_id(
 
 pub(super) async fn record_row_event(
     pool: &sqlx::SqlitePool,
+    app_id: &str,
     table_id: &str,
     row_id: &str,
     actor_user_id: &str,
@@ -409,8 +416,9 @@ pub(super) async fn record_row_event(
 ) -> Result<i64, sqlx::Error> {
     let diff_json = diff_json.and_then(|value| serde_json::to_string(value).ok());
     let result = sqlx::query(
-        "INSERT INTO data_row_events (table_id, row_id, actor_user_id, action, diff_json) VALUES (?, ?, ?, ?, ?)",
+        "INSERT INTO data_row_events (app_id, table_id, row_id, actor_user_id, action, diff_json) VALUES (?, ?, ?, ?, ?, ?)",
     )
+    .bind(app_id)
     .bind(table_id)
     .bind(row_id)
     .bind(actor_user_id)
@@ -423,12 +431,14 @@ pub(super) async fn record_row_event(
 
 pub(super) async fn load_table(
     pool: &sqlx::SqlitePool,
+    app_id: &str,
     table_name: &str,
 ) -> Result<LoadedTable, LoadTableError> {
     let normalized = table_name.trim().to_lowercase();
     let record = sqlx::query_as::<_, DataTableRecord>(
-        "SELECT id, name, display_name, schema_json, access_policy_json, created_by, created_at FROM data_tables WHERE name = ?",
+        "SELECT id, app_id, name, display_name, schema_json, access_policy_json, created_by, created_at FROM data_tables WHERE app_id = ? AND name = ?",
     )
+    .bind(app_id)
     .bind(normalized)
     .fetch_optional(pool)
     .await
@@ -444,6 +454,7 @@ pub(super) async fn load_table(
 
     Ok(LoadedTable {
         id: record.id,
+        app_id: record.app_id,
         name: record.name,
         display_name: record.display_name,
         schema,
@@ -481,7 +492,10 @@ pub(super) fn parse_json(raw: &str) -> Result<Value, String> {
     serde_json::from_str(raw).map_err(|_| "failed to decode stored JSON".to_string())
 }
 
-pub(super) fn parse_json_object(raw: &str, error_message: &str) -> Result<Map<String, Value>, String> {
+pub(super) fn parse_json_object(
+    raw: &str,
+    error_message: &str,
+) -> Result<Map<String, Value>, String> {
     value_to_object(parse_json(raw)?, error_message)
 }
 
@@ -524,6 +538,7 @@ pub(super) enum LoadRowError {
 #[derive(Debug, Clone)]
 pub(super) struct LoadedTable {
     pub(super) id: String,
+    pub(super) app_id: String,
     pub(super) name: String,
     pub(super) display_name: String,
     pub(super) schema: DataTableSchema,
@@ -546,10 +561,6 @@ impl From<LoadedTable> for DataTableDetail {
 }
 
 impl DataRowResponse {
-    pub(super) fn from_record(record: DataRowRecord) -> Self {
-        Self::try_from_record(record).unwrap()
-    }
-
     pub(super) fn try_from_record(record: DataRowRecord) -> Result<Self, String> {
         Ok(Self {
             id: record.id,
